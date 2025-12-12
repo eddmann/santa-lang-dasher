@@ -1,0 +1,22 @@
+/target/
+*.swp
+*.swo
+.DS_Store
+
+# Reference implementations (for comparison only)
+/santa-lang-rs/
+/santa-lang-blitzen/
+
+# IDE
+.idea/
+.vscode/
+
+# Test artifacts
+*.snap.new
+
+# Build artifacts
+**/*.rs.bk
+Cargo.lock
+
+# OS files
+Thumbs.db
