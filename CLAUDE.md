@@ -1,5 +1,43 @@
 # Dasher Development Guidelines
 
+## Architecture: LLVM Backend (MANDATORY)
+
+**This is an LLVM-based native compiler. NOT a tree-walking interpreter. NOT a bytecode VM.**
+
+```
+Source → Lexer → Parser → Codegen → LLVM IR → Native Code
+                              ↓
+                    Runtime Library (FFI)
+```
+
+The architecture is:
+1. **Lexer** → Token stream
+2. **Parser** → AST
+3. **Codegen** → LLVM IR (using `inkwell` crate)
+4. **LLVM** → Native machine code (JIT or AOT)
+5. **Runtime library** → Support functions called from compiled code
+
+### What "Runtime" Means Here
+
+The `runtime/` module contains Rust functions that are **called from LLVM-compiled code** via FFI (`extern "C"`):
+- Reference counting (`rt_incref`, `rt_decref`)
+- Type-aware operations (`rt_add`, `rt_eq`, `rt_call`, etc.)
+- Collection operations on persistent data structures (im-rs)
+
+These are NOT an interpreter. They are support functions linked into the final executable.
+
+### Forbidden Approaches
+- ❌ Tree-walking interpreter (eval AST directly)
+- ❌ Bytecode VM (compile to custom bytecode, interpret in a loop)
+- ❌ Transpilation to another language
+
+### Required Approach
+- ✅ Generate LLVM IR using `inkwell`
+- ✅ Use LLVM's optimization passes (O2/O3)
+- ✅ JIT compile or AOT compile to native machine code
+
+---
+
 ## Source of Truth
 
 LANG.txt is the authoritative language specification. All implementation decisions MUST conform to LANG.txt.

@@ -36,15 +36,23 @@ if [ -f "Cargo.toml" ]; then
 fi
 
 # Build the prompt for Claude
-PROMPT="Continue developing Dasher (LLVM-backed santa-lang implementation).
+PROMPT="Continue developing Dasher, an LLVM-backed native compiler for santa-lang.
 
-CRITICAL REQUIREMENTS:
-1. **TDD IS MANDATORY** - Write failing test FIRST, then code to pass it
-2. **Classical testing school** - Test real objects, state-based assertions, no mocking internals
-3. **LANG.txt is source of truth** - All behavior must match the specification
+## ARCHITECTURE (MANDATORY)
+This is an LLVM COMPILER using inkwell - NOT an interpreter or VM!
+- Codegen generates LLVM IR
+- Runtime module provides FFI functions called from compiled code
+- ❌ NO tree-walking interpreter (do not eval AST directly)
+- ❌ NO bytecode VM
 
-WORKFLOW:
-1. Read PLAN.md and CLAUDE.md to understand the plan and TDD requirements
+## CRITICAL REQUIREMENTS
+1. **LLVM BACKEND** - Use inkwell to generate LLVM IR, not interpretation
+2. **TDD IS MANDATORY** - Write failing test FIRST, then code to pass it
+3. **Classical testing school** - Test real objects, state-based assertions, no mocking internals
+4. **LANG.txt is source of truth** - All behavior must match the specification
+
+## WORKFLOW
+1. Read PLAN.md and CLAUDE.md to understand architecture and TDD requirements
 2. Find current incomplete phase from release gate checkboxes
 3. For each feature:
    - RED: Write a failing test first (based on LANG.txt)

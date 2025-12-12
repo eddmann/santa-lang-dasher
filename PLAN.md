@@ -2,6 +2,27 @@
 
 An LLVM-backed native compiler implementation of santa-lang with 100% feature parity.
 
+## Architecture (MANDATORY)
+
+**This is a native LLVM compiler, NOT an interpreter or bytecode VM.**
+
+```
+Source → Lexer → Parser → Codegen → LLVM IR → Native Code
+                              ↓
+                    Runtime Library (FFI)
+```
+
+- **Codegen** produces LLVM IR using the `inkwell` crate
+- **Runtime library** provides `extern "C"` FFI functions called from compiled code
+- **Final output** is JIT-compiled (or AOT-compiled) native machine code
+
+### Forbidden Approaches
+- ❌ Tree-walking interpreter (do NOT eval AST directly)
+- ❌ Bytecode VM (do NOT compile to custom bytecode and interpret)
+- ❌ Transpilation to another language
+
+---
+
 ## Source of Truth
 
 **LANG.txt** is the authoritative specification. All implementation decisions MUST conform to LANG.txt. Every phase includes:
@@ -358,9 +379,11 @@ fn parse_trailing_lambda() { ... }
 
 ---
 
-## Phase 4: Runtime Foundation - Value System
+## Phase 4: LLVM Runtime Support Library
 
-**Goal**: Define the runtime value system with reference counting.
+**Goal**: Build the FFI runtime library that LLVM-compiled code calls into.
+
+**This is NOT an interpreter.** These are `extern "C"` functions that get linked with the compiled output.
 
 **LANG.txt Reference**: §3 Type System (all types), §3.11 Hashability, §14.1 Truthy/Falsy Values
 
@@ -1304,7 +1327,7 @@ Run all .santa files from examples directory using run-tests.sh.
 | 1     | Lexer                | Token stream from source    |
 | 2     | Parser Expressions   | Expression AST              |
 | 3     | Parser Complete      | Full AST with sections      |
-| 4     | Runtime Foundation   | Value system & refcounting  |
+| 4     | LLVM Runtime Library | FFI support for compiled code |
 | 5     | LLVM Codegen Exprs   | Expression IR generation    |
 | 6     | LLVM Codegen Stmts   | Full code generation        |
 | 7     | Runtime Operations   | Arithmetic/comparison ops   |
