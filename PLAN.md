@@ -1,6 +1,8 @@
 # Dasher: Santa-Lang LLVM Implementation Plan
 
-An LLVM-backed native compiler implementation of santa-lang with 100% feature parity.
+An LLVM-backed native AOT compiler implementation of santa-lang.
+
+**Note**: `evaluate()` is out of scope for Dasher due to the complexity of runtime code evaluation in an AOT-compiled system. This is a known limitation.
 
 ## Architecture (MANDATORY)
 
@@ -13,8 +15,9 @@ Source → Lexer → Parser → Codegen → LLVM IR → Native Code
 ```
 
 - **Codegen** produces LLVM IR using the `inkwell` crate
-- **Runtime library** provides `extern "C"` FFI functions called from compiled code
-- **Final output** is JIT-compiled (or AOT-compiled) native machine code
+- **Runtime library** provides `extern "C"` FFI functions linked with compiled code
+- **Final output** is AOT-compiled native machine code (executables)
+- **Error handling** uses return value + flag pattern for graceful error propagation
 
 ### Forbidden Approaches
 - ❌ Tree-walking interpreter (do NOT eval AST directly)
@@ -242,8 +245,9 @@ pub enum Expr {
 }
 ```
 
-### 2.2 Operator Precedence (from LANG.txt 14.5)
+### 2.2 Operator Precedence (from santa-lang-rs reference implementation)
 
+From highest to lowest:
 1. `[]` - Index (highest)
 2. `()` - Call
 3. `!` `-` - Prefix
@@ -251,12 +255,22 @@ pub enum Expr {
 5. `+` `-` - Additive
 6. `>>` `|>` `..` `..=` - Composition/Pipeline/Range
 7. `<` `<=` `>` `>=` - Comparison
-8. `==` `!=` - Equality
-9. `&&` - Logical AND
-10. `||` - Logical OR
-11. `=` - Assignment (lowest)
+8. `==` `!=` `=` - Equality/Assignment (same level)
+9. `&&` `||` - Logical AND/OR (same level, lowest)
 
-### 2.3 Tests
+**Note**: This matches santa-lang-rs behavior where `&&` and `||` have the same precedence, and `=` groups with equality operators.
+
+### 2.3 Trailing Lambda Syntax (Recognition)
+
+The parser recognizes the pattern `expr identifier lambda`:
+
+```santa
+[1, 2, 3] map |x| x * 2
+```
+
+This is recognized as a trailing lambda call. The transformation to `map([1,2,3], |x| x*2)` happens in Phase 3 (see §3.7).
+
+### 2.4 Tests
 
 ```rust
 #[test]
@@ -279,13 +293,16 @@ fn parse_index_expressions() { ... }
 fn parse_pipeline() { ... }
 #[test]
 fn parse_composition() { ... }
+#[test]
+fn parse_trailing_lambda_syntax() { ... }  // [1,2,3] map |x| x*2
 ```
 
 ### Release Gate 2
 
 - [ ] All expression forms from LANG.txt parse correctly
-- [ ] Operator precedence matches specification exactly
+- [ ] Operator precedence matches santa-lang-rs exactly
 - [ ] Partial application (`_ + 1`) produces Function AST
+- [ ] Trailing lambda syntax is recognized
 - [ ] All expect_test snapshots pass
 - [ ] `cargo clippy` clean
 
@@ -341,12 +358,65 @@ pub struct Program {
 
 Per LANG.txt:
 
-- **Dict shorthand** (§3.7): `#{name, age}` → `#{"name": name, "age": age}`
 - **Trailing comma** (§10.2): `[1, 2, 3,]` is valid
-- **Empty set vs empty block** (§3.6): Context-dependent `{}` disambiguation
 - **Infix function calls** (§6.5): `` `includes?` `` backtick syntax
 
-### 3.5 Tests
+### 3.5 Empty Set vs Empty Block Disambiguation
+
+The parser must distinguish `{}` based on context (LANG.txt §3.6):
+
+```
+Expression position → Empty Set:
+  let x = {};              // Empty set
+  fold({}, |acc, x| ...)   // Empty set as argument
+  [1, {}, 3]               // Empty set in list
+
+Statement position → Empty Block:
+  if true { }              // Empty block
+  let f = || { };          // Empty block (function body)
+  match x { _ { } }        // Empty block (match arm)
+```
+
+**Parser Strategy**: Track whether we're parsing a "value expression" (RHS of let, function argument, collection element) or a "statement body" (if/else body, function body, match arm body). Default `{}` to Set in value context, Block in statement context.
+
+### 3.6 Dict Shorthand Syntax
+
+When parsing dictionary literals, bare identifiers become string-keyed entries (LANG.txt §3.7):
+
+```rust
+// #{name, age} transforms during parsing to:
+// #{Expr::String("name"): Expr::Identifier("name"),
+//   Expr::String("age"): Expr::Identifier("age")}
+
+fn parse_dict_entry(&mut self) -> Result<(Expr, Expr), ParseError> {
+    if self.current_is_identifier() && self.peek_is(Token::Comma | Token::RBrace) {
+        // Shorthand: #{name} → #{"name": name}
+        let name = self.consume_identifier()?;
+        let key = Expr::String(name.clone());
+        let value = Expr::Identifier(name);
+        Ok((key, value))
+    } else {
+        // Explicit: key: value
+        let key = self.parse_expression()?;
+        self.expect(Token::Colon)?;
+        let value = self.parse_expression()?;
+        Ok((key, value))
+    }
+}
+```
+
+### 3.7 Trailing Lambda (Semantics)
+
+When an expression is followed by an identifier and a lambda (without pipeline):
+
+```santa
+[1, 2, 3] map |x| x * 2
+// Parses as: map([1, 2, 3], |x| x * 2)
+```
+
+The parser recognizes this pattern and transforms it during parsing. See Phase 2 for the syntax recognition.
+
+### 3.8 Tests
 
 ```rust
 #[test]
@@ -365,6 +435,12 @@ fn parse_aoc_sections() { ... }
 fn parse_test_sections() { ... }
 #[test]
 fn parse_trailing_lambda() { ... }
+#[test]
+fn parse_empty_set_in_expression_position() { ... }  // let x = {}
+#[test]
+fn parse_empty_block_in_statement_position() { ... } // if true { }
+#[test]
+fn parse_dict_shorthand() { ... }                    // #{name, age}
 ```
 
 ### Release Gate 3
@@ -374,6 +450,8 @@ fn parse_trailing_lambda() { ... }
 - [ ] Match expressions with guards parse correctly
 - [ ] AOC sections (`input:`, `part_one:`, `part_two:`, `test:`) parse
 - [ ] Trailing lambda syntax works
+- [ ] **Empty `{}` disambiguates correctly** (Set vs Block)
+- [ ] **Dict shorthand** parses correctly
 - [ ] All expect_test snapshots pass
 - [ ] `cargo clippy` clean
 
@@ -387,37 +465,41 @@ fn parse_trailing_lambda() { ... }
 
 **LANG.txt Reference**: §3 Type System (all types), §3.11 Hashability, §14.1 Truthy/Falsy Values
 
-### 4.1 Value Representation (Tagged Pointer)
+### 4.1 Value Representation (NaN-boxing)
+
+NaN-boxing uses the unused bits in IEEE-754 NaN representations to encode values inline.
 
 ```rust
-// 64-bit tagged value representation
-// NaN-boxing or tagged pointer scheme for efficient unboxed integers
+// 64-bit NaN-boxed value representation
+//
+// IEEE-754 doubles use bits 51-62 for exponent. When all 11 exponent bits are 1
+// and the mantissa is non-zero, it's a NaN. We use this space for tagged values.
+//
+// Layout:
+//   Heap pointer: 0x0000_XXXX_XXXX_XXXX (48-bit pointer, high bits 0)
+//   NaN space:    0x7FF8_0000_0000_0000+ (quiet NaN, we use bits below)
+//
+// Tag scheme (in NaN payload):
+//   0x7FF8 | 0001 = Integer (51-bit signed in lower bits)
+//   0x7FF8 | 0002 = Nil
+//   0x7FF8 | 0003 = Boolean (1 = true, 0 = false in lower bits)
+//   Pointer       = High bits all zero, 48-bit aligned pointer
 
 #[repr(C)]
-pub union Value {
-    bits: u64,
-    ptr: *mut HeapObject,
-}
-
-// Tag scheme (3 LSBs):
-//   000 = Heap pointer (aligned objects)
-//   001 = Integer (61-bit signed, shifted)
-//   010 = Nil
-//   011 = Boolean (true=1, false=0 in upper bits)
-//   100 = Reserved
-//   101 = Reserved
-//   110 = Reserved
-//   111 = Reserved
+pub struct Value(u64);
 
 impl Value {
     pub fn is_integer(&self) -> bool;
-    pub fn as_integer(&self) -> Option<i64>;
-    pub fn from_integer(i: i64) -> Value;
+    pub fn as_integer(&self) -> Option<i64>;  // 51-bit integers inline
+    pub fn from_integer(i: i64) -> Value;     // Box if > 51 bits
     pub fn is_nil(&self) -> bool;
     pub fn is_heap_object(&self) -> bool;
+    pub fn as_f64(&self) -> Option<f64>;      // Decimals stored as native f64
     // ... etc
 }
 ```
+
+**Note**: Integers larger than 51 bits must be boxed as heap objects. This is an implementation detail - the language semantics remain 64-bit integers.
 
 ### 4.2 Heap Objects
 
@@ -437,14 +519,15 @@ pub struct ObjectHeader {
 #[repr(u8)]
 pub enum TypeTag {
     String,
-    Decimal,
+    Decimal,       // Boxed decimal (for large values)
+    BoxedInteger,  // For integers > 51 bits
     List,
     Set,
     Dict,
     Function,
     Closure,
-    LazySequence,
-    Range,
+    LazySequence,  // Note: Ranges are represented as LazySequences
+    MutableCell,   // For mutable captured variables (heap-boxed)
 }
 ```
 
@@ -491,11 +574,56 @@ pub struct DictObject {
 }
 ```
 
-### 4.5 Tests
+### 4.5 Mutable Captures (Heap-Boxed Cells)
+
+Mutable variables captured by closures use heap-boxed cells to allow shared mutation:
+
+```rust
+pub struct MutableCellObject {
+    header: ObjectHeader,
+    value: Value,  // The current value
+}
+
+// When a mutable variable is captured:
+// 1. Allocate MutableCell on heap
+// 2. Both outer scope and closure reference the same cell
+// 3. Reads/writes go through the cell
+
+#[no_mangle]
+pub extern "C" fn rt_cell_get(cell: Value) -> Value { ... }
+
+#[no_mangle]
+pub extern "C" fn rt_cell_set(cell: Value, value: Value) { ... }
+```
+
+This enables the counter pattern from LANG.txt §8.3 where inner closures can mutate variables from outer scopes.
+
+### 4.6 String Handling (Grapheme Clusters)
+
+Strings use grapheme-cluster indexing via `unicode-segmentation` crate:
+
+```rust
+use unicode_segmentation::UnicodeSegmentation;
+
+pub struct StringObject {
+    header: ObjectHeader,
+    data: String,                    // UTF-8 data
+    // Optional: cached grapheme indices for O(1) repeated access
+}
+
+// Indexing is O(n) - must iterate graphemes
+// Consider caching grapheme boundaries for strings accessed multiple times
+```
+
+**Note**: `"👨‍👩‍👧‍👦"[0]` returns the whole family emoji as a single grapheme cluster.
+
+### 4.8 Tests
 
 ```rust
 #[test]
-fn value_tagging() { ... }
+fn value_nan_boxing() { ... }
+#[test]
+fn value_large_integer_boxing() { ... }  // Integers > 51 bits
 #[test]
 fn value_equality() { ... }
 #[test]
@@ -506,15 +634,26 @@ fn value_truthiness() { ... }
 fn refcount_increment_decrement() { ... }
 #[test]
 fn collection_operations() { ... }
+#[test]
+fn mutable_cell_operations() { ... }
+#[test]
+fn grapheme_string_indexing() { ... }
+#[test]
+fn unhashable_in_set_errors() { ... }  // {|x| x} and {#{a:1}} cause RuntimeErr
+#[test]
+fn unhashable_dict_key_errors() { ... }
 ```
 
 ### Release Gate 4
 
-- [ ] All value types implemented with correct equality semantics
-- [ ] Tagged pointer scheme works for integers
+- [ ] NaN-boxing scheme works for inline integers and decimals
+- [ ] Large integers (>51 bits) are boxed correctly
 - [ ] Reference counting increments/decrements correctly
 - [ ] Hashable values work correctly in Sets and Dict keys
+- [ ] Non-hashable values (functions, dicts) produce RuntimeErr in Sets/Dict keys
 - [ ] Truthiness matches LANG.txt Section 14.1
+- [ ] Mutable cells work for captured variables
+- [ ] Grapheme-cluster string indexing works (emoji test)
 - [ ] All tests pass
 - [ ] `cargo clippy` clean
 
@@ -697,7 +836,36 @@ fn compile_if(&mut self, cond: &Expr, then_br: &Expr, else_br: Option<&Expr>)
 }
 ```
 
-### 6.3 Tests
+### 6.3 Protected Built-in Names
+
+Per LANG.txt §14.6, built-in function names cannot be shadowed:
+
+```rust
+// List of protected names (all 66 built-in functions)
+const PROTECTED_NAMES: &[&str] = &[
+    "int", "ints", "list", "set", "dict", "get", "size", "first", "second",
+    "last", "rest", "keys", "values", "push", "assoc", "update", "update_d",
+    "map", "filter", "flat_map", "filter_map", "find_map", "reduce", "fold",
+    "fold_s", "scan", "each", "find", "count", "sum", "max", "min", "skip",
+    "take", "sort", "reverse", "rotate", "chunk", "union", "intersection",
+    "includes?", "excludes?", "any?", "all?", "zip", "repeat", "cycle",
+    "iterate", "combinations", "range", "lines", "split", "regex_match",
+    "regex_match_all", "md5", "upper", "lower", "replace", "join", "abs",
+    "signum", "vec_add", "bit_and", "bit_or", "bit_xor", "bit_not",
+    "bit_shift_left", "bit_shift_right", "id", "type", "memoize", "or", "and",
+    // Note: "evaluate" excluded since it's out of scope for Dasher
+];
+
+fn check_protected_name(name: &str, source: Span) -> Result<(), CompileError> {
+    if PROTECTED_NAMES.contains(&name) {
+        Err(CompileError::ProtectedName { name: name.to_string(), source })
+    } else {
+        Ok(())
+    }
+}
+```
+
+### 6.4 Tests
 
 ```rust
 #[test]
@@ -712,12 +880,15 @@ fn codegen_match_expression() { ... }
 fn codegen_block_scoping() { ... }
 #[test]
 fn codegen_shadowing() { ... }
+#[test]
+fn codegen_protected_name_error() { ... }  // let sum = ... → CompileError
 ```
 
 ### Release Gate 6
 
 - [ ] Variable scoping works correctly
 - [ ] Shadowing behaves per LANG.txt
+- [ ] **Protected built-in names cannot be shadowed**
 - [ ] If expressions generate correct branch structure
 - [ ] Match compilation handles all pattern types
 - [ ] Guard clauses compile correctly
@@ -764,20 +935,55 @@ pub extern "C" fn rt_lt(left: Value, right: Value) -> Value { ... }
 pub extern "C" fn rt_le(left: Value, right: Value) -> Value { ... }
 ```
 
-### 7.3 Type Coercion Rules
+### 7.3 Division and Modulo Semantics (IMPORTANT)
+
+Santa uses **Python-style floored division**, NOT Rust's truncated division:
+
+```rust
+// Floored division (rounds toward negative infinity)
+// -7 / 2 = -4  (NOT -3 like Rust's default)
+// 7 / -2 = -4  (NOT -3)
+
+pub fn floored_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    let r = a % b;
+    if (r != 0) && ((r < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+// Floored modulo (result has same sign as divisor)
+// -7 % 3 = 2   (NOT -1 like Rust)
+// 7 % -3 = -2  (NOT 1)
+
+pub fn floored_mod(a: i64, b: i64) -> i64 {
+    ((a % b) + b) % b
+}
+```
+
+### 7.4 Type Coercion Rules
 
 Per LANG.txt §4.1:
 - Integer + Decimal: left operand determines result type
 - String + any: right operand coerced to string (when left is String)
 - Integer + String: ERROR (not supported)
 
-### 7.4 Tests
+### 7.5 Comparison Restrictions
+
+Only Integer, Decimal, and String support comparison operators (`<`, `>`, `<=`, `>=`).
+Comparing other types (List, Set, Dict, Function, LazySequence) produces RuntimeErr.
+
+### 7.7 Tests
 
 ```rust
 #[test]
 fn runtime_arithmetic() { ... }
 #[test]
+fn runtime_floored_division() { ... }     // -7/2=-4, 7/-2=-4
+#[test]
+fn runtime_floored_modulo() { ... }       // -7%3=2, 7%-3=-2
+#[test]
 fn runtime_comparison() { ... }
+#[test]
+fn runtime_comparison_type_errors() { ... } // [1,2] < [3,4] → RuntimeErr
 #[test]
 fn runtime_string_operations() { ... }
 #[test]
@@ -789,7 +995,10 @@ fn runtime_type_coercion() { ... }
 ### Release Gate 7
 
 - [ ] All arithmetic operations work correctly
+- [ ] **Floored division semantics** match Python (-7/2=-4)
+- [ ] **Floored modulo semantics** match Python (-7%3=2)
 - [ ] Type coercion matches LANG.txt Section 4.1
+- [ ] Comparison on non-comparable types produces RuntimeErr
 - [ ] Division by zero produces RuntimeErr
 - [ ] All tests pass
 - [ ] `cargo clippy` clean
@@ -955,6 +1164,17 @@ fn builtin_collection_modification() { ... }
 - `filter_map(fn, collection)` - map and filter truthy
 - `find_map(fn, collection)` - find first truthy mapped
 
+**Dict Callback Arities**: When operating on Dictionaries, callbacks support two arities:
+```santa
+// Single-arg: receives value only
+map(_ + 1, #{1: 2, 3: 4})           // #{1: 3, 3: 5}
+
+// Two-arg: receives (value, key)
+map(|v, k| k + v, #{1: 2, 3: 4})    // #{1: 3, 3: 7}
+```
+
+The runtime must detect callback arity and call appropriately.
+
 ### 10.2 Reduction Functions
 
 - `reduce(fn, collection)` - reduce with first as initial
@@ -978,7 +1198,13 @@ fn builtin_reduce() { ... }
 #[test]
 fn builtin_fold() { ... }
 #[test]
-fn builtin_dict_callbacks() { ... }
+fn builtin_dict_single_arg_callback() { ... }  // map(_ + 1, dict)
+#[test]
+fn builtin_dict_two_arg_callback() { ... }     // map(|v, k| v + k, dict)
+#[test]
+fn builtin_reduce_empty_error() { ... }        // reduce(+, []) → RuntimeErr
+#[test]
+fn builtin_fold_empty_returns_initial() { ... }
 ```
 
 ### Release Gate 10
@@ -1192,10 +1418,46 @@ Generate decision tree for efficient matching.
 3. Run `part_one:` and `part_two:` with timing
 4. For tests: create fresh environment, run with test input
 
+### 16.2 Test Attributes
+
+The `@slow` attribute marks tests that should be skipped by default:
+
+```santa
+@slow
+test: {
+  input: read("aoc://2022/1")
+  part_one: 71300
+  part_two: 209691
+}
+```
+
+**Implementation**:
+- Parser recognizes `@` followed by identifier before sections
+- Runner tracks attribute on test sections
+- Default: skip `@slow` tests
+- CLI flag `-s` or `--slow` includes slow tests
+
+### 16.3 Tests
+
+```rust
+#[test]
+fn runner_solution_execution() { ... }
+#[test]
+fn runner_test_sections() { ... }
+#[test]
+fn runner_slow_test_attribute() { ... }
+#[test]
+fn runner_script_mode() { ... }
+#[test]
+fn runner_duplicate_section_error() { ... }
+```
+
 ### Release Gate 16
 
 - [ ] Solutions execute with input binding
 - [ ] Tests run against expected values
+- [ ] **@slow attribute** skips tests by default
+- [ ] **-s/--slow flag** includes slow tests
 - [ ] Timing information is collected
 - [ ] Script mode works
 - [ ] Duplicate sections produce errors
@@ -1240,27 +1502,74 @@ pub enum SantaError {
 ### 18.1 Commands
 
 ```
-santa-cli <SCRIPT>        Run solution file
-santa-cli -t <SCRIPT>     Run tests
-santa-cli -r              Start REPL
+dasher <SCRIPT>           Run solution file
+dasher -t <SCRIPT>        Run tests (exclude @slow)
+dasher -t -s <SCRIPT>     Run tests (include @slow)
 ```
+
+**Note**: REPL is out of scope for AOT compiler. Use santa-lang-rs for REPL functionality.
 
 ### 18.2 External Functions
 
-- `puts(..values)`, `read(path)`, `env()`
+- `puts(..values)` - Print to stdout
+- `read(path)` - Read file contents (supports file://, https://, aoc://)
+- `env()` - Print environment (for debugging)
 
-### 18.3 Exit Codes
+### 18.3 AOC Input Fetching
+
+The `read("aoc://year/day")` scheme fetches puzzle input from adventofcode.com:
+
+**Session Cookie**:
+```
+# Environment variable (preferred)
+export AOC_SESSION=your_session_cookie
+
+# Or config file
+~/.config/dasher/session.txt
+```
+
+**Caching**:
+- Inputs cached at `~/.cache/dasher/aoc/YEAR/DAY.txt`
+- Cache checked before network request
+- Cache never expires (puzzle inputs are immutable)
+
+**Error Handling**:
+- Missing session cookie → RuntimeErr with helpful message
+- Network error → RuntimeErr
+- 404 (future puzzle) → RuntimeErr
+- Invalid year/day format → RuntimeErr
+
+### 18.4 Exit Codes
 
 - 0: Success
 - 1: Argument error
 - 2: Runtime error
 - 3: Test failure
 
+### 18.5 Tests
+
+```rust
+#[test]
+fn cli_run_solution() { ... }
+#[test]
+fn cli_run_tests() { ... }
+#[test]
+fn cli_slow_flag() { ... }
+#[test]
+fn read_local_file() { ... }
+#[test]
+fn read_aoc_cached() { ... }
+#[test]
+fn read_missing_session_error() { ... }
+```
+
 ### Release Gate 18
 
 - [ ] All CLI commands work
 - [ ] Output format matches other implementations
-- [ ] AoC input fetching works
+- [ ] **AoC input fetching** with session cookie
+- [ ] **Input caching** works correctly
+- [ ] **Missing session** produces helpful error
 - [ ] Exit codes are correct
 - [ ] All tests pass
 - [ ] `cargo clippy` clean
@@ -1300,22 +1609,34 @@ Enable standard optimization passes:
 
 **LANG.txt Reference**: Appendix D (Example Programs)
 
-### 20.1 Integration Tests
+### 20.1 Incremental .santa Test Files
+
+Throughout development, .santa test files are added incrementally to `examples/`:
+
+- **Phases 1-3**: Basic syntax tests (literals, operators, patterns)
+- **Phases 4-8**: Runtime tests (collections, closures, control flow)
+- **Phases 9-13**: Built-in function tests
+- **Phases 14-16**: Advanced features (TCO, pattern matching, AOC runner)
+
+Each phase should add corresponding .santa files that exercise new functionality.
+
+### 20.2 Integration Tests
 
 Run all LANG.txt Appendix D examples:
 - Fibonacci, AOC 2022 Day 1, Word Frequency, Prime Numbers, Recursive List Sum
 
-### 20.2 Example Suite Validation
+### 20.3 Example Suite Validation
 
 Run all .santa files from examples directory using run-tests.sh.
 
-### 20.3 Final Verification
+### 20.4 Final Verification
 
-- [ ] 100% LANG.txt compliance
-- [ ] All 66 built-in functions match Appendix B
+- [ ] LANG.txt compliance (except `evaluate()` which is out of scope)
+- [ ] All 65 implemented built-in functions match Appendix B
 - [ ] All integration tests pass
 - [ ] All example suite tests pass
 - [ ] Documentation complete
+- [ ] Known limitations documented
 - [ ] Ready for production use
 
 ---
