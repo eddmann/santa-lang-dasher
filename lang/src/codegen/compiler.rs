@@ -13,6 +13,10 @@ impl<'ctx> CodegenContext<'ctx> {
     pub fn compile_expr(&mut self, expr: &TypedExpr) -> Result<BasicValueEnum<'ctx>, CompileError> {
         match &expr.expr {
             Expr::Integer(n) => Ok(self.compile_integer(*n)),
+            Expr::Decimal(f) => Ok(self.compile_decimal(*f)),
+            Expr::Boolean(b) => Ok(self.compile_boolean(*b)),
+            Expr::Nil => Ok(self.compile_nil()),
+            Expr::String(s) => self.compile_string(s),
             Expr::Infix { left, op, right } => {
                 self.compile_binary(left, op, right, &expr.ty)
             },
@@ -32,6 +36,79 @@ impl<'ctx> CodegenContext<'ctx> {
         let tagged = shifted | 0b001;
 
         i64_type.const_int(tagged, false).into()
+    }
+
+    /// Compile a decimal literal to a native f64 value
+    /// Decimals are stored as actual f64 (non-NaN range), not tagged
+    fn compile_decimal(&self, value: f64) -> BasicValueEnum<'ctx> {
+        let f64_type = self.context.f64_type();
+        f64_type.const_float(value).into()
+    }
+
+    /// Compile a boolean literal to a NaN-boxed tagged value
+    /// Tag scheme: (bool_value << 3) | 0b011
+    /// true: (1 << 3) | 0b011 = 0b1011 = 11
+    /// false: (0 << 3) | 0b011 = 0b0011 = 3
+    fn compile_boolean(&self, value: bool) -> BasicValueEnum<'ctx> {
+        let i64_type = self.context.i64_type();
+        let bool_as_int = if value { 1u64 } else { 0u64 };
+        let tagged = (bool_as_int << 3) | 0b011;
+        i64_type.const_int(tagged, false).into()
+    }
+
+    /// Compile nil literal to a NaN-boxed tagged value
+    /// Tag scheme: 0b010
+    fn compile_nil(&self) -> BasicValueEnum<'ctx> {
+        let i64_type = self.context.i64_type();
+        i64_type.const_int(0b010, false).into()
+    }
+
+    /// Compile a string literal by creating a global constant and calling runtime function
+    fn compile_string(&mut self, value: &str) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Create a global string constant
+        let string_value = self.context.const_string(value.as_bytes(), false);
+        let global = self.module.add_global(string_value.get_type(), None, "str");
+        global.set_initializer(&string_value);
+        global.set_constant(true);
+        global.set_unnamed_addr(true);
+
+        // Get pointer to the string data
+        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+        let string_ptr = self.builder.build_pointer_cast(
+            global.as_pointer_value(),
+            ptr_type,
+            "str_ptr"
+        ).unwrap();
+
+        // Get or declare rt_string_from_cstr function
+        let rt_string_fn = self.get_or_declare_rt_string_from_cstr();
+
+        // Call rt_string_from_cstr(ptr, len)
+        let len = self.context.i64_type().const_int(value.len() as u64, false);
+        let call_result = self.builder.build_call(
+            rt_string_fn,
+            &[string_ptr.into(), len.into()],
+            "string_value"
+        ).unwrap();
+
+        Ok(call_result.try_as_basic_value().left().unwrap())
+    }
+
+    /// Get or declare the rt_string_from_cstr runtime function
+    fn get_or_declare_rt_string_from_cstr(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_string_from_cstr";
+
+        // Check if already declared
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Declare: extern "C" fn(ptr: *const i8, len: usize) -> Value (i64)
+        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
+
+        self.module.add_function(fn_name, fn_type, None)
     }
 
     /// Compile a binary operation with type specialization
@@ -99,6 +176,46 @@ impl<'ctx> CodegenContext<'ctx> {
                 let l = self.unbox_int(left_val);
                 let r = self.unbox_int(right_val);
                 let cmp = self.builder.build_int_compare(IntPredicate::SLT, l, r, "lt").unwrap();
+                Ok(self.box_bool(cmp))
+            }
+
+            // Decimal + Decimal → native fadd (FAST PATH)
+            (Type::Decimal, InfixOp::Add, Type::Decimal) => {
+                let l = left_val.into_float_value();
+                let r = right_val.into_float_value();
+                let result = self.builder.build_float_add(l, r, "fadd").unwrap();
+                Ok(result.into())
+            }
+
+            // Decimal - Decimal → native fsub (FAST PATH)
+            (Type::Decimal, InfixOp::Subtract, Type::Decimal) => {
+                let l = left_val.into_float_value();
+                let r = right_val.into_float_value();
+                let result = self.builder.build_float_sub(l, r, "fsub").unwrap();
+                Ok(result.into())
+            }
+
+            // Decimal * Decimal → native fmul (FAST PATH)
+            (Type::Decimal, InfixOp::Multiply, Type::Decimal) => {
+                let l = left_val.into_float_value();
+                let r = right_val.into_float_value();
+                let result = self.builder.build_float_mul(l, r, "fmul").unwrap();
+                Ok(result.into())
+            }
+
+            // Decimal / Decimal → native fdiv (FAST PATH)
+            (Type::Decimal, InfixOp::Divide, Type::Decimal) => {
+                let l = left_val.into_float_value();
+                let r = right_val.into_float_value();
+                let result = self.builder.build_float_div(l, r, "fdiv").unwrap();
+                Ok(result.into())
+            }
+
+            // Decimal < Decimal → native comparison (FAST PATH)
+            (Type::Decimal, InfixOp::LessThan, Type::Decimal) => {
+                let l = left_val.into_float_value();
+                let r = right_val.into_float_value();
+                let cmp = self.builder.build_float_compare(inkwell::FloatPredicate::OLT, l, r, "flt").unwrap();
                 Ok(self.box_bool(cmp))
             }
 
