@@ -14,7 +14,7 @@ The architecture is:
 1. **Lexer** → Token stream
 2. **Parser** → AST
 3. **Codegen** → LLVM IR (using `inkwell` crate)
-4. **LLVM** → Native machine code (JIT or AOT)
+4. **LLVM** → Native machine code (AOT compilation)
 5. **Runtime library** → Support functions called from compiled code
 
 ### What "Runtime" Means Here
@@ -34,7 +34,7 @@ These are NOT an interpreter. They are support functions linked into the final e
 ### Required Approach
 - ✅ Generate LLVM IR using `inkwell`
 - ✅ Use LLVM's optimization passes (O2/O3)
-- ✅ JIT compile or AOT compile to native machine code
+- ✅ AOT compile to native machine code (no JIT)
 
 ---
 
