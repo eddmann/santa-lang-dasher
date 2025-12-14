@@ -1,5 +1,5 @@
 use crate::types::{TypedExpr, Type};
-use crate::parser::ast::{Expr, InfixOp, PrefixOp};
+use crate::parser::ast::{Expr, InfixOp, PrefixOp, Stmt, Pattern};
 use inkwell::values::BasicValueEnum;
 use inkwell::IntPredicate;
 use super::context::CodegenContext;
@@ -7,6 +7,8 @@ use super::context::CodegenContext;
 #[derive(Debug)]
 pub enum CompileError {
     UnsupportedExpression(String),
+    UnsupportedStatement(String),
+    UnsupportedPattern(String),
 }
 
 impl<'ctx> CodegenContext<'ctx> {
@@ -17,6 +19,17 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::Boolean(b) => Ok(self.compile_boolean(*b)),
             Expr::Nil => Ok(self.compile_nil()),
             Expr::String(s) => self.compile_string(s),
+            Expr::Identifier(name) => {
+                // Look up the variable and load its value
+                if let Some(alloca) = self.variables.get(name) {
+                    let load = self.builder.build_load(self.context.i64_type(), *alloca, name).unwrap();
+                    Ok(load)
+                } else {
+                    Err(CompileError::UnsupportedExpression(
+                        format!("Undefined variable: {}", name)
+                    ))
+                }
+            },
             Expr::Prefix { op, right } => {
                 self.compile_prefix(op, right, &expr.ty)
             },
@@ -37,6 +50,12 @@ impl<'ctx> CodegenContext<'ctx> {
             },
             Expr::Index { collection, index } => {
                 self.compile_index(collection, index)
+            },
+            Expr::If { condition, then_branch, else_branch } => {
+                self.compile_if(condition, then_branch, else_branch.as_deref())
+            },
+            Expr::Block(stmts) => {
+                self.compile_block(stmts)
             },
             _ => Err(CompileError::UnsupportedExpression(
                 format!("Expression type not yet implemented: {:?}", expr.expr)
@@ -912,6 +931,142 @@ impl<'ctx> CodegenContext<'ctx> {
         Ok(call_result.try_as_basic_value().left().unwrap())
     }
 
+    /// Compile an if expression with optional else branch
+    fn compile_if(
+        &mut self,
+        condition: &Expr,
+        then_branch: &Expr,
+        else_branch: Option<&Expr>,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Get the current function (required for creating basic blocks)
+        let current_fn = self.builder.get_insert_block()
+            .and_then(|bb| bb.get_parent())
+            .ok_or_else(|| CompileError::UnsupportedExpression(
+                "if expression requires a function context".to_string()
+            ))?;
+
+        // Compile the condition
+        let cond_ty = self.infer_expr_type(condition);
+        let cond_typed = TypedExpr {
+            expr: condition.clone(),
+            ty: cond_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        let cond_val = self.compile_expr(&cond_typed)?;
+
+        // For now, assume condition is a boolean (will need runtime support for truthy values later)
+        // Extract the boolean value from the NaN-boxed representation
+        let cond_int = cond_val.into_int_value();
+        let shifted = self.builder.build_right_shift(
+            cond_int,
+            self.context.i64_type().const_int(3, false),
+            false,
+            "shift"
+        ).unwrap();
+        let cond_bool = self.builder.build_int_truncate(
+            shifted,
+            self.context.bool_type(),
+            "to_bool"
+        ).unwrap();
+
+        // Create basic blocks for then, else, and merge
+        let then_bb = self.context.append_basic_block(current_fn, "then");
+        let else_bb = self.context.append_basic_block(current_fn, "else");
+        let merge_bb = self.context.append_basic_block(current_fn, "merge");
+
+        // Build conditional branch
+        self.builder.build_conditional_branch(cond_bool, then_bb, else_bb).unwrap();
+
+        // Compile then branch
+        self.builder.position_at_end(then_bb);
+        let then_ty = self.infer_expr_type(then_branch);
+        let then_typed = TypedExpr {
+            expr: then_branch.clone(),
+            ty: then_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        let then_val = self.compile_expr(&then_typed)?;
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        let then_end_bb = self.builder.get_insert_block().unwrap();
+
+        // Compile else branch (or use nil if no else)
+        self.builder.position_at_end(else_bb);
+        let else_val = if let Some(else_expr) = else_branch {
+            let else_ty = self.infer_expr_type(else_expr);
+            let else_typed = TypedExpr {
+                expr: else_expr.clone(),
+                ty: else_ty,
+                span: crate::lexer::token::Span::new(
+                    crate::lexer::token::Position::new(0, 0),
+                    crate::lexer::token::Position::new(0, 0),
+                ),
+            };
+            self.compile_expr(&else_typed)?
+        } else {
+            self.compile_nil()
+        };
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        let else_end_bb = self.builder.get_insert_block().unwrap();
+
+        // Merge block with phi node
+        self.builder.position_at_end(merge_bb);
+        let phi = self.builder.build_phi(self.context.i64_type(), "if_result").unwrap();
+        phi.add_incoming(&[(&then_val, then_end_bb), (&else_val, else_end_bb)]);
+
+        Ok(phi.as_basic_value())
+    }
+
+    /// Compile a block of statements
+    fn compile_block(&mut self, stmts: &[Stmt]) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        if stmts.is_empty() {
+            // Empty block returns nil
+            return Ok(self.compile_nil());
+        }
+
+        let mut last_val = None;
+
+        for (i, stmt) in stmts.iter().enumerate() {
+            match stmt {
+                Stmt::Let { .. } => {
+                    // Let statements don't produce a value
+                    self.compile_stmt(stmt)?;
+                }
+                Stmt::Expr(expr) => {
+                    // Expression statements produce a value
+                    let expr_ty = self.infer_expr_type(expr);
+                    let expr_typed = TypedExpr {
+                        expr: expr.clone(),
+                        ty: expr_ty,
+                        span: crate::lexer::token::Span::new(
+                            crate::lexer::token::Position::new(0, 0),
+                            crate::lexer::token::Position::new(0, 0),
+                        ),
+                    };
+                    let val = self.compile_expr(&expr_typed)?;
+
+                    // If this is the last statement, save its value as the block's result
+                    if i == stmts.len() - 1 {
+                        last_val = Some(val);
+                    }
+                }
+                Stmt::Return(_) | Stmt::Break(_) => {
+                    return Err(CompileError::UnsupportedStatement(
+                        "Return and break not yet supported in blocks".to_string()
+                    ));
+                }
+            }
+        }
+
+        // Return the last expression value, or nil if the last statement wasn't an expression
+        Ok(last_val.unwrap_or_else(|| self.compile_nil()))
+    }
+
     /// Get or declare the rt_index runtime function
     fn get_or_declare_rt_index(&self) -> inkwell::values::FunctionValue<'ctx> {
         let fn_name = "rt_index";
@@ -922,5 +1077,52 @@ impl<'ctx> CodegenContext<'ctx> {
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
         self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Compile a statement
+    pub fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), CompileError> {
+        match stmt {
+            Stmt::Let { mutable, pattern, value } => {
+                self.compile_let(pattern, value, *mutable)
+            }
+            Stmt::Return(_) | Stmt::Break(_) | Stmt::Expr(_) => {
+                Err(CompileError::UnsupportedStatement(
+                    format!("Statement type not yet implemented: {:?}", stmt)
+                ))
+            }
+        }
+    }
+
+    /// Compile a let binding
+    fn compile_let(&mut self, pattern: &Pattern, value: &Expr, _mutable: bool) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Identifier(name) => {
+                // Compile the value expression
+                let value_ty = self.infer_expr_type(value);
+                let value_typed = TypedExpr {
+                    expr: value.clone(),
+                    ty: value_ty,
+                    span: crate::lexer::token::Span::new(
+                        crate::lexer::token::Position::new(0, 0),
+                        crate::lexer::token::Position::new(0, 0),
+                    ),
+                };
+                let value_compiled = self.compile_expr(&value_typed)?;
+
+                // Create an alloca for the variable at the entry block
+                let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
+
+                // Store the value
+                self.builder.build_store(alloca, value_compiled).unwrap();
+
+                // Register the variable
+                self.variables.insert(name.clone(), alloca);
+
+                Ok(())
+            }
+            _ => Err(CompileError::UnsupportedPattern(
+                format!("Pattern type not yet implemented: {:?}", pattern)
+            ))
+        }
     }
 }

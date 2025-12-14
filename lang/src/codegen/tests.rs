@@ -527,3 +527,119 @@ fn codegen_index_list() {
     assert!(result.is_ok());
     assert!(result.unwrap().is_int_value());
 }
+
+// ===== Phase 7: Statement & Control Flow Tests =====
+
+#[test]
+fn codegen_let_binding_simple() {
+    use crate::parser::ast::{Stmt, Pattern};
+
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    let _function = codegen.create_test_function();
+
+    // Create a simple let binding: let x = 42;
+    let stmt = Stmt::Let {
+        mutable: false,
+        pattern: Pattern::Identifier("x".to_string()),
+        value: Expr::Integer(42),
+    };
+
+    // Compile the statement
+    let result = codegen.compile_stmt(&stmt);
+    assert!(result.is_ok());
+
+    // After the statement, we should be able to look up the variable
+    // (This tests that the variable was stored in the context)
+}
+
+#[test]
+fn codegen_variable_lookup() {
+    use crate::parser::ast::{Stmt, Pattern};
+
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    let _function = codegen.create_test_function();
+
+    // Create a let binding: let x = 42;
+    let stmt = Stmt::Let {
+        mutable: false,
+        pattern: Pattern::Identifier("x".to_string()),
+        value: Expr::Integer(42),
+    };
+
+    // Compile the statement
+    codegen.compile_stmt(&stmt).unwrap();
+
+    // Now compile an expression that references x
+    let expr = TypedExpr {
+        expr: Expr::Identifier("x".to_string()),
+        ty: Type::Int,
+        span: Span::new(Position::new(1, 1), Position::new(1, 2)),
+    };
+
+    // Compile the expression - should load from the variable
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_int_value());
+}
+
+#[test]
+fn codegen_if_expression() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    let _function = codegen.create_test_function();
+
+    // Create an if expression: if true { 1 } else { 2 }
+    let expr = TypedExpr {
+        expr: Expr::If {
+            condition: Box::new(Expr::Boolean(true)),
+            then_branch: Box::new(Expr::Integer(1)),
+            else_branch: Some(Box::new(Expr::Integer(2))),
+        },
+        ty: Type::Int,
+        span: Span::new(Position::new(1, 1), Position::new(1, 25)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_int_value());
+}
+
+#[test]
+fn codegen_block_expression() {
+    use crate::parser::ast::{Stmt, Pattern};
+
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    let _function = codegen.create_test_function();
+
+    // Create a block: { let x = 1; let y = 2; x + y }
+    let expr = TypedExpr {
+        expr: Expr::Block(vec![
+            Stmt::Let {
+                mutable: false,
+                pattern: Pattern::Identifier("x".to_string()),
+                value: Expr::Integer(1),
+            },
+            Stmt::Let {
+                mutable: false,
+                pattern: Pattern::Identifier("y".to_string()),
+                value: Expr::Integer(2),
+            },
+            Stmt::Expr(Expr::Infix {
+                left: Box::new(Expr::Identifier("x".to_string())),
+                op: super::super::parser::ast::InfixOp::Add,
+                right: Box::new(Expr::Identifier("y".to_string())),
+            }),
+        ]),
+        ty: Type::Int,
+        span: Span::new(Position::new(1, 1), Position::new(3, 10)),
+    };
+
+    // Compile the block
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_int_value());
+}

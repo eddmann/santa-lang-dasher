@@ -2,12 +2,16 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::builder::Builder;
 use inkwell::basic_block::BasicBlock;
+use inkwell::values::PointerValue;
+use std::collections::HashMap;
 
 pub struct CodegenContext<'ctx> {
     pub context: &'ctx Context,
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     pub current_block: Option<BasicBlock<'ctx>>,
+    /// Maps variable names to their stack allocations
+    pub variables: HashMap<String, PointerValue<'ctx>>,
 }
 
 impl<'ctx> CodegenContext<'ctx> {
@@ -20,6 +24,7 @@ impl<'ctx> CodegenContext<'ctx> {
             module,
             builder,
             current_block: None,
+            variables: HashMap::new(),
         }
     }
 
