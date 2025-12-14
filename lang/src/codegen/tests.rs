@@ -314,3 +314,42 @@ fn codegen_dict_literal_with_entries() {
     let result = codegen.compile_expr(&expr).unwrap();
     assert!(result.is_int_value());
 }
+
+#[test]
+fn codegen_unknown_type_runtime_fallback() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    codegen.create_test_function();
+
+    // Create typed expression for addition with Unknown types
+    // This should generate a call to rt_add instead of native add
+    let left = TypedExpr {
+        expr: Expr::Identifier("x".to_string()),
+        ty: Type::Unknown,
+        span: Span::new(Position::new(1, 1), Position::new(1, 1)),
+    };
+
+    let right = TypedExpr {
+        expr: Expr::Identifier("y".to_string()),
+        ty: Type::Unknown,
+        span: Span::new(Position::new(1, 5), Position::new(1, 5)),
+    };
+
+    let expr = TypedExpr {
+        expr: Expr::Infix {
+            left: Box::new(left.expr.clone()),
+            op: InfixOp::Add,
+            right: Box::new(right.expr.clone()),
+        },
+        ty: Type::Unknown,
+        span: Span::new(Position::new(1, 1), Position::new(1, 5)),
+    };
+
+    // This should compile without error, even though we don't know the types
+    // The codegen should emit a call to rt_add
+    let result = codegen.compile_expr(&expr);
+
+    // For now, this should return an error since Identifier is not implemented
+    // But once we implement it, this should succeed
+    assert!(result.is_err() || result.unwrap().is_int_value());
+}

@@ -188,3 +188,220 @@ fn refcount_primitives_ignored() {
     rt_decref(v);  // Should do nothing
     // No assertion - just shouldn't crash
 }
+
+// ===== Runtime Operations Tests =====
+
+use crate::runtime::operations::{rt_add, rt_sub, rt_mul, rt_div, rt_mod};
+
+#[test]
+fn runtime_add_integers() {
+    let left = Value::from_integer(10);
+    let right = Value::from_integer(32);
+    let result = rt_add(left, right);
+
+    assert!(result.is_integer());
+    assert_eq!(result.as_integer(), Some(42));
+}
+
+#[test]
+fn runtime_add_decimals() {
+    let left = Value::from_decimal(1.5);
+    let right = Value::from_decimal(2.5);
+    let result = rt_add(left, right);
+
+    assert!(result.as_decimal().is_some());
+    assert_eq!(result.as_decimal(), Some(4.0));
+}
+
+#[test]
+fn runtime_add_int_decimal_left_wins() {
+    // Per LANG.txt §4.1: left operand type determines result type
+    let left = Value::from_integer(10);
+    let right = Value::from_decimal(5.5);
+    let result = rt_add(left, right);
+
+    // Left is Int, so result should be Int (10 + 5 = 15, decimal truncated)
+    assert!(result.is_integer());
+    assert_eq!(result.as_integer(), Some(15));
+}
+
+#[test]
+fn runtime_add_decimal_int_left_wins() {
+    // Per LANG.txt §4.1: left operand type determines result type
+    let left = Value::from_decimal(10.0);
+    let right = Value::from_integer(5);
+    let result = rt_add(left, right);
+
+    // Left is Decimal, so result should be Decimal
+    assert!(result.as_decimal().is_some());
+    assert_eq!(result.as_decimal(), Some(15.0));
+}
+
+#[test]
+fn runtime_add_string_concatenation() {
+    let left = Value::from_string("Hello, ");
+    let right = Value::from_string("World!");
+    let result = rt_add(left, right);
+
+    assert!(result.as_string().is_some());
+    assert_eq!(result.as_string(), Some("Hello, World!"));
+}
+
+#[test]
+fn runtime_add_string_coerces_right() {
+    // String + X coerces X to string
+    let left = Value::from_string("Answer: ");
+    let right = Value::from_integer(42);
+    let result = rt_add(left, right);
+
+    assert!(result.as_string().is_some());
+    assert_eq!(result.as_string(), Some("Answer: 42"));
+}
+
+#[test]
+fn runtime_subtract_integers() {
+    let left = Value::from_integer(50);
+    let right = Value::from_integer(8);
+    let result = rt_sub(left, right);
+
+    assert!(result.is_integer());
+    assert_eq!(result.as_integer(), Some(42));
+}
+
+#[test]
+fn runtime_multiply_integers() {
+    let left = Value::from_integer(6);
+    let right = Value::from_integer(7);
+    let result = rt_mul(left, right);
+
+    assert!(result.is_integer());
+    assert_eq!(result.as_integer(), Some(42));
+}
+
+#[test]
+fn runtime_divide_integers() {
+    let left = Value::from_integer(84);
+    let right = Value::from_integer(2);
+    let result = rt_div(left, right);
+
+    assert!(result.is_integer());
+    assert_eq!(result.as_integer(), Some(42));
+}
+
+#[test]
+fn runtime_floored_division_negative_numerator() {
+    // -7 / 2 should be -4 (Python-style floored division, NOT -3)
+    let left = Value::from_integer(-7);
+    let right = Value::from_integer(2);
+    let result = rt_div(left, right);
+
+    assert!(result.is_integer());
+    assert_eq!(result.as_integer(), Some(-4));
+}
+
+#[test]
+fn runtime_floored_division_negative_denominator() {
+    // 7 / -2 should be -4 (NOT -3)
+    let left = Value::from_integer(7);
+    let right = Value::from_integer(-2);
+    let result = rt_div(left, right);
+
+    assert!(result.is_integer());
+    assert_eq!(result.as_integer(), Some(-4));
+}
+
+#[test]
+fn runtime_modulo_integers() {
+    let left = Value::from_integer(10);
+    let right = Value::from_integer(3);
+    let result = rt_mod(left, right);
+
+    assert!(result.is_integer());
+    assert_eq!(result.as_integer(), Some(1));
+}
+
+#[test]
+fn runtime_floored_modulo_negative_numerator() {
+    // -7 % 3 should be 2 (Python-style floored modulo, NOT -1)
+    let left = Value::from_integer(-7);
+    let right = Value::from_integer(3);
+    let result = rt_mod(left, right);
+
+    assert!(result.is_integer());
+    assert_eq!(result.as_integer(), Some(2));
+}
+
+#[test]
+fn runtime_floored_modulo_negative_denominator() {
+    // 7 % -3 should be -2 (NOT 1)
+    let left = Value::from_integer(7);
+    let right = Value::from_integer(-3);
+    let result = rt_mod(left, right);
+
+    assert!(result.is_integer());
+    assert_eq!(result.as_integer(), Some(-2));
+}
+
+// ===== Comparison Operations Tests =====
+
+use crate::runtime::operations::{rt_eq, rt_ne, rt_lt, rt_le, rt_gt, rt_ge};
+
+#[test]
+fn runtime_eq_integers_equal() {
+    let left = Value::from_integer(42);
+    let right = Value::from_integer(42);
+    let result = rt_eq(left, right);
+
+    assert!(result.is_boolean());
+    assert_eq!(result.as_bool(), Some(true));
+}
+
+#[test]
+fn runtime_eq_integers_not_equal() {
+    let left = Value::from_integer(42);
+    let right = Value::from_integer(43);
+    let result = rt_eq(left, right);
+
+    assert!(result.is_boolean());
+    assert_eq!(result.as_bool(), Some(false));
+}
+
+#[test]
+fn runtime_lt_integers() {
+    let left = Value::from_integer(10);
+    let right = Value::from_integer(20);
+    let result = rt_lt(left, right);
+
+    assert!(result.is_boolean());
+    assert_eq!(result.as_bool(), Some(true));
+}
+
+#[test]
+fn runtime_lt_integers_false() {
+    let left = Value::from_integer(20);
+    let right = Value::from_integer(10);
+    let result = rt_lt(left, right);
+
+    assert!(result.is_boolean());
+    assert_eq!(result.as_bool(), Some(false));
+}
+
+#[test]
+fn runtime_lt_decimals() {
+    let left = Value::from_decimal(1.5);
+    let right = Value::from_decimal(2.5);
+    let result = rt_lt(left, right);
+
+    assert!(result.is_boolean());
+    assert_eq!(result.as_bool(), Some(true));
+}
+
+#[test]
+fn runtime_lt_strings() {
+    let left = Value::from_string("abc");
+    let right = Value::from_string("def");
+    let result = rt_lt(left, right);
+
+    assert!(result.is_boolean());
+    assert_eq!(result.as_bool(), Some(true));
+}

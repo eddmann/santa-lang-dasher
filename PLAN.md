@@ -1586,14 +1586,14 @@ fn runtime_type_coercion() { ... }
 
 ### Release Gate 8
 
-- [ ] All arithmetic operations work correctly
-- [ ] **Floored division semantics** match Python (-7/2=-4)
-- [ ] **Floored modulo semantics** match Python (-7%3=2)
-- [ ] Type coercion matches LANG.txt Section 4.1
-- [ ] Comparison on non-comparable types produces RuntimeErr
-- [ ] Division by zero produces RuntimeErr
-- [ ] All tests pass
-- [ ] `cargo clippy` clean
+- [x] All arithmetic operations work correctly
+- [x] **Floored division semantics** match Python (-7/2=-4)
+- [x] **Floored modulo semantics** match Python (-7%3=2)
+- [x] Type coercion matches LANG.txt Section 4.1
+- [ ] Comparison on non-comparable types produces RuntimeErr (deferred to Phase 18 - returns nil for now)
+- [ ] Division by zero produces RuntimeErr (deferred to Phase 18 - returns nil for now)
+- [x] All tests pass (137 tests)
+- [x] `cargo clippy` clean
 
 ---
 

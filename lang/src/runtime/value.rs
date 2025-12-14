@@ -127,8 +127,9 @@ impl Value {
 
     pub fn is_heap_object(&self) -> bool {
         // A heap pointer has tag 0 (lower 3 bits are 000 due to 8-byte alignment)
-        // and is non-null
-        (self.0 & TAG_MASK) == 0 && self.0 != 0
+        // and must have upper 16 bits as 0 (48-bit address space on x64)
+        // This distinguishes pointers from f64 values which often have non-zero upper bits
+        (self.0 & TAG_MASK) == 0 && self.0 != 0 && (self.0 >> 48) == 0
     }
 
     pub fn as_heap_ptr<T>(&self) -> Option<*const T> {
