@@ -29,7 +29,32 @@ impl Parser {
     fn parse_pratt_expr(&mut self, min_precedence: u8) -> Result<Expr, ParseError> {
         let mut left = self.parse_primary()?;
 
+        // Handle postfix operators (call, index) and infix operators
         while !self.is_at_end() {
+            let token = self.current_token()?;
+
+            // Check for postfix operators first (highest precedence)
+            match &token.kind {
+                TokenKind::LeftParen => {
+                    // Function call - highest precedence (8)
+                    if 8 < min_precedence {
+                        break;
+                    }
+                    left = self.parse_call(left)?;
+                    continue;
+                }
+                TokenKind::LeftBracket => {
+                    // Index - highest precedence (8)
+                    if 8 < min_precedence {
+                        break;
+                    }
+                    left = self.parse_index(left)?;
+                    continue;
+                }
+                _ => {}
+            }
+
+            // Check for infix operators
             let precedence = self.get_infix_precedence();
             // Stop if precedence is 0 (not an infix op) or less than minimum
             if precedence == 0 || precedence < min_precedence {
@@ -78,8 +103,15 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Identifier(value))
             }
+            TokenKind::Underscore => {
+                self.advance();
+                Ok(Expr::Placeholder)
+            }
             TokenKind::LeftBracket => {
                 self.parse_list()
+            }
+            TokenKind::HashBrace => {
+                self.parse_set_or_dict()
             }
             TokenKind::Bang => {
                 self.advance();
@@ -97,12 +129,268 @@ impl Parser {
                     right: Box::new(right),
                 })
             }
+            TokenKind::VerticalBar => {
+                self.parse_function()
+            }
+            TokenKind::OrOr => {
+                // || is lexed as a single token, but it could be an empty function parameter list
+                // We need to check if this is a function (|| ...) or a logical OR
+                // For now, treat it as a function with empty params
+                self.parse_function_empty_params()
+            }
             _ => Err(ParseError {
                 message: format!("Unexpected token: {:?}", token.kind),
                 line: token.span.start.line as usize,
                 column: token.span.start.column as usize,
             }),
         }
+    }
+
+    fn parse_function(&mut self) -> Result<Expr, ParseError> {
+        self.advance(); // consume first '|'
+
+        let mut params = Vec::new();
+
+        // Parse parameters
+        loop {
+            let token = self.current_token()?;
+            match &token.kind {
+                TokenKind::Identifier(name) => {
+                    params.push(Param { name: name.clone() });
+                    self.advance();
+
+                    // Check for comma (more params) or closing |
+                    let next = self.current_token()?;
+                    match &next.kind {
+                        TokenKind::Comma => {
+                            self.advance();
+                            continue;
+                        }
+                        TokenKind::VerticalBar => {
+                            self.advance(); // consume closing '|'
+                            break;
+                        }
+                        _ => {
+                            return Err(ParseError {
+                                message: format!("Expected ',' or '|' in function parameters, got {:?}", next.kind),
+                                line: next.span.start.line as usize,
+                                column: next.span.start.column as usize,
+                            });
+                        }
+                    }
+                }
+                TokenKind::VerticalBar => {
+                    // Empty parameter list: ||
+                    self.advance();
+                    break;
+                }
+                _ => {
+                    return Err(ParseError {
+                        message: format!("Expected identifier or '|' in function parameters, got {:?}", token.kind),
+                        line: token.span.start.line as usize,
+                        column: token.span.start.column as usize,
+                    });
+                }
+            }
+        }
+
+        // Parse function body
+        let body = self.parse_pratt_expr(0)?;
+
+        Ok(Expr::Function {
+            params,
+            body: Box::new(body),
+        })
+    }
+
+    fn parse_function_empty_params(&mut self) -> Result<Expr, ParseError> {
+        // Handle || as an empty parameter list for a function
+        self.advance(); // consume '||'
+
+        // Parse function body
+        let body = self.parse_pratt_expr(0)?;
+
+        Ok(Expr::Function {
+            params: Vec::new(),
+            body: Box::new(body),
+        })
+    }
+
+    fn parse_call(&mut self, function: Expr) -> Result<Expr, ParseError> {
+        self.advance(); // consume '('
+
+        let mut args = Vec::new();
+
+        // Check for empty argument list
+        if let Ok(token) = self.current_token() {
+            if matches!(token.kind, TokenKind::RightParen) {
+                self.advance();
+                return Ok(Expr::Call {
+                    function: Box::new(function),
+                    args,
+                });
+            }
+        }
+
+        // Parse arguments
+        loop {
+            let arg = self.parse_pratt_expr(0)?;
+            args.push(arg);
+
+            let token = self.current_token()?;
+            match &token.kind {
+                TokenKind::Comma => {
+                    self.advance();
+                    // Check for trailing comma
+                    if let Ok(next) = self.current_token() {
+                        if matches!(next.kind, TokenKind::RightParen) {
+                            self.advance();
+                            break;
+                        }
+                    }
+                }
+                TokenKind::RightParen => {
+                    self.advance();
+                    break;
+                }
+                _ => {
+                    return Err(ParseError {
+                        message: format!("Expected ',' or ')' in call arguments, got {:?}", token.kind),
+                        line: token.span.start.line as usize,
+                        column: token.span.start.column as usize,
+                    })
+                }
+            }
+        }
+
+        Ok(Expr::Call {
+            function: Box::new(function),
+            args,
+        })
+    }
+
+    fn parse_index(&mut self, collection: Expr) -> Result<Expr, ParseError> {
+        self.advance(); // consume '['
+
+        let index = self.parse_pratt_expr(0)?;
+
+        let token = self.current_token()?;
+        if !matches!(token.kind, TokenKind::RightBracket) {
+            return Err(ParseError {
+                message: format!("Expected ']' after index, got {:?}", token.kind),
+                line: token.span.start.line as usize,
+                column: token.span.start.column as usize,
+            });
+        }
+        self.advance(); // consume ']'
+
+        Ok(Expr::Index {
+            collection: Box::new(collection),
+            index: Box::new(index),
+        })
+    }
+
+    fn parse_set_or_dict(&mut self) -> Result<Expr, ParseError> {
+        self.advance(); // consume '#{'
+
+        // Check for empty set/dict
+        if let Ok(token) = self.current_token() {
+            if matches!(token.kind, TokenKind::RightBrace) {
+                self.advance();
+                // Empty #{} is a set per LANG.txt
+                return Ok(Expr::Set(Vec::new()));
+            }
+        }
+
+        // Parse first element to determine if it's a set or dict
+        let first_elem = self.parse_pratt_expr(0)?;
+
+        // Check if this is a dict entry (has a colon)
+        if let Ok(token) = self.current_token() {
+            if matches!(token.kind, TokenKind::Colon) {
+                // It's a dict
+                self.advance(); // consume ':'
+                let first_value = self.parse_pratt_expr(0)?;
+                let mut entries = vec![(first_elem, first_value)];
+
+                // Parse remaining entries
+                loop {
+                    let token = self.current_token()?;
+                    match &token.kind {
+                        TokenKind::Comma => {
+                            self.advance();
+                            // Check for trailing comma
+                            if let Ok(next) = self.current_token() {
+                                if matches!(next.kind, TokenKind::RightBrace) {
+                                    self.advance();
+                                    break;
+                                }
+                            }
+                            // Parse next key:value pair
+                            let key = self.parse_pratt_expr(0)?;
+                            let colon = self.current_token()?;
+                            if !matches!(colon.kind, TokenKind::Colon) {
+                                return Err(ParseError {
+                                    message: format!("Expected ':' in dict literal, got {:?}", colon.kind),
+                                    line: colon.span.start.line as usize,
+                                    column: colon.span.start.column as usize,
+                                });
+                            }
+                            self.advance(); // consume ':'
+                            let value = self.parse_pratt_expr(0)?;
+                            entries.push((key, value));
+                        }
+                        TokenKind::RightBrace => {
+                            self.advance();
+                            break;
+                        }
+                        _ => {
+                            return Err(ParseError {
+                                message: format!("Expected ',' or '}}' in dict literal, got {:?}", token.kind),
+                                line: token.span.start.line as usize,
+                                column: token.span.start.column as usize,
+                            })
+                        }
+                    }
+                }
+
+                return Ok(Expr::Dict(entries));
+            }
+        }
+
+        // It's a set
+        let mut elements = vec![first_elem];
+
+        loop {
+            let token = self.current_token()?;
+            match &token.kind {
+                TokenKind::Comma => {
+                    self.advance();
+                    // Check for trailing comma
+                    if let Ok(next) = self.current_token() {
+                        if matches!(next.kind, TokenKind::RightBrace) {
+                            self.advance();
+                            break;
+                        }
+                    }
+                    let elem = self.parse_pratt_expr(0)?;
+                    elements.push(elem);
+                }
+                TokenKind::RightBrace => {
+                    self.advance();
+                    break;
+                }
+                _ => {
+                    return Err(ParseError {
+                        message: format!("Expected ',' or '}}' in set literal, got {:?}", token.kind),
+                        line: token.span.start.line as usize,
+                        column: token.span.start.column as usize,
+                    })
+                }
+            }
+        }
+
+        Ok(Expr::Set(elements))
     }
 
     fn parse_list(&mut self) -> Result<Expr, ParseError> {
