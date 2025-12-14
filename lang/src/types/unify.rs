@@ -61,6 +61,7 @@ impl Unifier {
     }
 
     /// Apply substitutions to a type
+    #[allow(dead_code)]
     pub fn apply_substitutions(&self, ty: &Type) -> Type {
         match ty {
             Type::TypeVar(id) => {

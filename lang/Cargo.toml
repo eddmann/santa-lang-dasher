@@ -6,8 +6,8 @@ authors.workspace = true
 
 [dependencies]
 # inkwell.workspace = true  # Not needed until Phase 6 (Codegen)
-# im.workspace = true  # Not needed until Phase 5 (Runtime)
-# ordered-float.workspace = true  # Not needed until Phase 5 (Runtime)
+im.workspace = true  # Phase 5 (Runtime) - persistent data structures
+ordered-float.workspace = true  # Phase 5 (Runtime) - hashable floats
 unicode-segmentation.workspace = true  # Needed for Phase 1 (strings)
 regex.workspace = true  # Needed for Phase 14 (Built-ins)
 

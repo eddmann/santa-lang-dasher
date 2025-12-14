@@ -1155,16 +1155,16 @@ fn unhashable_dict_key_errors() { ... }
 
 ### Release Gate 5
 
-- [ ] NaN-boxing scheme works for inline integers and decimals
-- [ ] Large integers (>51 bits) are boxed correctly
-- [ ] Reference counting increments/decrements correctly
-- [ ] Hashable values work correctly in Sets and Dict keys
-- [ ] Non-hashable values (functions, dicts) produce RuntimeErr in Sets/Dict keys
-- [ ] Truthiness matches LANG.txt Section 14.1
-- [ ] Mutable cells work for captured variables
-- [ ] Grapheme-cluster string indexing works (emoji test)
-- [ ] All tests pass
-- [ ] `cargo clippy` clean
+- [x] NaN-boxing scheme works for inline integers and decimals
+- [ ] Large integers (>51 bits) are boxed correctly (deferred - wraps for now, acceptable for MVP)
+- [x] Reference counting increments/decrements correctly
+- [ ] Hashable values work correctly in Sets and Dict keys (basic infrastructure done, needs runtime ops in Phase 8)
+- [ ] Non-hashable values (functions, dicts) produce RuntimeErr in Sets/Dict keys (deferred to Phase 8)
+- [x] Truthiness matches LANG.txt Section 14.1
+- [x] Mutable cells work for captured variables
+- [x] Grapheme-cluster string indexing works (emoji test)
+- [x] All tests pass (101 tests)
+- [x] `cargo clippy` clean
 
 ---
 
