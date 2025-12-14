@@ -9,15 +9,31 @@ An LLVM-backed native AOT compiler implementation of santa-lang.
 **This is a native LLVM compiler, NOT an interpreter or bytecode VM.**
 
 ```
-Source → Lexer → Parser → Codegen → LLVM IR → Native Code
-                              ↓
-                    Runtime Library (FFI)
+Source → Lexer → Parser → Type Inference → Codegen → LLVM IR → Native Code
+                                ↓               ↓
+                         Typed AST      Runtime Library (FFI)
+                                        (for Unknown types only)
 ```
 
+- **Type Inference** analyzes AST and annotates expressions with inferred types
 - **Codegen** produces LLVM IR using the `inkwell` crate
-- **Runtime library** provides `extern "C"` FFI functions linked with compiled code
+  - **Known types** → Native LLVM instructions (fast path)
+  - **Unknown types** → Runtime library calls (dynamic fallback)
+- **Runtime library** provides `extern "C"` FFI functions for dynamic dispatch
 - **Final output** is AOT-compiled native machine code (executables)
 - **Error handling** uses return value + flag pattern for graceful error propagation
+
+### Performance Model
+
+Type inference enables **specialization** - generating optimized native code when types are known at compile time:
+
+| Operation | Unknown Types | Known Types (Int + Int) |
+|-----------|---------------|------------------------|
+| `a + b` | `call @rt_add` (type check + dispatch) | `add i64` (native CPU instruction) |
+| `a < b` | `call @rt_lt` (type check + dispatch) | `icmp slt` (native comparison) |
+| `list[i]` | `call @rt_index` | `call @rt_list_get_int` (skip type check) |
+
+**Expected speedup**: 5-20x for numeric-heavy AOC code where types can be inferred.
 
 ### Forbidden Approaches
 - ❌ Tree-walking interpreter (do NOT eval AST directly)
@@ -39,23 +55,25 @@ Source → Lexer → Parser → Codegen → LLVM IR → Native Code
 | Section                  | Description                                 | Phase              |
 | ------------------------ | ------------------------------------------- | ------------------ |
 | §2 Lexical Structure     | Tokens, keywords, literals, comments        | Phase 1            |
-| §3 Type System           | All 10 value types, hashability             | Phase 4            |
-| §4 Operators             | Arithmetic, comparison, logical, precedence | Phases 2, 5, 7     |
-| §5 Variables & Bindings  | let, mut, destructuring, shadowing          | Phases 3, 6        |
+| §3 Type System           | All 10 value types, hashability             | Phases 4, 5        |
+| §4 Operators             | Arithmetic, comparison, logical, precedence | Phases 2, 6, 8     |
+| §5 Variables & Bindings  | let, mut, destructuring, shadowing          | Phases 3, 7        |
 | §6 Expressions           | Literals, blocks, calls, infix, pipeline    | Phase 2            |
-| §7 Control Flow          | if, if-let, match, return, break            | Phases 3, 6        |
-| §8 Functions             | Lambdas, closures, partial, TCO, memoize    | Phases 2, 5, 8, 14 |
-| §9 Pattern Matching      | All pattern types, guards                   | Phases 3, 15       |
-| §10 Collections          | List, Set, Dict, Range, LazySeq             | Phases 4, 12       |
-| §11 Built-in Functions   | All 66 functions                            | Phases 9-13        |
-| §12 AOC Runner           | Sections, tests, script mode                | Phase 16           |
-| §13 External Functions   | read, puts, env                             | Phase 18           |
-| §14 Semantics            | Truthiness, precedence, scoping             | Phases 4, 7        |
-| §15 Implementation Notes | Error handling, TCO requirements            | Phases 14, 17      |
+| §7 Control Flow          | if, if-let, match, return, break            | Phases 3, 7        |
+| §8 Functions             | Lambdas, closures, partial, TCO, memoize    | Phases 2, 6, 9, 15 |
+| §9 Pattern Matching      | All pattern types, guards                   | Phases 3, 16       |
+| §10 Collections          | List, Set, Dict, Range, LazySeq             | Phases 5, 13       |
+| §11 Built-in Functions   | All 66 functions                            | Phases 10-14       |
+| §12 AOC Runner           | Sections, tests, script mode                | Phase 17           |
+| §13 External Functions   | read, puts, env                             | Phase 19           |
+| §14 Semantics            | Truthiness, precedence, scoping             | Phases 5, 8        |
+| §15 Implementation Notes | Error handling, TCO requirements            | Phases 15, 18      |
 | Appendix A               | Grammar (EBNF)                              | Phases 1-3         |
-| Appendix B               | Built-in function reference                 | Phases 9-13        |
+| Appendix B               | Built-in function reference                 | Phases 10-14       |
 | Appendix C               | Operator precedence table                   | Phase 2            |
-| Appendix D               | Example programs (integration tests)        | Phase 20           |
+| Appendix D               | Example programs (integration tests)        | Phase 21           |
+
+**Note**: Phase 4 is the new Type System & Inference phase. All subsequent phases are renumbered (+1).
 
 ---
 
@@ -95,30 +113,36 @@ Source → Lexer → Parser → Codegen → LLVM IR → Native Code
 │       │   ├── mod.rs
 │       │   ├── ast.rs
 │       │   └── tests.rs
+│       ├── types/                 # NEW: Type inference system
+│       │   ├── mod.rs
+│       │   ├── ty.rs              # Type representation
+│       │   ├── infer.rs           # Inference algorithm
+│       │   ├── builtins.rs        # Built-in function signatures
+│       │   ├── unify.rs           # Type unification
+│       │   └── tests.rs
 │       ├── codegen/
 │       │   ├── mod.rs
-│       │   ├── context.rs     # LLVM context/module management
-│       │   ├── compiler.rs    # AST to LLVM IR
-│       │   ├── types.rs       # Value representation
+│       │   ├── context.rs         # LLVM context/module management
+│       │   ├── compiler.rs        # Typed AST to LLVM IR
+│       │   ├── specialize.rs      # Type-specialized code generation
 │       │   └── tests.rs
 │       ├── runtime/
 │       │   ├── mod.rs
-│       │   ├── value.rs       # Runtime value operations
-│       │   ├── collections.rs # List, Set, Dict, Range
-│       │   ├── builtins.rs    # Built-in function implementations
-│       │   └── refcount.rs    # Reference counting
+│       │   ├── value.rs           # Runtime value operations
+│       │   ├── collections.rs     # List, Set, Dict, Range
+│       │   ├── builtins.rs        # Built-in function implementations
+│       │   └── refcount.rs        # Reference counting
 │       └── runner/
 │           ├── mod.rs
 │           └── tests.rs
-├── runtime/
-│   └── cli/
-│       ├── Cargo.toml
-│       └── src/
-│           ├── main.rs
-│           └── external.rs
+├── cli/
+│   ├── Cargo.toml
+│   └── src/
+│       ├── main.rs
+│       └── external.rs
 ├── examples/
-│   ├── *.santa              # AOC solution files
-│   └── run-tests.sh         # Test runner script
+│   ├── *.santa                # AOC solution files
+│   └── run-tests.sh           # Test runner script
 └── benchmarks/
     ├── Cargo.toml
     └── benches/
@@ -457,15 +481,500 @@ fn parse_dict_shorthand() { ... }                    // #{name, age}
 
 ---
 
-## Phase 4: LLVM Runtime Support Library
+## Phase 4: Type System & Inference
+
+**Goal**: Implement type inference to enable code specialization in later phases.
+
+**LANG.txt Reference**: §3 Type System (inferring from values), §4 Operators (type rules), §11 Built-in Functions (signatures)
+
+### 4.1 Type Representation
+
+```rust
+/// Compile-time type information for specialization
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Type {
+    // Primitive types
+    Int,
+    Decimal,
+    String,
+    Bool,
+    Nil,
+
+    // Collection types (with element/key-value types)
+    List(Box<Type>),
+    Set(Box<Type>),
+    Dict(Box<Type>, Box<Type>),  // key type, value type
+    LazySequence(Box<Type>),     // element type
+
+    // Function type
+    Function {
+        params: Vec<Type>,
+        ret: Box<Type>,
+    },
+
+    // Inference helpers
+    Unknown,           // Cannot determine - fall back to runtime dispatch
+    TypeVar(u32),      // Unification variable (for polymorphic functions)
+    Never,             // Bottom type (return, break - doesn't produce value)
+}
+
+impl Type {
+    /// Check if this type is fully known (no Unknown or TypeVar)
+    pub fn is_concrete(&self) -> bool { ... }
+
+    /// Check if specialization is worthwhile for this type
+    pub fn is_specializable(&self) -> bool {
+        matches!(self, Type::Int | Type::Decimal | Type::Bool)
+    }
+}
+```
+
+### 4.2 Typed AST
+
+The inference pass annotates the AST with types:
+
+```rust
+/// Expression with inferred type
+#[derive(Debug)]
+pub struct TypedExpr {
+    pub expr: Expr,
+    pub ty: Type,
+    pub span: Span,
+}
+
+/// Statement with type information
+#[derive(Debug)]
+pub struct TypedStmt {
+    pub stmt: Stmt,
+    pub ty: Type,  // Type of expression statements, or Nil for let/return
+    pub span: Span,
+}
+
+/// Typed program ready for codegen
+#[derive(Debug)]
+pub struct TypedProgram {
+    pub statements: Vec<TypedStmt>,
+    pub sections: Vec<TypedSection>,
+}
+```
+
+### 4.3 Built-in Function Signatures
+
+All 65 built-in functions have type signatures (excluding `evaluate`):
+
+```rust
+/// Type signature for a built-in function
+pub struct BuiltinSignature {
+    pub name: &'static str,
+    pub params: Vec<ParamType>,
+    pub ret: fn(&[Type]) -> Type,  // Return type may depend on input types
+}
+
+pub enum ParamType {
+    Concrete(Type),
+    Generic(u32),              // Type variable index
+    Collection(u32),           // Any collection with element type var
+    Predicate(u32),            // (T) -> Bool
+    Mapper(u32, u32),          // (T) -> U
+    Reducer(u32, u32),         // (T, U) -> T
+}
+
+/// Built-in signature database
+pub fn builtin_signatures() -> HashMap<&'static str, BuiltinSignature> {
+    hashmap! {
+        // Type conversion - monomorphic
+        "int" => sig!((Unknown) -> Int),
+        "ints" => sig!((String) -> List<Int>),
+
+        // Collection access - polymorphic
+        "size" => sig!(<T>(Collection<T>) -> Int),
+        "first" => sig!(<T>(Collection<T>) -> T),
+        "rest" => sig!(<T>(Collection<T>) -> Collection<T>),
+        "get" => sig!(<T>(Int, Collection<T>) -> T),
+
+        // Transformations - higher-order polymorphic
+        "map" => sig!(<T, U>((T) -> U, Collection<T>) -> Collection<U>),
+        "filter" => sig!(<T>((T) -> Bool, Collection<T>) -> Collection<T>),
+        "fold" => sig!(<T, U>(T, (T, U) -> T, Collection<U>) -> T),
+        "reduce" => sig!(<T>((T, T) -> T, Collection<T>) -> T),
+
+        // Numeric - monomorphic
+        "abs" => sig!((Numeric) -> Numeric),  // Preserves Int/Decimal
+        "sum" => sig!(<T: Numeric>(Collection<T>) -> T),
+
+        // String
+        "lines" => sig!((String) -> List<String>),
+        "split" => sig!((String, String) -> List<String>),
+        "md5" => sig!((String) -> String),
+
+        // ... all 65 functions
+    }
+}
+```
+
+### 4.4 Type Inference Algorithm
+
+Forward-propagating inference with local unification:
+
+```rust
+pub struct TypeInference {
+    /// Type environment: variable name -> type
+    env: HashMap<String, Type>,
+
+    /// Current type variable counter
+    next_type_var: u32,
+
+    /// Substitutions from unification
+    substitutions: HashMap<u32, Type>,
+}
+
+impl TypeInference {
+    pub fn infer_program(&mut self, program: &Program) -> Result<TypedProgram, TypeError> {
+        // 1. Collect top-level function definitions (for mutual recursion)
+        // 2. Infer types for each statement
+        // 3. Infer types for each section
+    }
+
+    pub fn infer_expr(&mut self, expr: &Expr) -> Result<TypedExpr, TypeError> {
+        let (typed_expr, ty) = match expr {
+            // Literals have known types
+            Expr::Integer(_) => (expr.clone(), Type::Int),
+            Expr::Decimal(_) => (expr.clone(), Type::Decimal),
+            Expr::String(_) => (expr.clone(), Type::String),
+            Expr::Boolean(_) => (expr.clone(), Type::Bool),
+            Expr::Nil => (expr.clone(), Type::Nil),
+
+            // Variables look up the environment
+            Expr::Identifier(name) => {
+                let ty = self.env.get(name).cloned().unwrap_or(Type::Unknown);
+                (expr.clone(), ty)
+            }
+
+            // Operators apply type rules
+            Expr::Infix { left, op, right } => {
+                let left_typed = self.infer_expr(left)?;
+                let right_typed = self.infer_expr(right)?;
+                let result_ty = self.infer_binary_op(op, &left_typed.ty, &right_typed.ty);
+                // ...
+            }
+
+            // Function calls use signature database
+            Expr::Call { function, args } => {
+                self.infer_call(function, args)?
+            }
+
+            // Collections infer element types
+            Expr::List(elements) => {
+                let elem_ty = self.unify_all(elements)?;
+                (expr.clone(), Type::List(Box::new(elem_ty)))
+            }
+
+            // If expressions unify branch types
+            Expr::If { condition, then_branch, else_branch } => {
+                let then_ty = self.infer_expr(then_branch)?.ty;
+                let else_ty = else_branch
+                    .map(|e| self.infer_expr(e))
+                    .transpose()?
+                    .map(|t| t.ty)
+                    .unwrap_or(Type::Nil);
+                let result_ty = self.unify(&then_ty, &else_ty)?;
+                // ...
+            }
+
+            // Unknown falls back to runtime
+            _ => (expr.clone(), Type::Unknown),
+        };
+
+        Ok(TypedExpr { expr: typed_expr, ty, span: expr.span })
+    }
+}
+```
+
+### 4.5 Binary Operation Type Rules
+
+```rust
+impl TypeInference {
+    fn infer_binary_op(&self, op: &InfixOp, left: &Type, right: &Type) -> Type {
+        match (op, left, right) {
+            // Arithmetic: same-type operands
+            (Add | Sub | Mul, Type::Int, Type::Int) => Type::Int,
+            (Add | Sub | Mul, Type::Decimal, Type::Decimal) => Type::Decimal,
+            (Div, Type::Int, Type::Int) => Type::Int,  // Integer division
+            (Div, Type::Decimal, Type::Decimal) => Type::Decimal,
+            (Mod, Type::Int, Type::Int) => Type::Int,
+
+            // Mixed numeric: per LANG.txt §4.1, left operand determines type
+            (Add | Sub | Mul | Div, Type::Int, Type::Decimal) => Type::Int,
+            (Add | Sub | Mul | Div, Type::Decimal, Type::Int) => Type::Decimal,
+
+            // String concatenation
+            (Add, Type::String, _) => Type::String,
+
+            // Comparison: returns Bool
+            (Eq | NotEq | Lt | Le | Gt | Ge, _, _) => Type::Bool,
+
+            // Logical: requires Bool, returns Bool
+            (And | Or, Type::Bool, Type::Bool) => Type::Bool,
+
+            // Collection operations
+            (Add, Type::List(a), Type::List(b)) if a == b => Type::List(a.clone()),
+            (Add, Type::Set(a), Type::Set(b)) if a == b => Type::Set(a.clone()),
+            (Add, Type::Dict(k1, v1), Type::Dict(k2, v2)) if k1 == k2 && v1 == v2 =>
+                Type::Dict(k1.clone(), v1.clone()),
+
+            // Range operators
+            (Range | RangeInclusive, Type::Int, Type::Int) => Type::LazySequence(Box::new(Type::Int)),
+
+            // Unknown operands: fall back to runtime
+            _ => Type::Unknown,
+        }
+    }
+}
+```
+
+### 4.6 Unification
+
+Simple unification for matching types:
+
+```rust
+impl TypeInference {
+    /// Attempt to unify two types, returning the more specific one
+    fn unify(&mut self, a: &Type, b: &Type) -> Result<Type, TypeError> {
+        match (a, b) {
+            // Same concrete types unify
+            (Type::Int, Type::Int) => Ok(Type::Int),
+            (Type::String, Type::String) => Ok(Type::String),
+            // ...
+
+            // TypeVar unifies with anything, records substitution
+            (Type::TypeVar(id), other) | (other, Type::TypeVar(id)) => {
+                self.substitutions.insert(*id, other.clone());
+                Ok(other.clone())
+            }
+
+            // Unknown unifies with anything, result is Unknown
+            (Type::Unknown, _) | (_, Type::Unknown) => Ok(Type::Unknown),
+
+            // Collection types unify element types
+            (Type::List(a), Type::List(b)) => {
+                let elem = self.unify(a, b)?;
+                Ok(Type::List(Box::new(elem)))
+            }
+
+            // Incompatible types
+            _ => Err(TypeError::Mismatch { expected: a.clone(), found: b.clone() }),
+        }
+    }
+
+    /// Unify a list of expressions, returning common element type
+    fn unify_all(&mut self, exprs: &[Expr]) -> Result<Type, TypeError> {
+        if exprs.is_empty() {
+            return Ok(Type::Unknown);  // Empty collection: unknown element type
+        }
+
+        let first = self.infer_expr(&exprs[0])?.ty;
+        exprs[1..].iter().try_fold(first, |acc, e| {
+            let ty = self.infer_expr(e)?.ty;
+            self.unify(&acc, &ty)
+        })
+    }
+}
+```
+
+### 4.7 Closure Type Inference
+
+Closures infer parameter types from usage context:
+
+```rust
+impl TypeInference {
+    fn infer_closure(&mut self, params: &[Param], body: &Expr, expected: Option<&Type>)
+        -> Result<(Type, TypedExpr), TypeError>
+    {
+        // If we have an expected type (e.g., from map's signature), use it
+        let param_types: Vec<Type> = if let Some(Type::Function { params: expected_params, .. }) = expected {
+            expected_params.clone()
+        } else {
+            // Otherwise, create fresh type variables
+            params.iter().map(|_| {
+                let var = self.fresh_type_var();
+                Type::TypeVar(var)
+            }).collect()
+        };
+
+        // Bind parameters in environment
+        let old_env = self.env.clone();
+        for (param, ty) in params.iter().zip(&param_types) {
+            self.env.insert(param.name.clone(), ty.clone());
+        }
+
+        // Infer body type
+        let body_typed = self.infer_expr(body)?;
+
+        // Restore environment
+        self.env = old_env;
+
+        // Apply substitutions to get final parameter types
+        let final_params: Vec<Type> = param_types.iter()
+            .map(|t| self.apply_substitutions(t))
+            .collect();
+
+        let fn_type = Type::Function {
+            params: final_params,
+            ret: Box::new(body_typed.ty.clone()),
+        };
+
+        Ok((fn_type, body_typed))
+    }
+}
+```
+
+### 4.8 Inference for Common AOC Patterns
+
+Examples of what the inference system handles:
+
+```santa
+// EXAMPLE 1: Numeric pipeline - fully inferred
+let input = "1\n2\n3";           // String
+let nums = lines(input)          // List<String>
+    |> map(int, _);              // List<Int>
+let total = fold(0, +, nums);    // Int
+
+// Type flow:
+//   lines: (String) -> List<String>
+//   map(int, _): int: (String) -> Int, so map produces List<Int>
+//   fold(0, +, _): initial is Int, so result is Int
+
+// EXAMPLE 2: Closure type propagation
+let doubled = map(|x| x * 2, [1, 2, 3]);
+// [1, 2, 3] is List<Int>
+// map's signature: ((T) -> U, List<T>) -> List<U>
+// So |x| has type (Int) -> ???
+// x * 2: Int * Int = Int
+// Therefore doubled: List<Int>
+
+// EXAMPLE 3: Falls back to Unknown
+let data = read("input.txt");    // String (from external)
+let parsed = parse(data);        // Unknown (user-defined function)
+let result = parsed + 1;         // Unknown (can't specialize)
+```
+
+### 4.9 Type Errors vs Runtime Fallback
+
+The inference system distinguishes between:
+
+1. **Type errors** (compile-time): Known-incompatible types
+   ```santa
+   1 + "hello"  // Error: Int + String not allowed (String + X is ok, not X + String)
+   ```
+
+2. **Unknown types** (runtime fallback): Can't determine, defer to runtime
+   ```santa
+   let x = get_value();  // Unknown
+   x + 1                 // Generates: call @rt_add (runtime will check)
+   ```
+
+```rust
+pub enum TypeError {
+    Mismatch { expected: Type, found: Type, span: Span },
+    ArityMismatch { expected: usize, found: usize, span: Span },
+    NotCallable { ty: Type, span: Span },
+    // Note: Unknown is NOT an error - it's a valid inference result
+}
+```
+
+### 4.10 Tests
+
+```rust
+#[test]
+fn infer_integer_literal() {
+    assert_infers("42", Type::Int);
+}
+
+#[test]
+fn infer_binary_arithmetic() {
+    assert_infers("1 + 2", Type::Int);
+    assert_infers("1.0 + 2.0", Type::Decimal);
+    assert_infers("1 + 2.0", Type::Int);  // Left operand wins
+}
+
+#[test]
+fn infer_list_literal() {
+    assert_infers("[1, 2, 3]", Type::List(Box::new(Type::Int)));
+    assert_infers("[]", Type::List(Box::new(Type::Unknown)));
+}
+
+#[test]
+fn infer_builtin_call() {
+    assert_infers("ints(\"1 2 3\")", Type::List(Box::new(Type::Int)));
+    assert_infers("size([1, 2, 3])", Type::Int);
+}
+
+#[test]
+fn infer_map_with_closure() {
+    assert_infers("map(|x| x * 2, [1, 2, 3])", Type::List(Box::new(Type::Int)));
+}
+
+#[test]
+fn infer_fold() {
+    assert_infers("fold(0, +, [1, 2, 3])", Type::Int);
+}
+
+#[test]
+fn infer_pipeline() {
+    let code = r#"
+        "1\n2\n3"
+        |> lines
+        |> map(int, _)
+        |> fold(0, +, _)
+    "#;
+    assert_infers(code, Type::Int);
+}
+
+#[test]
+fn infer_unknown_fallback() {
+    // User-defined function - can't know return type
+    assert_infers("unknown_fn(42)", Type::Unknown);
+}
+
+#[test]
+fn infer_if_unifies_branches() {
+    assert_infers("if true { 1 } else { 2 }", Type::Int);
+    // Mixed branches fall back to Unknown
+    assert_infers("if cond { 1 } else { \"x\" }", Type::Unknown);
+}
+
+#[test]
+fn type_error_incompatible() {
+    // Int + String is an error (String + Int would coerce)
+    assert_type_error("1 + \"hello\"", TypeError::Mismatch { .. });
+}
+```
+
+### Release Gate 4
+
+- [ ] Type enum represents all santa-lang types
+- [ ] Literals infer correct concrete types
+- [ ] Binary operators follow LANG.txt §4.1 type rules
+- [ ] Built-in function signatures are defined for all 65 functions
+- [ ] Collection literals infer element types
+- [ ] Closures infer parameter types from context
+- [ ] Pipeline/composition propagates types correctly
+- [ ] Unknown falls back gracefully (no false errors)
+- [ ] Type errors caught for known-incompatible operations
+- [ ] All tests pass
+- [ ] `cargo clippy` clean
+
+---
+
+## Phase 5: Runtime Support Library
 
 **Goal**: Build the FFI runtime library that LLVM-compiled code calls into.
 
-**This is NOT an interpreter.** These are `extern "C"` functions that get linked with the compiled output.
+**This is NOT an interpreter.** These are `extern "C"` functions that get linked with the compiled output. With type inference, many operations bypass the runtime entirely - these functions are only called for `Unknown` typed expressions.
 
 **LANG.txt Reference**: §3 Type System (all types), §3.11 Hashability, §14.1 Truthy/Falsy Values
 
-### 4.1 Value Representation (NaN-boxing)
+### 5.1 Value Representation (NaN-boxing)
 
 NaN-boxing uses the unused bits in IEEE-754 NaN representations to encode values inline.
 
@@ -501,7 +1010,7 @@ impl Value {
 
 **Note**: Integers larger than 51 bits must be boxed as heap objects. This is an implementation detail - the language semantics remain 64-bit integers.
 
-### 4.2 Heap Objects
+### 5.2 Heap Objects
 
 ```rust
 #[repr(C)]
@@ -531,7 +1040,7 @@ pub enum TypeTag {
 }
 ```
 
-### 4.3 Reference Counting
+### 5.3 Reference Counting
 
 ```rust
 // Called from generated code
@@ -553,7 +1062,7 @@ pub extern "C" fn rt_decref(value: Value) {
 }
 ```
 
-### 4.4 Collection Types (im-rs Persistent)
+### 5.4 Collection Types (im-rs Persistent)
 
 ```rust
 use im::{Vector, HashSet, HashMap};
@@ -574,7 +1083,7 @@ pub struct DictObject {
 }
 ```
 
-### 4.5 Mutable Captures (Heap-Boxed Cells)
+### 5.5 Mutable Captures (Heap-Boxed Cells)
 
 Mutable variables captured by closures use heap-boxed cells to allow shared mutation:
 
@@ -598,7 +1107,7 @@ pub extern "C" fn rt_cell_set(cell: Value, value: Value) { ... }
 
 This enables the counter pattern from LANG.txt §8.3 where inner closures can mutate variables from outer scopes.
 
-### 4.6 String Handling (Grapheme Clusters)
+### 5.6 String Handling (Grapheme Clusters)
 
 Strings use grapheme-cluster indexing via `unicode-segmentation` crate:
 
@@ -617,7 +1126,7 @@ pub struct StringObject {
 
 **Note**: `"👨‍👩‍👧‍👦"[0]` returns the whole family emoji as a single grapheme cluster.
 
-### 4.8 Tests
+### 5.7 Tests
 
 ```rust
 #[test]
@@ -644,7 +1153,7 @@ fn unhashable_in_set_errors() { ... }  // {|x| x} and {#{a:1}} cause RuntimeErr
 fn unhashable_dict_key_errors() { ... }
 ```
 
-### Release Gate 4
+### Release Gate 5
 
 - [ ] NaN-boxing scheme works for inline integers and decimals
 - [ ] Large integers (>51 bits) are boxed correctly
@@ -659,13 +1168,13 @@ fn unhashable_dict_key_errors() { ... }
 
 ---
 
-## Phase 5: LLVM Codegen - Expressions
+## Phase 6: LLVM Codegen - Expressions
 
-**Goal**: Generate LLVM IR for expressions.
+**Goal**: Generate LLVM IR for expressions, using type information to specialize code paths.
 
 **LANG.txt Reference**: §4 Operators, §4.7 Pipeline, §4.8 Composition, §8.4 Partial Application
 
-### 5.1 LLVM Context Setup
+### 6.1 LLVM Context Setup
 
 ```rust
 use inkwell::context::Context;
@@ -688,18 +1197,23 @@ pub struct CodegenContext<'ctx> {
 }
 ```
 
-### 5.2 Expression Compilation
+### 6.2 Type-Specialized Expression Compilation
+
+The codegen accepts `TypedExpr` from the inference phase and uses type information to generate optimized code:
 
 ```rust
 impl<'ctx> CodegenContext<'ctx> {
-    pub fn compile_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, CompileError> {
-        match expr {
+    /// Compile a typed expression, using specialization when types are known
+    pub fn compile_expr(&mut self, expr: &TypedExpr) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        match &expr.expr {
             Expr::Integer(n) => self.compile_integer(*n),
             Expr::Decimal(f) => self.compile_decimal(*f),
             Expr::String(s) => self.compile_string(s),
             Expr::Boolean(b) => self.compile_boolean(*b),
             Expr::Nil => self.compile_nil(),
-            Expr::Infix { left, op, right } => self.compile_binary(left, op, right),
+            Expr::Infix { left, op, right } => {
+                self.compile_binary_typed(left, op, right, &expr.ty)
+            }
             Expr::Prefix { op, right } => self.compile_unary(op, right),
             Expr::Call { function, args } => self.compile_call(function, args),
             // ... etc
@@ -707,27 +1221,99 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     fn compile_integer(&mut self, n: i64) -> BasicValueEnum<'ctx> {
-        // Create tagged integer value
+        // Create tagged integer value (NaN-boxed)
         let tagged = (n << 3) | 0b001;
         self.context.i64_type().const_int(tagged as u64, false).into()
     }
 
-    fn compile_binary(&mut self, left: &Expr, op: &InfixOp, right: &Expr)
-        -> Result<BasicValueEnum<'ctx>, CompileError>
-    {
+    /// Type-specialized binary operation compilation
+    fn compile_binary_typed(
+        &mut self,
+        left: &TypedExpr,
+        op: &InfixOp,
+        right: &TypedExpr,
+        result_ty: &Type,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         let left_val = self.compile_expr(left)?;
         let right_val = self.compile_expr(right)?;
 
-        // Call runtime helper for type-aware operation
-        match op {
-            InfixOp::Add => self.builder.build_call(self.rt_add, &[left_val, right_val], "add"),
-            // ... etc
+        // SPECIALIZATION: Use native LLVM ops when types are known
+        match (&left.ty, op, &right.ty) {
+            // Int + Int → native add (FAST PATH)
+            (Type::Int, InfixOp::Add, Type::Int) => {
+                let l = self.unbox_int(left_val);
+                let r = self.unbox_int(right_val);
+                let result = self.builder.build_int_add(l, r, "add");
+                Ok(self.box_int(result))
+            }
+
+            // Int * Int → native mul (FAST PATH)
+            (Type::Int, InfixOp::Mul, Type::Int) => {
+                let l = self.unbox_int(left_val);
+                let r = self.unbox_int(right_val);
+                let result = self.builder.build_int_mul(l, r, "mul");
+                Ok(self.box_int(result))
+            }
+
+            // Int < Int → native comparison (FAST PATH)
+            (Type::Int, InfixOp::Lt, Type::Int) => {
+                let l = self.unbox_int(left_val);
+                let r = self.unbox_int(right_val);
+                let cmp = self.builder.build_int_compare(IntPredicate::SLT, l, r, "lt");
+                Ok(self.box_bool(cmp))
+            }
+
+            // Decimal + Decimal → native fadd (FAST PATH)
+            (Type::Decimal, InfixOp::Add, Type::Decimal) => {
+                let l = self.unbox_float(left_val);
+                let r = self.unbox_float(right_val);
+                let result = self.builder.build_float_add(l, r, "fadd");
+                Ok(self.box_float(result))
+            }
+
+            // Unknown types → runtime dispatch (SLOW PATH)
+            _ => {
+                self.builder.build_call(self.rt_add, &[left_val, right_val], "add")
+            }
         }
     }
 }
 ```
 
-### 5.3 Runtime Helpers for Operations
+### 6.3 Unboxing/Boxing Helpers
+
+```rust
+impl<'ctx> CodegenContext<'ctx> {
+    /// Extract raw i64 from NaN-boxed integer (assumes type is known to be Int)
+    fn unbox_int(&self, value: BasicValueEnum<'ctx>) -> IntValue<'ctx> {
+        // Shift right to remove tag bits
+        let val = value.into_int_value();
+        self.builder.build_right_shift(val, self.const_i64(3), true, "unbox_int")
+    }
+
+    /// Box raw i64 into NaN-boxed integer
+    fn box_int(&self, value: IntValue<'ctx>) -> BasicValueEnum<'ctx> {
+        // Shift left and add tag
+        let shifted = self.builder.build_left_shift(value, self.const_i64(3), "shift");
+        let tagged = self.builder.build_or(shifted, self.const_i64(0b001), "tag");
+        tagged.into()
+    }
+
+    /// Extract f64 from NaN-boxed decimal
+    fn unbox_float(&self, value: BasicValueEnum<'ctx>) -> FloatValue<'ctx> {
+        // Decimals are stored as actual f64 (non-NaN range)
+        self.builder.build_bitcast(value, self.context.f64_type(), "unbox_float")
+            .into_float_value()
+    }
+
+    /// Box f64 into NaN-boxed decimal
+    fn box_float(&self, value: FloatValue<'ctx>) -> BasicValueEnum<'ctx> {
+        self.builder.build_bitcast(value, self.context.i64_type(), "box_float")
+    }
+}
+```
+
+### 6.4 Runtime Helpers for Unknown Types
 
 ```rust
 // In runtime library (linked with generated code)
@@ -749,7 +1335,7 @@ pub extern "C" fn rt_add(left: Value, right: Value) -> Value {
 }
 ```
 
-### 5.4 Tests
+### 6.5 Tests
 
 ```rust
 #[test]
@@ -764,11 +1350,17 @@ fn codegen_function() { ... }
 fn codegen_partial_application() { ... }
 #[test]
 fn codegen_pipeline() { ... }
+#[test]
+fn codegen_specialized_int_add() { ... }  // Verify native add used
+#[test]
+fn codegen_fallback_unknown() { ... }     // Verify runtime called for Unknown
 ```
 
-### Release Gate 5
+### Release Gate 6
 
 - [ ] All expression types compile to correct LLVM IR
+- [ ] **Type-specialized paths** generate native LLVM ops (Int+Int → add)
+- [ ] **Unknown type paths** correctly call runtime functions
 - [ ] Partial application generates correct closure
 - [ ] Pipeline operator compiles correctly
 - [ ] Generated code links with runtime library
@@ -777,13 +1369,13 @@ fn codegen_pipeline() { ... }
 
 ---
 
-## Phase 6: LLVM Codegen - Statements & Control Flow
+## Phase 7: LLVM Codegen - Statements & Control Flow
 
 **Goal**: Complete code generation with statements and control flow.
 
 **LANG.txt Reference**: §5 Variables & Bindings, §7 Control Flow, §14.6 Scoping Rules
 
-### 6.1 Variable Management
+### 7.1 Variable Management
 
 ```rust
 pub struct LocalVar<'ctx> {
@@ -799,7 +1391,7 @@ impl<'ctx> CodegenContext<'ctx> {
 }
 ```
 
-### 6.2 Control Flow Compilation
+### 7.2 Control Flow Compilation
 
 ```rust
 fn compile_if(&mut self, cond: &Expr, then_br: &Expr, else_br: Option<&Expr>)
@@ -836,7 +1428,7 @@ fn compile_if(&mut self, cond: &Expr, then_br: &Expr, else_br: Option<&Expr>)
 }
 ```
 
-### 6.3 Protected Built-in Names
+### 7.3 Protected Built-in Names
 
 Per LANG.txt §14.6, built-in function names cannot be shadowed:
 
@@ -865,7 +1457,7 @@ fn check_protected_name(name: &str, source: Span) -> Result<(), CompileError> {
 }
 ```
 
-### 6.4 Tests
+### 7.4 Tests
 
 ```rust
 #[test]
@@ -884,7 +1476,7 @@ fn codegen_shadowing() { ... }
 fn codegen_protected_name_error() { ... }  // let sum = ... → CompileError
 ```
 
-### Release Gate 6
+### Release Gate 7
 
 - [ ] Variable scoping works correctly
 - [ ] Shadowing behaves per LANG.txt
@@ -897,13 +1489,13 @@ fn codegen_protected_name_error() { ... }  // let sum = ... → CompileError
 
 ---
 
-## Phase 7: Runtime - Core Operations
+## Phase 8: Runtime - Core Operations
 
 **Goal**: Implement runtime operations called from generated code.
 
 **LANG.txt Reference**: §4.1 Type Coercion Rules, §4 All Operators, §14.1 Truthy/Falsy
 
-### 7.1 Arithmetic Operations
+### 8.1 Arithmetic Operations
 
 ```rust
 #[no_mangle]
@@ -922,7 +1514,7 @@ pub extern "C" fn rt_div(left: Value, right: Value) -> Value { ... }
 pub extern "C" fn rt_mod(left: Value, right: Value) -> Value { ... }
 ```
 
-### 7.2 Comparison Operations
+### 8.2 Comparison Operations
 
 ```rust
 #[no_mangle]
@@ -935,7 +1527,7 @@ pub extern "C" fn rt_lt(left: Value, right: Value) -> Value { ... }
 pub extern "C" fn rt_le(left: Value, right: Value) -> Value { ... }
 ```
 
-### 7.3 Division and Modulo Semantics (IMPORTANT)
+### 8.3 Division and Modulo Semantics (IMPORTANT)
 
 Santa uses **Python-style floored division**, NOT Rust's truncated division:
 
@@ -959,19 +1551,19 @@ pub fn floored_mod(a: i64, b: i64) -> i64 {
 }
 ```
 
-### 7.4 Type Coercion Rules
+### 8.4 Type Coercion Rules
 
 Per LANG.txt §4.1:
 - Integer + Decimal: left operand determines result type
 - String + any: right operand coerced to string (when left is String)
 - Integer + String: ERROR (not supported)
 
-### 7.5 Comparison Restrictions
+### 8.5 Comparison Restrictions
 
 Only Integer, Decimal, and String support comparison operators (`<`, `>`, `<=`, `>=`).
 Comparing other types (List, Set, Dict, Function, LazySequence) produces RuntimeErr.
 
-### 7.7 Tests
+### 8.6 Tests
 
 ```rust
 #[test]
@@ -992,7 +1584,7 @@ fn runtime_collection_operations() { ... }
 fn runtime_type_coercion() { ... }
 ```
 
-### Release Gate 7
+### Release Gate 8
 
 - [ ] All arithmetic operations work correctly
 - [ ] **Floored division semantics** match Python (-7/2=-4)
@@ -1005,13 +1597,13 @@ fn runtime_type_coercion() { ... }
 
 ---
 
-## Phase 8: Closures & Function Calls
+## Phase 9: Closures & Function Calls
 
 **Goal**: Implement closures with captured variables.
 
 **LANG.txt Reference**: §8.3 Closures (including mutable capture example)
 
-### 8.1 Closure Representation
+### 9.1 Closure Representation
 
 ```rust
 #[repr(C)]
@@ -1031,7 +1623,7 @@ impl ClosureObject {
 }
 ```
 
-### 8.2 Closure Compilation
+### 9.2 Closure Compilation
 
 ```rust
 impl<'ctx> CodegenContext<'ctx> {
@@ -1053,7 +1645,7 @@ impl<'ctx> CodegenContext<'ctx> {
 }
 ```
 
-### 8.3 Calling Convention
+### 9.3 Calling Convention
 
 All functions receive:
 1. Environment pointer (for closures, NULL for top-level)
@@ -1074,7 +1666,7 @@ pub extern "C" fn rt_call(callee: Value, argc: u32, argv: *const Value) -> Value
 }
 ```
 
-### 8.4 Tests
+### 9.4 Tests
 
 ```rust
 #[test]
@@ -1087,7 +1679,7 @@ fn closure_mutable_capture() { ... }
 fn nested_closures() { ... }
 ```
 
-### Release Gate 8
+### Release Gate 9
 
 - [ ] Simple closures capture variables correctly
 - [ ] Nested closures work
@@ -1098,7 +1690,7 @@ fn nested_closures() { ... }
 
 ---
 
-## Phase 9: Built-in Functions - Core
+## Phase 10: Built-in Functions - Core
 
 **Goal**: Implement core built-in functions.
 
@@ -1139,7 +1731,7 @@ fn builtin_collection_access() { ... }
 fn builtin_collection_modification() { ... }
 ```
 
-### Release Gate 9
+### Release Gate 10
 
 - [ ] All type conversion functions work per spec
 - [ ] Collection access handles all types
@@ -1150,7 +1742,7 @@ fn builtin_collection_modification() { ... }
 
 ---
 
-## Phase 10: Built-in Functions - Transformations
+## Phase 11: Built-in Functions - Transformations
 
 **Goal**: Implement higher-order transformation functions.
 
@@ -1207,7 +1799,7 @@ fn builtin_reduce_empty_error() { ... }        // reduce(+, []) → RuntimeErr
 fn builtin_fold_empty_returns_initial() { ... }
 ```
 
-### Release Gate 10
+### Release Gate 11
 
 - [ ] All transformation functions work on all collection types
 - [ ] Dict callbacks handle both (value) and (value, key) arities
@@ -1218,7 +1810,7 @@ fn builtin_fold_empty_returns_initial() { ... }
 
 ---
 
-## Phase 11: Built-in Functions - Search & Aggregation
+## Phase 12: Built-in Functions - Search & Aggregation
 
 **Goal**: Complete search and aggregation functions.
 
@@ -1231,7 +1823,7 @@ fn builtin_fold_empty_returns_initial() { ... }
 - `union`, `intersection`
 - `includes?`, `excludes?`, `any?`, `all?`
 
-### Release Gate 11
+### Release Gate 12
 
 - [ ] All search functions work correctly
 - [ ] max/min handle varargs and single collection
@@ -1242,7 +1834,7 @@ fn builtin_fold_empty_returns_initial() { ... }
 
 ---
 
-## Phase 12: Lazy Sequences
+## Phase 13: Lazy Sequences
 
 **Goal**: Implement infinite lazy sequences.
 
@@ -1274,7 +1866,7 @@ pub enum LazySeq {
 
 Handle `break` in reduce/fold/each on infinite sequences.
 
-### Release Gate 12
+### Release Gate 13
 
 - [ ] Unbounded ranges work with take/find
 - [ ] iterate generates correct sequences
@@ -1286,7 +1878,7 @@ Handle `break` in reduce/fold/each on infinite sequences.
 
 ---
 
-## Phase 13: Built-in Functions - Remaining
+## Phase 14: Built-in Functions - Remaining
 
 **Goal**: Complete all remaining built-in functions.
 
@@ -1312,7 +1904,7 @@ Handle `break` in reduce/fold/each on infinite sequences.
 - `id(value)`, `type(value)`, `memoize(fn)`
 - `or(a, b)`, `and(a, b)`, `evaluate(string)`
 
-### Release Gate 13
+### Release Gate 14
 
 - [ ] All string functions work correctly
 - [ ] Grapheme-cluster indexing for Unicode strings
@@ -1324,7 +1916,7 @@ Handle `break` in reduce/fold/each on infinite sequences.
 
 ---
 
-## Phase 14: Tail-Call Optimization
+## Phase 15: Tail-Call Optimization
 
 **Goal**: Implement tail-call optimization for self-recursion.
 
@@ -1366,7 +1958,7 @@ fn tco_deep_recursion() { ... }
 fn tco_not_applied_to_non_tail() { ... }
 ```
 
-### Release Gate 14
+### Release Gate 15
 
 - [ ] TCO applies to self-recursive tail calls
 - [ ] Deep recursion (100k+) works without stack overflow
@@ -1376,7 +1968,7 @@ fn tco_not_applied_to_non_tail() { ... }
 
 ---
 
-## Phase 15: Pattern Matching
+## Phase 16: Pattern Matching
 
 **Goal**: Full pattern matching support.
 
@@ -1393,7 +1985,7 @@ fn tco_not_applied_to_non_tail() { ... }
 
 Generate decision tree for efficient matching.
 
-### Release Gate 15
+### Release Gate 16
 
 - [ ] All pattern types match correctly
 - [ ] Rest patterns work in any position
@@ -1405,7 +1997,7 @@ Generate decision tree for efficient matching.
 
 ---
 
-## Phase 16: AOC Runner
+## Phase 17: AOC Runner
 
 **Goal**: Implement the AOC solution runner.
 
@@ -1452,7 +2044,7 @@ fn runner_script_mode() { ... }
 fn runner_duplicate_section_error() { ... }
 ```
 
-### Release Gate 16
+### Release Gate 17
 
 - [ ] Solutions execute with input binding
 - [ ] Tests run against expected values
@@ -1466,7 +2058,7 @@ fn runner_duplicate_section_error() { ... }
 
 ---
 
-## Phase 17: Error Handling & Reporting
+## Phase 18: Error Handling & Reporting
 
 **Goal**: Comprehensive error handling with source locations.
 
@@ -1483,7 +2075,7 @@ pub enum SantaError {
 }
 ```
 
-### Release Gate 17
+### Release Gate 18
 
 - [ ] All error types have accurate source locations
 - [ ] Stack traces show call chain
@@ -1493,7 +2085,7 @@ pub enum SantaError {
 
 ---
 
-## Phase 18: CLI Runtime
+## Phase 19: CLI Runtime
 
 **Goal**: Build the command-line interface.
 
@@ -1563,7 +2155,7 @@ fn read_aoc_cached() { ... }
 fn read_missing_session_error() { ... }
 ```
 
-### Release Gate 18
+### Release Gate 19
 
 - [ ] All CLI commands work
 - [ ] Output format matches other implementations
@@ -1576,7 +2168,7 @@ fn read_missing_session_error() { ... }
 
 ---
 
-## Phase 19: Benchmarks & Optimization
+## Phase 20: Benchmarks & Optimization
 
 **Goal**: Performance validation and optimization.
 
@@ -1594,7 +2186,7 @@ Enable standard optimization passes:
 - Execution time vs Blitzen/Comet
 - Memory usage
 
-### Release Gate 19
+### Release Gate 20
 
 - [ ] Performance meets or exceeds bytecode VM
 - [ ] No performance regressions in CI
@@ -1603,7 +2195,7 @@ Enable standard optimization passes:
 
 ---
 
-## Phase 20: Integration & Polish
+## Phase 21: Integration & Polish
 
 **Goal**: Final integration and verification.
 
@@ -1643,27 +2235,46 @@ Run all .santa files from examples directory using run-tests.sh.
 
 ## Summary
 
-| Phase | Component            | Key Deliverable             |
-| ----- | -------------------- | --------------------------- |
-| 1     | Lexer                | Token stream from source    |
-| 2     | Parser Expressions   | Expression AST              |
-| 3     | Parser Complete      | Full AST with sections      |
-| 4     | LLVM Runtime Library | FFI support for compiled code |
-| 5     | LLVM Codegen Exprs   | Expression IR generation    |
-| 6     | LLVM Codegen Stmts   | Full code generation        |
-| 7     | Runtime Operations   | Arithmetic/comparison ops   |
-| 8     | Closures             | Captured variables          |
-| 9     | Builtins Core        | Type conversion & access    |
-| 10    | Builtins Transform   | map/filter/reduce           |
-| 11    | Builtins Search      | find/count/sort             |
-| 12    | Lazy Sequences       | Infinite sequences          |
-| 13    | Builtins Complete    | All remaining               |
-| 14    | TCO                  | Tail-call optimization      |
-| 15    | Pattern Matching     | Full pattern support        |
-| 16    | AOC Runner           | Section execution           |
-| 17    | Error Handling       | Rich error reporting        |
-| 18    | CLI                  | Command-line interface      |
-| 19    | Benchmarks           | Performance validation      |
-| 20    | Integration          | Final polish & verification |
+| Phase | Component            | Key Deliverable                           |
+| ----- | -------------------- | ----------------------------------------- |
+| 1     | Lexer                | Token stream from source                  |
+| 2     | Parser Expressions   | Expression AST                            |
+| 3     | Parser Complete      | Full AST with sections                    |
+| 4     | **Type Inference**   | **Typed AST for specialization (NEW)**    |
+| 5     | Runtime Library      | FFI support for compiled code             |
+| 6     | Codegen Expressions  | Type-specialized expression IR            |
+| 7     | Codegen Statements   | Full code generation                      |
+| 8     | Runtime Operations   | Arithmetic/comparison ops                 |
+| 9     | Closures             | Captured variables                        |
+| 10    | Builtins Core        | Type conversion & access                  |
+| 11    | Builtins Transform   | map/filter/reduce                         |
+| 12    | Builtins Search      | find/count/sort                           |
+| 13    | Lazy Sequences       | Infinite sequences                        |
+| 14    | Builtins Complete    | All remaining                             |
+| 15    | TCO                  | Tail-call optimization                    |
+| 16    | Pattern Matching     | Full pattern support                      |
+| 17    | AOC Runner           | Section execution                         |
+| 18    | Error Handling       | Rich error reporting                      |
+| 19    | CLI                  | Command-line interface                    |
+| 20    | Benchmarks           | Performance validation                    |
+| 21    | Integration          | Final polish & verification               |
 
 Each phase builds on previous phases. Release gates ensure quality before proceeding.
+
+### Key Architecture Decision: Type Inference for Specialization
+
+Phase 4 (Type Inference) is the critical addition that enables **native code generation** for operations with known types:
+
+```
+Without Type Inference:          With Type Inference:
+─────────────────────────        ─────────────────────────
+let x = 1 + 2;                   let x = 1 + 2;
+  ↓                                ↓
+call @rt_add                     add i64 (native!)
+  ↓                                ↓
+Runtime type check               No runtime overhead
+  ↓
+Dispatch to int add
+
+Expected: 5-20x speedup for numeric-heavy AOC code
+```
