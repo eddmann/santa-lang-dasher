@@ -1,7 +1,6 @@
 use expect_test::{expect, Expect};
 
 use super::*;
-use token::{Token, TokenKind};
 
 fn check_tokens(input: &str, expect: Expect) {
     let tokens = lex(input);

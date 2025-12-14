@@ -71,4 +71,4 @@ echo -e "${CYAN}Starting Claude Code session...${NC}"
 echo ""
 
 # Start Claude with the prompt
-claude "$PROMPT"
+claude --dangerously-skip-permissions "$PROMPT"

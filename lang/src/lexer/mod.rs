@@ -1,6 +1,7 @@
 pub mod token;
 
-use token::{Position, Span, Token, TokenKind};
+pub use token::{Token, TokenKind};
+use token::{Position, Span};
 
 #[cfg(test)]
 mod tests;
