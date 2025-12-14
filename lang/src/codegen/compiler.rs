@@ -20,6 +20,15 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::Infix { left, op, right } => {
                 self.compile_binary(left, op, right, &expr.ty)
             },
+            Expr::List(elements) => {
+                self.compile_list(elements)
+            },
+            Expr::Set(elements) => {
+                self.compile_set(elements)
+            },
+            Expr::Dict(entries) => {
+                self.compile_dict(entries)
+            },
             _ => Err(CompileError::UnsupportedExpression(
                 format!("Expression type not yet implemented: {:?}", expr.expr)
             )),
@@ -261,5 +270,295 @@ impl<'ctx> CodegenContext<'ctx> {
         let shifted = self.builder.build_left_shift(extended, self.context.i64_type().const_int(3, false), "shift").unwrap();
         let tagged = self.builder.build_or(shifted, self.context.i64_type().const_int(0b011, false), "tag").unwrap();
         tagged.into()
+    }
+
+    /// Compile a list literal
+    fn compile_list(&mut self, elements: &[Expr]) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        if elements.is_empty() {
+            // Empty list: call rt_list_new()
+            let rt_list_new = self.get_or_declare_rt_list_new();
+            let call_result = self.builder.build_call(rt_list_new, &[], "empty_list").unwrap();
+            Ok(call_result.try_as_basic_value().left().unwrap())
+        } else {
+            // Non-empty list: compile elements and call rt_list_from_values(values, count)
+            let mut compiled_elements = Vec::new();
+            for element in elements {
+                // Infer type for the element
+                let elem_ty = self.infer_expr_type(element);
+                let typed_elem = TypedExpr {
+                    expr: element.clone(),
+                    ty: elem_ty,
+                    span: crate::lexer::token::Span::new(
+                        crate::lexer::token::Position::new(0, 0),
+                        crate::lexer::token::Position::new(0, 0),
+                    ),
+                };
+                let compiled = self.compile_expr(&typed_elem)?;
+                compiled_elements.push(compiled);
+            }
+
+            // Allocate an array on the stack to hold the elements
+            let i64_type = self.context.i64_type();
+            let array_type = i64_type.array_type(elements.len() as u32);
+            let array_alloca = self.builder.build_alloca(array_type, "list_elements").unwrap();
+
+            // Store each element in the array
+            for (i, elem) in compiled_elements.iter().enumerate() {
+                let index = self.context.i64_type().const_int(i as u64, false);
+                let elem_ptr = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        array_type,
+                        array_alloca,
+                        &[self.context.i64_type().const_zero(), index],
+                        &format!("elem_ptr_{}", i)
+                    ).unwrap()
+                };
+                self.builder.build_store(elem_ptr, *elem).unwrap();
+            }
+
+            // Cast array pointer to *const Value (i64*)
+            let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+            let values_ptr = self.builder.build_pointer_cast(array_alloca, ptr_type, "values_ptr").unwrap();
+
+            // Call rt_list_from_values(values, count)
+            let rt_list_from_values = self.get_or_declare_rt_list_from_values();
+            let count = self.context.i64_type().const_int(elements.len() as u64, false);
+            let call_result = self.builder.build_call(
+                rt_list_from_values,
+                &[values_ptr.into(), count.into()],
+                "list"
+            ).unwrap();
+
+            Ok(call_result.try_as_basic_value().left().unwrap())
+        }
+    }
+
+    /// Get or declare the rt_list_new runtime function
+    fn get_or_declare_rt_list_new(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_list_new";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Declare: extern "C" fn() -> Value (i64)
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_list_from_values runtime function
+    fn get_or_declare_rt_list_from_values(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_list_from_values";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Declare: extern "C" fn(values: *const Value, count: usize) -> Value (i64)
+        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Compile a set literal
+    fn compile_set(&mut self, elements: &[Expr]) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        if elements.is_empty() {
+            // Empty set: call rt_set_new()
+            let rt_set_new = self.get_or_declare_rt_set_new();
+            let call_result = self.builder.build_call(rt_set_new, &[], "empty_set").unwrap();
+            Ok(call_result.try_as_basic_value().left().unwrap())
+        } else {
+            // Non-empty set: compile elements and call rt_set_from_values(values, count)
+            let mut compiled_elements = Vec::new();
+            for element in elements {
+                let elem_ty = self.infer_expr_type(element);
+                let typed_elem = TypedExpr {
+                    expr: element.clone(),
+                    ty: elem_ty,
+                    span: crate::lexer::token::Span::new(
+                        crate::lexer::token::Position::new(0, 0),
+                        crate::lexer::token::Position::new(0, 0),
+                    ),
+                };
+                let compiled = self.compile_expr(&typed_elem)?;
+                compiled_elements.push(compiled);
+            }
+
+            // Allocate an array on the stack
+            let i64_type = self.context.i64_type();
+            let array_type = i64_type.array_type(elements.len() as u32);
+            let array_alloca = self.builder.build_alloca(array_type, "set_elements").unwrap();
+
+            // Store each element in the array
+            for (i, elem) in compiled_elements.iter().enumerate() {
+                let index = self.context.i64_type().const_int(i as u64, false);
+                let elem_ptr = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        array_type,
+                        array_alloca,
+                        &[self.context.i64_type().const_zero(), index],
+                        &format!("elem_ptr_{}", i)
+                    ).unwrap()
+                };
+                self.builder.build_store(elem_ptr, *elem).unwrap();
+            }
+
+            // Cast array pointer to *const Value
+            let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+            let values_ptr = self.builder.build_pointer_cast(array_alloca, ptr_type, "values_ptr").unwrap();
+
+            // Call rt_set_from_values(values, count)
+            let rt_set_from_values = self.get_or_declare_rt_set_from_values();
+            let count = self.context.i64_type().const_int(elements.len() as u64, false);
+            let call_result = self.builder.build_call(
+                rt_set_from_values,
+                &[values_ptr.into(), count.into()],
+                "set"
+            ).unwrap();
+
+            Ok(call_result.try_as_basic_value().left().unwrap())
+        }
+    }
+
+    /// Get or declare the rt_set_new runtime function
+    fn get_or_declare_rt_set_new(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_set_new";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_set_from_values runtime function
+    fn get_or_declare_rt_set_from_values(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_set_from_values";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Compile a dict literal
+    fn compile_dict(&mut self, entries: &[(Expr, Expr)]) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        if entries.is_empty() {
+            // Empty dict: call rt_dict_new()
+            let rt_dict_new = self.get_or_declare_rt_dict_new();
+            let call_result = self.builder.build_call(rt_dict_new, &[], "empty_dict").unwrap();
+            Ok(call_result.try_as_basic_value().left().unwrap())
+        } else {
+            // Non-empty dict: compile keys and values separately
+            let mut compiled_keys = Vec::new();
+            let mut compiled_values = Vec::new();
+
+            for (key, value) in entries {
+                // Compile key
+                let key_ty = self.infer_expr_type(key);
+                let typed_key = TypedExpr {
+                    expr: key.clone(),
+                    ty: key_ty,
+                    span: crate::lexer::token::Span::new(
+                        crate::lexer::token::Position::new(0, 0),
+                        crate::lexer::token::Position::new(0, 0),
+                    ),
+                };
+                let compiled_key = self.compile_expr(&typed_key)?;
+                compiled_keys.push(compiled_key);
+
+                // Compile value
+                let value_ty = self.infer_expr_type(value);
+                let typed_value = TypedExpr {
+                    expr: value.clone(),
+                    ty: value_ty,
+                    span: crate::lexer::token::Span::new(
+                        crate::lexer::token::Position::new(0, 0),
+                        crate::lexer::token::Position::new(0, 0),
+                    ),
+                };
+                let compiled_value = self.compile_expr(&typed_value)?;
+                compiled_values.push(compiled_value);
+            }
+
+            // Allocate arrays on the stack for keys and values
+            let i64_type = self.context.i64_type();
+            let array_type = i64_type.array_type(entries.len() as u32);
+
+            let keys_alloca = self.builder.build_alloca(array_type, "dict_keys").unwrap();
+            let values_alloca = self.builder.build_alloca(array_type, "dict_values").unwrap();
+
+            // Store keys and values
+            for (i, (key, value)) in compiled_keys.iter().zip(compiled_values.iter()).enumerate() {
+                let index = self.context.i64_type().const_int(i as u64, false);
+
+                // Store key
+                let key_ptr = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        array_type,
+                        keys_alloca,
+                        &[self.context.i64_type().const_zero(), index],
+                        &format!("key_ptr_{}", i)
+                    ).unwrap()
+                };
+                self.builder.build_store(key_ptr, *key).unwrap();
+
+                // Store value
+                let value_ptr = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        array_type,
+                        values_alloca,
+                        &[self.context.i64_type().const_zero(), index],
+                        &format!("value_ptr_{}", i)
+                    ).unwrap()
+                };
+                self.builder.build_store(value_ptr, *value).unwrap();
+            }
+
+            // Cast pointers
+            let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+            let keys_ptr = self.builder.build_pointer_cast(keys_alloca, ptr_type, "keys_ptr").unwrap();
+            let values_ptr = self.builder.build_pointer_cast(values_alloca, ptr_type, "values_ptr").unwrap();
+
+            // Call rt_dict_from_entries(keys, values, count)
+            let rt_dict_from_entries = self.get_or_declare_rt_dict_from_entries();
+            let count = self.context.i64_type().const_int(entries.len() as u64, false);
+            let call_result = self.builder.build_call(
+                rt_dict_from_entries,
+                &[keys_ptr.into(), values_ptr.into(), count.into()],
+                "dict"
+            ).unwrap();
+
+            Ok(call_result.try_as_basic_value().left().unwrap())
+        }
+    }
+
+    /// Get or declare the rt_dict_new runtime function
+    fn get_or_declare_rt_dict_new(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_dict_new";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_dict_from_entries runtime function
+    fn get_or_declare_rt_dict_from_entries(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_dict_from_entries";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
     }
 }

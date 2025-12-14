@@ -191,3 +191,126 @@ fn codegen_decimal_add_decimal_specialized() {
     let result = codegen.compile_expr(&expr).unwrap();
     assert!(result.is_float_value());
 }
+
+#[test]
+fn codegen_list_literal_empty() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    codegen.create_test_function();
+
+    // Create typed expression for: []
+    let expr = TypedExpr {
+        expr: Expr::List(vec![]),
+        ty: Type::List(Box::new(Type::Unknown)),
+        span: Span::new(Position::new(1, 1), Position::new(1, 2)),
+    };
+
+    // Compile the expression - should create an empty list heap object
+    let result = codegen.compile_expr(&expr).unwrap();
+
+    // List should be a pointer value (heap-allocated object)
+    assert!(result.is_int_value());
+}
+
+#[test]
+fn codegen_list_literal_with_integers() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    codegen.create_test_function();
+
+    // Create typed expression for: [1, 2, 3]
+    let expr = TypedExpr {
+        expr: Expr::List(vec![
+            Expr::Integer(1),
+            Expr::Integer(2),
+            Expr::Integer(3),
+        ]),
+        ty: Type::List(Box::new(Type::Int)),
+        span: Span::new(Position::new(1, 1), Position::new(1, 9)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr).unwrap();
+
+    // List should be a pointer value (heap-allocated object)
+    assert!(result.is_int_value());
+}
+
+#[test]
+fn codegen_set_literal_empty() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    codegen.create_test_function();
+
+    // Create typed expression for: #{}
+    let expr = TypedExpr {
+        expr: Expr::Set(vec![]),
+        ty: Type::Set(Box::new(Type::Unknown)),
+        span: Span::new(Position::new(1, 1), Position::new(1, 3)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr).unwrap();
+    assert!(result.is_int_value());
+}
+
+#[test]
+fn codegen_set_literal_with_integers() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    codegen.create_test_function();
+
+    // Create typed expression for: #{1, 2, 3}
+    let expr = TypedExpr {
+        expr: Expr::Set(vec![
+            Expr::Integer(1),
+            Expr::Integer(2),
+            Expr::Integer(3),
+        ]),
+        ty: Type::Set(Box::new(Type::Int)),
+        span: Span::new(Position::new(1, 1), Position::new(1, 11)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr).unwrap();
+    assert!(result.is_int_value());
+}
+
+#[test]
+fn codegen_dict_literal_empty() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    codegen.create_test_function();
+
+    // Create typed expression for: #{}
+    let expr = TypedExpr {
+        expr: Expr::Dict(vec![]),
+        ty: Type::Dict(Box::new(Type::Unknown), Box::new(Type::Unknown)),
+        span: Span::new(Position::new(1, 1), Position::new(1, 3)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr).unwrap();
+    assert!(result.is_int_value());
+}
+
+#[test]
+fn codegen_dict_literal_with_entries() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    codegen.create_test_function();
+
+    // Create typed expression for: #{1: "a", 2: "b"}
+    let expr = TypedExpr {
+        expr: Expr::Dict(vec![
+            (Expr::Integer(1), Expr::String("a".to_string())),
+            (Expr::Integer(2), Expr::String("b".to_string())),
+        ]),
+        ty: Type::Dict(Box::new(Type::Int), Box::new(Type::String)),
+        span: Span::new(Position::new(1, 1), Position::new(1, 19)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr).unwrap();
+    assert!(result.is_int_value());
+}
