@@ -344,7 +344,7 @@ fn runtime_floored_modulo_negative_denominator() {
 
 // ===== Comparison Operations Tests =====
 
-use crate::runtime::operations::{rt_eq, rt_ne, rt_lt, rt_le, rt_gt, rt_ge};
+use crate::runtime::operations::{rt_eq, rt_lt};
 
 #[test]
 fn runtime_eq_integers_equal() {

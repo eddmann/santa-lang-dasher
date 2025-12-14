@@ -322,17 +322,18 @@ fn codegen_unknown_type_runtime_fallback() {
     codegen.create_test_function();
 
     // Create typed expression for addition with Unknown types
-    // This should generate a call to rt_add instead of native add
+    // Even though the values are integer literals, marking them as Unknown
+    // should trigger runtime fallback (call to rt_add)
     let left = TypedExpr {
-        expr: Expr::Identifier("x".to_string()),
-        ty: Type::Unknown,
-        span: Span::new(Position::new(1, 1), Position::new(1, 1)),
+        expr: Expr::Integer(10),
+        ty: Type::Unknown,  // Force Unknown type to test runtime fallback
+        span: Span::new(Position::new(1, 1), Position::new(1, 2)),
     };
 
     let right = TypedExpr {
-        expr: Expr::Identifier("y".to_string()),
-        ty: Type::Unknown,
-        span: Span::new(Position::new(1, 5), Position::new(1, 5)),
+        expr: Expr::Integer(20),
+        ty: Type::Unknown,  // Force Unknown type to test runtime fallback
+        span: Span::new(Position::new(1, 5), Position::new(1, 6)),
     };
 
     let expr = TypedExpr {
@@ -342,14 +343,187 @@ fn codegen_unknown_type_runtime_fallback() {
             right: Box::new(right.expr.clone()),
         },
         ty: Type::Unknown,
+        span: Span::new(Position::new(1, 1), Position::new(1, 6)),
+    };
+
+    // This should compile without error and call rt_add at runtime
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_int_value());
+}
+
+#[test]
+fn codegen_identifier_lookup() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    codegen.create_test_function();
+
+    // Create an identifier expression
+    // For now, this should fail because we haven't implemented variable storage/lookup
+    let expr = TypedExpr {
+        expr: Expr::Identifier("x".to_string()),
+        ty: Type::Int,
+        span: Span::new(Position::new(1, 1), Position::new(1, 1)),
+    };
+
+    // This should fail for now
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_err());
+}
+
+#[test]
+fn codegen_prefix_negate_int() {
+    use crate::parser::ast::PrefixOp;
+
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    codegen.create_test_function();
+
+    // Create typed expression for: -42
+    let operand = TypedExpr {
+        expr: Expr::Integer(42),
+        ty: Type::Int,
+        span: Span::new(Position::new(1, 2), Position::new(1, 3)),
+    };
+
+    let expr = TypedExpr {
+        expr: Expr::Prefix {
+            op: PrefixOp::Negate,
+            right: Box::new(operand.expr.clone()),
+        },
+        ty: Type::Int,
+        span: Span::new(Position::new(1, 1), Position::new(1, 3)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_int_value());
+}
+
+#[test]
+fn codegen_prefix_not_bool() {
+    use crate::parser::ast::PrefixOp;
+
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    codegen.create_test_function();
+
+    // Create typed expression for: !true
+    let operand = TypedExpr {
+        expr: Expr::Boolean(true),
+        ty: Type::Bool,
+        span: Span::new(Position::new(1, 2), Position::new(1, 5)),
+    };
+
+    let expr = TypedExpr {
+        expr: Expr::Prefix {
+            op: PrefixOp::Not,
+            right: Box::new(operand.expr.clone()),
+        },
+        ty: Type::Bool,
         span: Span::new(Position::new(1, 1), Position::new(1, 5)),
     };
 
-    // This should compile without error, even though we don't know the types
-    // The codegen should emit a call to rt_add
+    // Compile the expression
     let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_int_value());  // Booleans are stored as i64
+}
 
-    // For now, this should return an error since Identifier is not implemented
-    // But once we implement it, this should succeed
-    assert!(result.is_err() || result.unwrap().is_int_value());
+#[test]
+fn codegen_range_inclusive() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    codegen.create_test_function();
+
+    // Create typed expression for: 1..=10
+    let expr = TypedExpr {
+        expr: Expr::Range {
+            start: Box::new(Expr::Integer(1)),
+            end: Some(Box::new(Expr::Integer(10))),
+            inclusive: true,
+        },
+        ty: Type::LazySequence(Box::new(Type::Int)),
+        span: Span::new(Position::new(1, 1), Position::new(1, 6)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_int_value());  // Range objects are heap-allocated
+}
+
+#[test]
+fn codegen_range_exclusive() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    codegen.create_test_function();
+
+    // Create typed expression for: 1..10
+    let expr = TypedExpr {
+        expr: Expr::Range {
+            start: Box::new(Expr::Integer(1)),
+            end: Some(Box::new(Expr::Integer(10))),
+            inclusive: false,
+        },
+        ty: Type::LazySequence(Box::new(Type::Int)),
+        span: Span::new(Position::new(1, 1), Position::new(1, 5)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_int_value());
+}
+
+#[test]
+fn codegen_range_unbounded() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    codegen.create_test_function();
+
+    // Create typed expression for: 1..
+    let expr = TypedExpr {
+        expr: Expr::Range {
+            start: Box::new(Expr::Integer(1)),
+            end: None,
+            inclusive: false,
+        },
+        ty: Type::LazySequence(Box::new(Type::Int)),
+        span: Span::new(Position::new(1, 1), Position::new(1, 3)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_int_value());
+}
+
+#[test]
+fn codegen_index_list() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    codegen.create_test_function();
+
+    // Create typed expression for: [1, 2, 3][1]
+    let list_expr = Expr::List(vec![
+        Expr::Integer(1),
+        Expr::Integer(2),
+        Expr::Integer(3),
+    ]);
+
+    let expr = TypedExpr {
+        expr: Expr::Index {
+            collection: Box::new(list_expr),
+            index: Box::new(Expr::Integer(1)),
+        },
+        ty: Type::Int,
+        span: Span::new(Position::new(1, 1), Position::new(1, 13)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_int_value());
 }

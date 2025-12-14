@@ -1358,14 +1358,14 @@ fn codegen_fallback_unknown() { ... }     // Verify runtime called for Unknown
 
 ### Release Gate 6
 
-- [ ] All expression types compile to correct LLVM IR
-- [ ] **Type-specialized paths** generate native LLVM ops (Int+Int → add)
-- [ ] **Unknown type paths** correctly call runtime functions
-- [ ] Partial application generates correct closure
-- [ ] Pipeline operator compiles correctly
-- [ ] Generated code links with runtime library
-- [ ] All tests pass
-- [ ] `cargo clippy` clean
+- [ ] All expression types compile to correct LLVM IR (partially complete - literals, binary ops, prefix ops, collections, range, index done; function/call/control flow deferred to Phases 7 & 9)
+- [x] **Type-specialized paths** generate native LLVM ops (Int+Int → add)
+- [x] **Unknown type paths** correctly call runtime functions
+- [ ] Partial application generates correct closure (deferred to Phase 9)
+- [ ] Pipeline operator compiles correctly (deferred to Phase 7)
+- [ ] Generated code links with runtime library (not tested - needs Phase 7 for full programs)
+- [x] All tests pass (144 tests)
+- [x] `cargo clippy` clean
 
 ---
 

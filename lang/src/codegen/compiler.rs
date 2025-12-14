@@ -1,5 +1,5 @@
 use crate::types::{TypedExpr, Type};
-use crate::parser::ast::{Expr, InfixOp};
+use crate::parser::ast::{Expr, InfixOp, PrefixOp};
 use inkwell::values::BasicValueEnum;
 use inkwell::IntPredicate;
 use super::context::CodegenContext;
@@ -17,6 +17,9 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::Boolean(b) => Ok(self.compile_boolean(*b)),
             Expr::Nil => Ok(self.compile_nil()),
             Expr::String(s) => self.compile_string(s),
+            Expr::Prefix { op, right } => {
+                self.compile_prefix(op, right, &expr.ty)
+            },
             Expr::Infix { left, op, right } => {
                 self.compile_binary(left, op, right, &expr.ty)
             },
@@ -28,6 +31,12 @@ impl<'ctx> CodegenContext<'ctx> {
             },
             Expr::Dict(entries) => {
                 self.compile_dict(entries)
+            },
+            Expr::Range { start, end, inclusive } => {
+                self.compile_range(start, end.as_deref(), *inclusive)
+            },
+            Expr::Index { collection, index } => {
+                self.compile_index(collection, index)
             },
             _ => Err(CompileError::UnsupportedExpression(
                 format!("Expression type not yet implemented: {:?}", expr.expr)
@@ -118,6 +127,99 @@ impl<'ctx> CodegenContext<'ctx> {
         let fn_type = i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
 
         self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Compile a prefix (unary) operation
+    fn compile_prefix(
+        &mut self,
+        op: &PrefixOp,
+        right: &Expr,
+        _result_ty: &Type,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Infer the type of the operand
+        let right_ty = self.infer_expr_type(right);
+
+        let right_typed = TypedExpr {
+            expr: right.clone(),
+            ty: right_ty.clone(),
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+
+        let right_val = self.compile_expr(&right_typed)?;
+
+        match (op, &right_ty) {
+            // Negate integer (FAST PATH)
+            (PrefixOp::Negate, Type::Int) => {
+                let val = self.unbox_int(right_val);
+                // Negate: 0 - val
+                let zero = self.context.i64_type().const_zero();
+                let result = self.builder.build_int_sub(zero, val, "neg").unwrap();
+                Ok(self.box_int(result))
+            }
+
+            // Negate decimal (FAST PATH)
+            (PrefixOp::Negate, Type::Decimal) => {
+                let val = right_val.into_float_value();
+                let result = self.builder.build_float_neg(val, "fneg").unwrap();
+                Ok(result.into())
+            }
+
+            // Logical NOT on boolean (FAST PATH)
+            (PrefixOp::Not, Type::Bool) => {
+                // Unbox bool: (value >> 3) & 1
+                let val = right_val.into_int_value();
+                let shifted = self.builder.build_right_shift(
+                    val,
+                    self.context.i64_type().const_int(3, false),
+                    false,
+                    "shift"
+                ).unwrap();
+                let bool_val = self.builder.build_and(
+                    shifted,
+                    self.context.i64_type().const_int(1, false),
+                    "mask"
+                ).unwrap();
+
+                // XOR with 1 to flip the bit
+                let flipped = self.builder.build_xor(
+                    bool_val,
+                    self.context.i64_type().const_int(1, false),
+                    "not"
+                ).unwrap();
+
+                // Re-box as boolean
+                let shifted_back = self.builder.build_left_shift(
+                    flipped,
+                    self.context.i64_type().const_int(3, false),
+                    "shift_back"
+                ).unwrap();
+                let tagged = self.builder.build_or(
+                    shifted_back,
+                    self.context.i64_type().const_int(0b011, false),
+                    "tag"
+                ).unwrap();
+                Ok(tagged.into())
+            }
+
+            // Unknown types → runtime fallback
+            _ => {
+                let rt_fn = match op {
+                    PrefixOp::Negate => self.get_or_declare_rt_negate(),
+                    PrefixOp::Not => self.get_or_declare_rt_not(),
+                };
+
+                let call_result = self.builder.build_call(
+                    rt_fn,
+                    &[right_val.into()],
+                    "rt_prefix"
+                ).unwrap();
+
+                Ok(call_result.try_as_basic_value().left().unwrap())
+            }
+        }
     }
 
     /// Compile a binary operation with type specialization
@@ -229,11 +331,123 @@ impl<'ctx> CodegenContext<'ctx> {
             }
 
             // Unknown types → runtime dispatch (SLOW PATH)
-            // TODO: Implement runtime function calls in later task
-            _ => Err(CompileError::UnsupportedExpression(
-                format!("Binary operation {:?} with types {:?} + {:?} not yet implemented", op, left_ty, right_ty)
-            )),
+            _ => {
+                // Call runtime function for dynamic dispatch
+                let rt_fn = match op {
+                    InfixOp::Add => self.get_or_declare_rt_add(),
+                    InfixOp::Subtract => self.get_or_declare_rt_sub(),
+                    InfixOp::Multiply => self.get_or_declare_rt_mul(),
+                    InfixOp::Divide => self.get_or_declare_rt_div(),
+                    InfixOp::Modulo => self.get_or_declare_rt_mod(),
+                    InfixOp::Equal => self.get_or_declare_rt_eq(),
+                    InfixOp::NotEqual => self.get_or_declare_rt_ne(),
+                    InfixOp::LessThan => self.get_or_declare_rt_lt(),
+                    InfixOp::LessThanOrEqual => self.get_or_declare_rt_le(),
+                    InfixOp::GreaterThan => self.get_or_declare_rt_gt(),
+                    InfixOp::GreaterThanOrEqual => self.get_or_declare_rt_ge(),
+                    _ => return Err(CompileError::UnsupportedExpression(
+                        format!("Binary operation {:?} not yet supported in runtime fallback", op)
+                    )),
+                };
+
+                let call_result = self.builder.build_call(
+                    rt_fn,
+                    &[left_val.into(), right_val.into()],
+                    "rt_binop"
+                ).unwrap();
+
+                Ok(call_result.try_as_basic_value().left().unwrap())
+            }
         }
+    }
+
+    /// Get or declare the rt_add runtime function
+    fn get_or_declare_rt_add(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.get_or_declare_rt_binop("rt_add")
+    }
+
+    /// Get or declare the rt_sub runtime function
+    fn get_or_declare_rt_sub(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.get_or_declare_rt_binop("rt_sub")
+    }
+
+    /// Get or declare the rt_mul runtime function
+    fn get_or_declare_rt_mul(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.get_or_declare_rt_binop("rt_mul")
+    }
+
+    /// Get or declare the rt_div runtime function
+    fn get_or_declare_rt_div(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.get_or_declare_rt_binop("rt_div")
+    }
+
+    /// Get or declare the rt_mod runtime function
+    fn get_or_declare_rt_mod(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.get_or_declare_rt_binop("rt_mod")
+    }
+
+    /// Get or declare the rt_eq runtime function
+    fn get_or_declare_rt_eq(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.get_or_declare_rt_binop("rt_eq")
+    }
+
+    /// Get or declare the rt_ne runtime function
+    fn get_or_declare_rt_ne(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.get_or_declare_rt_binop("rt_ne")
+    }
+
+    /// Get or declare the rt_lt runtime function
+    fn get_or_declare_rt_lt(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.get_or_declare_rt_binop("rt_lt")
+    }
+
+    /// Get or declare the rt_le runtime function
+    fn get_or_declare_rt_le(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.get_or_declare_rt_binop("rt_le")
+    }
+
+    /// Get or declare the rt_gt runtime function
+    fn get_or_declare_rt_gt(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.get_or_declare_rt_binop("rt_gt")
+    }
+
+    /// Get or declare the rt_ge runtime function
+    fn get_or_declare_rt_ge(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.get_or_declare_rt_binop("rt_ge")
+    }
+
+    /// Helper to get or declare a binary operation runtime function
+    /// All have signature: extern "C" fn(Value, Value) -> Value (i64, i64) -> i64
+    fn get_or_declare_rt_binop(&self, name: &str) -> inkwell::values::FunctionValue<'ctx> {
+        if let Some(func) = self.module.get_function(name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(name, fn_type, None)
+    }
+
+    /// Get or declare the rt_negate runtime function
+    fn get_or_declare_rt_negate(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.get_or_declare_rt_unop("rt_negate")
+    }
+
+    /// Get or declare the rt_not runtime function
+    fn get_or_declare_rt_not(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.get_or_declare_rt_unop("rt_not")
+    }
+
+    /// Helper to get or declare a unary operation runtime function
+    /// All have signature: extern "C" fn(Value) -> Value (i64) -> i64
+    fn get_or_declare_rt_unop(&self, name: &str) -> inkwell::values::FunctionValue<'ctx> {
+        if let Some(func) = self.module.get_function(name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(name, fn_type, None)
     }
 
     /// Simple type inference for expressions (temporary until full type inference integration)
@@ -559,6 +773,154 @@ impl<'ctx> CodegenContext<'ctx> {
         let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Compile a range expression
+    fn compile_range(
+        &mut self,
+        start: &Expr,
+        end: Option<&Expr>,
+        inclusive: bool,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Compile start expression
+        let start_ty = self.infer_expr_type(start);
+        let start_typed = TypedExpr {
+            expr: start.clone(),
+            ty: start_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        let start_val = self.compile_expr(&start_typed)?;
+
+        // Compile end expression if present
+        let end_val = if let Some(end_expr) = end {
+            let end_ty = self.infer_expr_type(end_expr);
+            let end_typed = TypedExpr {
+                expr: end_expr.clone(),
+                ty: end_ty,
+                span: crate::lexer::token::Span::new(
+                    crate::lexer::token::Position::new(0, 0),
+                    crate::lexer::token::Position::new(0, 0),
+                ),
+            };
+            self.compile_expr(&end_typed)?
+        } else {
+            // No end means unbounded range - use a sentinel value (0)
+            self.context.i64_type().const_zero().into()
+        };
+
+        // Determine which runtime function to call based on range type
+        let rt_fn = if end.is_none() {
+            // Unbounded range: rt_range_unbounded(start)
+            self.get_or_declare_rt_range_unbounded()
+        } else if inclusive {
+            // Inclusive range: rt_range_inclusive(start, end)
+            self.get_or_declare_rt_range_inclusive()
+        } else {
+            // Exclusive range: rt_range_exclusive(start, end)
+            self.get_or_declare_rt_range_exclusive()
+        };
+
+        // Call the appropriate runtime function
+        let args: &[_] = if end.is_none() {
+            &[start_val.into()]
+        } else {
+            &[start_val.into(), end_val.into()]
+        };
+
+        let call_result = self.builder.build_call(rt_fn, args, "range").unwrap();
+        Ok(call_result.try_as_basic_value().left().unwrap())
+    }
+
+    /// Get or declare the rt_range_inclusive runtime function
+    fn get_or_declare_rt_range_inclusive(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_range_inclusive";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_range_exclusive runtime function
+    fn get_or_declare_rt_range_exclusive(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_range_exclusive";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_range_unbounded runtime function
+    fn get_or_declare_rt_range_unbounded(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_range_unbounded";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Compile an index expression (collection[index])
+    fn compile_index(
+        &mut self,
+        collection: &Expr,
+        index: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Compile collection expression
+        let collection_ty = self.infer_expr_type(collection);
+        let collection_typed = TypedExpr {
+            expr: collection.clone(),
+            ty: collection_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        let collection_val = self.compile_expr(&collection_typed)?;
+
+        // Compile index expression
+        let index_ty = self.infer_expr_type(index);
+        let index_typed = TypedExpr {
+            expr: index.clone(),
+            ty: index_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        let index_val = self.compile_expr(&index_typed)?;
+
+        // Call rt_index(collection, index)
+        let rt_index = self.get_or_declare_rt_index();
+        let call_result = self.builder.build_call(
+            rt_index,
+            &[collection_val.into(), index_val.into()],
+            "index"
+        ).unwrap();
+
+        Ok(call_result.try_as_basic_value().left().unwrap())
+    }
+
+    /// Get or declare the rt_index runtime function
+    fn get_or_declare_rt_index(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_index";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
         self.module.add_function(fn_name, fn_type, None)
     }
 }
