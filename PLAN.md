@@ -213,10 +213,10 @@ fn lex_comments() { ... }
 
 ### Release Gate 1
 
-- [ ] All token types from LANG.txt Section 2 are lexed correctly
-- [ ] Error positions (line:column) are accurate
-- [ ] All expect_test snapshots pass
-- [ ] `cargo clippy` clean
+- [x] All token types from LANG.txt Section 2 are lexed correctly
+- [x] Error positions (line:column) are accurate
+- [x] All expect_test snapshots pass
+- [x] `cargo clippy` clean
 
 ---
 

@@ -1,0 +1,15 @@
+[package]
+name = "santa-lang"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+# inkwell.workspace = true  # Not needed until Phase 6 (Codegen)
+# im.workspace = true  # Not needed until Phase 5 (Runtime)
+# ordered-float.workspace = true  # Not needed until Phase 5 (Runtime)
+unicode-segmentation.workspace = true  # Needed for Phase 1 (strings)
+regex.workspace = true  # Needed for Phase 14 (Built-ins)
+
+[dev-dependencies]
+expect-test.workspace = true
