@@ -156,3 +156,21 @@ pub enum Stmt {
     Break(Expr),
     Expr(Expr),
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Section {
+    Input(Expr),
+    PartOne(Expr),
+    PartTwo(Expr),
+    Test {
+        input: Expr,
+        part_one: Option<Expr>,
+        part_two: Option<Expr>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Program {
+    pub statements: Vec<Stmt>,
+    pub sections: Vec<Section>,
+}

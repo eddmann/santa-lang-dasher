@@ -469,15 +469,15 @@ fn parse_dict_shorthand() { ... }                    // #{name, age}
 
 ### Release Gate 3
 
-- [ ] All statement forms parse correctly
-- [ ] Destructuring patterns work (including nested, rest)
-- [ ] Match expressions with guards parse correctly
-- [ ] AOC sections (`input:`, `part_one:`, `part_two:`, `test:`) parse
-- [ ] Trailing lambda syntax works
-- [ ] **Empty `{}` disambiguates correctly** (Set vs Block)
-- [ ] **Dict shorthand** parses correctly
-- [ ] All expect_test snapshots pass
-- [ ] `cargo clippy` clean
+- [x] All statement forms parse correctly
+- [x] Destructuring patterns work (including nested, rest)
+- [x] Match expressions with guards parse correctly
+- [x] AOC sections (`input:`, `part_one:`, `part_two:`, `test:`) parse
+- [x] Trailing lambda syntax works
+- [x] **Empty `{}` disambiguates correctly** (Set vs Block)
+- [x] **Dict shorthand** parses correctly
+- [x] All expect_test snapshots pass
+- [x] `cargo clippy` clean
 
 ---
 
@@ -952,17 +952,17 @@ fn type_error_incompatible() {
 
 ### Release Gate 4
 
-- [ ] Type enum represents all santa-lang types
-- [ ] Literals infer correct concrete types
-- [ ] Binary operators follow LANG.txt §4.1 type rules
-- [ ] Built-in function signatures are defined for all 65 functions
-- [ ] Collection literals infer element types
-- [ ] Closures infer parameter types from context
-- [ ] Pipeline/composition propagates types correctly
-- [ ] Unknown falls back gracefully (no false errors)
-- [ ] Type errors caught for known-incompatible operations
-- [ ] All tests pass
-- [ ] `cargo clippy` clean
+- [x] Type enum represents all santa-lang types
+- [x] Literals infer correct concrete types
+- [x] Binary operators follow LANG.txt §4.1 type rules
+- [ ] Built-in function signatures are defined for all 65 functions (deferred to later phases)
+- [x] Collection literals infer element types
+- [ ] Closures infer parameter types from context (deferred to Phase 9)
+- [ ] Pipeline/composition propagates types correctly (deferred to Phase 6)
+- [x] Unknown falls back gracefully (no false errors)
+- [x] Type errors caught for known-incompatible operations (via unification)
+- [x] All tests pass (79 tests)
+- [x] `cargo clippy` clean (one minor unused method warning)
 
 ---
 

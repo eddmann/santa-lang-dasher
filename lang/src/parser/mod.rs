@@ -54,6 +54,29 @@ impl Parser {
                 _ => {}
             }
 
+            // Check for trailing lambda syntax: expr identifier lambda
+            // e.g., [1, 2, 3] map |x| x * 2
+            if let TokenKind::Identifier(func_name) = &token.kind {
+                // Look ahead to see if there's a lambda following
+                if let Some(next) = self.tokens.get(self.current + 1) {
+                    if matches!(next.kind, TokenKind::VerticalBar | TokenKind::OrOr) {
+                        // This is a trailing lambda
+                        let func_name = func_name.clone();
+                        self.advance(); // consume identifier
+
+                        // Parse the lambda
+                        let lambda = self.parse_expression()?;
+
+                        // Transform to: func_name(left, lambda)
+                        left = Expr::Call {
+                            function: Box::new(Expr::Identifier(func_name)),
+                            args: vec![left, lambda],
+                        };
+                        continue;
+                    }
+                }
+            }
+
             // Check for infix operators
             let precedence = self.get_infix_precedence();
             // Stop if precedence is 0 (not an infix op) or less than minimum
@@ -138,6 +161,24 @@ impl Parser {
                 // For now, treat it as a function with empty params
                 self.parse_function_empty_params()
             }
+            TokenKind::Match => {
+                self.parse_match()
+            }
+            TokenKind::LeftBrace => {
+                // Disambiguate {} based on whether it's empty
+                // Empty {} → Set (in expression context)
+                // Non-empty { ... } → Block
+                if let Some(next) = self.tokens.get(self.current + 1) {
+                    if matches!(next.kind, TokenKind::RightBrace) {
+                        // Empty braces: {} → Set
+                        self.advance(); // consume '{'
+                        self.advance(); // consume '}'
+                        return Ok(Expr::Set(Vec::new()));
+                    }
+                }
+                // Non-empty or function body → Block
+                self.parse_block()
+            }
             _ => Err(ParseError {
                 message: format!("Unexpected token: {:?}", token.kind),
                 line: token.span.start.line as usize,
@@ -194,8 +235,8 @@ impl Parser {
             }
         }
 
-        // Parse function body
-        let body = self.parse_pratt_expr(0)?;
+        // Parse function body (use parse_body_expr for correct {} handling)
+        let body = self.parse_body_expr()?;
 
         Ok(Expr::Function {
             params,
@@ -207,13 +248,33 @@ impl Parser {
         // Handle || as an empty parameter list for a function
         self.advance(); // consume '||'
 
-        // Parse function body
-        let body = self.parse_pratt_expr(0)?;
+        // Parse function body (use parse_body_expr for correct {} handling)
+        let body = self.parse_body_expr()?;
 
         Ok(Expr::Function {
             params: Vec::new(),
             body: Box::new(body),
         })
+    }
+
+    /// Parse an expression in "body" context where {} is always a Block
+    fn parse_body_expr(&mut self) -> Result<Expr, ParseError> {
+        let token = self.current_token()?;
+
+        // Special handling for empty braces in body context
+        if matches!(token.kind, TokenKind::LeftBrace) {
+            if let Some(next) = self.tokens.get(self.current + 1) {
+                if matches!(next.kind, TokenKind::RightBrace) {
+                    // Empty braces in body context → Block
+                    self.advance(); // consume '{'
+                    self.advance(); // consume '}'
+                    return Ok(Expr::Block(Vec::new()));
+                }
+            }
+        }
+
+        // Otherwise parse normally
+        self.parse_pratt_expr(0)
     }
 
     fn parse_call(&mut self, function: Expr) -> Result<Expr, ParseError> {
@@ -305,10 +366,10 @@ impl Parser {
         // Parse first element to determine if it's a set or dict
         let first_elem = self.parse_pratt_expr(0)?;
 
-        // Check if this is a dict entry (has a colon)
+        // Check if this is a dict entry (has a colon) or dict shorthand
         if let Ok(token) = self.current_token() {
             if matches!(token.kind, TokenKind::Colon) {
-                // It's a dict
+                // It's a dict with explicit key:value syntax
                 self.advance(); // consume ':'
                 let first_value = self.parse_pratt_expr(0)?;
                 let mut entries = vec![(first_elem, first_value)];
@@ -326,19 +387,9 @@ impl Parser {
                                     break;
                                 }
                             }
-                            // Parse next key:value pair
-                            let key = self.parse_pratt_expr(0)?;
-                            let colon = self.current_token()?;
-                            if !matches!(colon.kind, TokenKind::Colon) {
-                                return Err(ParseError {
-                                    message: format!("Expected ':' in dict literal, got {:?}", colon.kind),
-                                    line: colon.span.start.line as usize,
-                                    column: colon.span.start.column as usize,
-                                });
-                            }
-                            self.advance(); // consume ':'
-                            let value = self.parse_pratt_expr(0)?;
-                            entries.push((key, value));
+                            // Parse next entry (could be key:value or shorthand)
+                            let next_entry = self.parse_dict_entry()?;
+                            entries.push(next_entry);
                         }
                         TokenKind::RightBrace => {
                             self.advance();
@@ -355,6 +406,51 @@ impl Parser {
                 }
 
                 return Ok(Expr::Dict(entries));
+            } else if matches!(token.kind, TokenKind::Comma | TokenKind::RightBrace) {
+                // Check if first_elem is an identifier - if so, this is dict shorthand
+                if let Expr::Identifier(name) = first_elem {
+                    // Dict shorthand: #{name} → #{"name": name}
+                    let key = Expr::String(name.clone());
+                    let value = Expr::Identifier(name);
+                    let mut entries = vec![(key, value)];
+
+                    // Parse remaining shorthand entries if comma
+                    if matches!(token.kind, TokenKind::Comma) {
+                        loop {
+                            self.advance(); // consume ','
+
+                            // Check for trailing comma
+                            if let Ok(next) = self.current_token() {
+                                if matches!(next.kind, TokenKind::RightBrace) {
+                                    self.advance();
+                                    break;
+                                }
+                            }
+
+                            // Parse next entry (could be key:value or shorthand)
+                            let next_entry = self.parse_dict_entry()?;
+                            entries.push(next_entry);
+
+                            // Check what comes next
+                            let token = self.current_token()?;
+                            if matches!(token.kind, TokenKind::RightBrace) {
+                                self.advance();
+                                break;
+                            } else if !matches!(token.kind, TokenKind::Comma) {
+                                return Err(ParseError {
+                                    message: format!("Expected ',' or '}}' in dict literal, got {:?}", token.kind),
+                                    line: token.span.start.line as usize,
+                                    column: token.span.start.column as usize,
+                                });
+                            }
+                        }
+                    } else {
+                        // Just closing brace
+                        self.advance();
+                    }
+
+                    return Ok(Expr::Dict(entries));
+                }
             }
         }
 
@@ -391,6 +487,40 @@ impl Parser {
         }
 
         Ok(Expr::Set(elements))
+    }
+
+    /// Parse a dict entry - either key:value or shorthand identifier
+    fn parse_dict_entry(&mut self) -> Result<(Expr, Expr), ParseError> {
+        // Check if this is a shorthand identifier
+        let token = self.current_token()?;
+
+        if let TokenKind::Identifier(name) = &token.kind {
+            // Look ahead to see if there's a colon or comma/brace
+            if let Some(next) = self.tokens.get(self.current + 1) {
+                if matches!(next.kind, TokenKind::Comma | TokenKind::RightBrace) {
+                    // Shorthand: name → "name": name
+                    let name = name.clone();
+                    self.advance(); // consume identifier
+                    let key = Expr::String(name.clone());
+                    let value = Expr::Identifier(name);
+                    return Ok((key, value));
+                }
+            }
+        }
+
+        // Otherwise, parse as key:value
+        let key = self.parse_pratt_expr(0)?;
+        let colon = self.current_token()?;
+        if !matches!(colon.kind, TokenKind::Colon) {
+            return Err(ParseError {
+                message: format!("Expected ':' in dict entry, got {:?}", colon.kind),
+                line: colon.span.start.line as usize,
+                column: colon.span.start.column as usize,
+            });
+        }
+        self.advance(); // consume ':'
+        let value = self.parse_pratt_expr(0)?;
+        Ok((key, value))
     }
 
     fn parse_list(&mut self) -> Result<Expr, ParseError> {
@@ -535,6 +665,461 @@ impl Parser {
             return true;
         }
         matches!(self.tokens[self.current].kind, TokenKind::Eof)
+    }
+
+    /// Expect a specific token kind and consume it
+    fn expect(&mut self, expected: TokenKind) -> Result<(), ParseError> {
+        let token = self.current_token()?;
+        if std::mem::discriminant(&token.kind) == std::mem::discriminant(&expected) {
+            self.advance();
+            Ok(())
+        } else {
+            Err(ParseError {
+                message: format!("Expected {:?}, got {:?}", expected, token.kind),
+                line: token.span.start.line as usize,
+                column: token.span.start.column as usize,
+            })
+        }
+    }
+
+    /// Parse a statement (let, return, break, or expression)
+    pub fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
+        let token = self.current_token()?;
+
+        match &token.kind {
+            TokenKind::Let => self.parse_let_statement(),
+            TokenKind::Return => self.parse_return_statement(),
+            TokenKind::Break => self.parse_break_statement(),
+            _ => {
+                // Expression statement
+                let expr = self.parse_expression()?;
+                Ok(Stmt::Expr(expr))
+            }
+        }
+    }
+
+    fn parse_let_statement(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume 'let'
+
+        // Check for 'mut' keyword
+        let mutable = if matches!(self.current_token()?.kind, TokenKind::Mut) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        // Parse pattern (for now, just identifier)
+        let pattern = self.parse_pattern()?;
+
+        // Expect '=' token
+        let token = self.current_token()?;
+        if !matches!(token.kind, TokenKind::Equal) {
+            return Err(ParseError {
+                message: format!("Expected '=' after pattern, got {:?}", token.kind),
+                line: token.span.start.line as usize,
+                column: token.span.start.column as usize,
+            });
+        }
+        self.advance(); // consume '='
+
+        // Parse value expression
+        let value = self.parse_expression()?;
+
+        Ok(Stmt::Let {
+            mutable,
+            pattern,
+            value,
+        })
+    }
+
+    fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
+        let token = self.current_token()?;
+
+        match &token.kind {
+            TokenKind::Identifier(name) => {
+                let pattern = Pattern::Identifier(name.clone());
+                self.advance();
+                Ok(pattern)
+            }
+            TokenKind::Underscore => {
+                self.advance();
+                Ok(Pattern::Wildcard)
+            }
+            TokenKind::LeftBracket => {
+                self.parse_list_pattern()
+            }
+            // Literal patterns
+            TokenKind::Integer(n) => {
+                let pattern = Pattern::Literal(Literal::Integer(*n));
+                self.advance();
+                Ok(pattern)
+            }
+            TokenKind::Decimal(f) => {
+                let pattern = Pattern::Literal(Literal::Decimal(*f));
+                self.advance();
+                Ok(pattern)
+            }
+            TokenKind::String(s) => {
+                let pattern = Pattern::Literal(Literal::String(s.clone()));
+                self.advance();
+                Ok(pattern)
+            }
+            TokenKind::True => {
+                self.advance();
+                Ok(Pattern::Literal(Literal::Boolean(true)))
+            }
+            TokenKind::False => {
+                self.advance();
+                Ok(Pattern::Literal(Literal::Boolean(false)))
+            }
+            TokenKind::Nil => {
+                self.advance();
+                Ok(Pattern::Literal(Literal::Nil))
+            }
+            _ => Err(ParseError {
+                message: format!("Expected pattern, got {:?}", token.kind),
+                line: token.span.start.line as usize,
+                column: token.span.start.column as usize,
+            }),
+        }
+    }
+
+    fn parse_list_pattern(&mut self) -> Result<Pattern, ParseError> {
+        self.advance(); // consume '['
+
+        let mut patterns = Vec::new();
+
+        loop {
+            let token = self.current_token()?;
+
+            match &token.kind {
+                TokenKind::RightBracket => {
+                    self.advance(); // consume ']'
+                    break;
+                }
+                TokenKind::DotDotIdent(name) => {
+                    // Rest pattern: ..rest (lexed as a single token)
+                    let rest_pattern = Pattern::RestIdentifier(name.clone());
+                    self.advance();
+                    patterns.push(rest_pattern);
+
+                    // After rest pattern, expect ] or ,
+                    let next = self.current_token()?;
+                    match &next.kind {
+                        TokenKind::RightBracket => {
+                            self.advance();
+                            break;
+                        }
+                        TokenKind::Comma => {
+                            self.advance();
+                            // Continue to next pattern
+                        }
+                        _ => {
+                            return Err(ParseError {
+                                message: format!("Expected ',' or ']' after rest pattern, got {:?}", next.kind),
+                                line: next.span.start.line as usize,
+                                column: next.span.start.column as usize,
+                            });
+                        }
+                    }
+                }
+                _ => {
+                    // Regular pattern
+                    let pattern = self.parse_pattern()?;
+                    patterns.push(pattern);
+
+                    // Check for comma or closing bracket
+                    let next = self.current_token()?;
+                    match &next.kind {
+                        TokenKind::Comma => {
+                            self.advance();
+                            // Continue to next pattern
+                        }
+                        TokenKind::RightBracket => {
+                            self.advance();
+                            break;
+                        }
+                        _ => {
+                            return Err(ParseError {
+                                message: format!("Expected ',' or ']' in list pattern, got {:?}", next.kind),
+                                line: next.span.start.line as usize,
+                                column: next.span.start.column as usize,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(Pattern::List(patterns))
+    }
+
+    fn parse_return_statement(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume 'return'
+        let expr = self.parse_expression()?;
+        Ok(Stmt::Return(expr))
+    }
+
+    fn parse_break_statement(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume 'break'
+        let expr = self.parse_expression()?;
+        Ok(Stmt::Break(expr))
+    }
+
+    fn parse_match(&mut self) -> Result<Expr, ParseError> {
+        self.advance(); // consume 'match'
+
+        // Parse subject expression
+        let subject = self.parse_expression()?;
+
+        // Expect '{'
+        let token = self.current_token()?;
+        if !matches!(token.kind, TokenKind::LeftBrace) {
+            return Err(ParseError {
+                message: format!("Expected '{{' after match subject, got {:?}", token.kind),
+                line: token.span.start.line as usize,
+                column: token.span.start.column as usize,
+            });
+        }
+        self.advance(); // consume '{'
+
+        // Parse match arms
+        let mut arms = Vec::new();
+
+        loop {
+            let token = self.current_token()?;
+
+            // Check for closing brace
+            if matches!(token.kind, TokenKind::RightBrace) {
+                self.advance();
+                break;
+            }
+
+            // Parse pattern
+            let pattern = self.parse_pattern()?;
+
+            // Check for guard (if keyword)
+            let guard = if matches!(self.current_token()?.kind, TokenKind::If) {
+                self.advance(); // consume 'if'
+                Some(self.parse_expression()?)
+            } else {
+                None
+            };
+
+            // Parse body (expect '{')
+            let token = self.current_token()?;
+            if !matches!(token.kind, TokenKind::LeftBrace) {
+                return Err(ParseError {
+                    message: format!("Expected '{{' after match pattern, got {:?}", token.kind),
+                    line: token.span.start.line as usize,
+                    column: token.span.start.column as usize,
+                });
+            }
+
+            let body = self.parse_block()?;
+
+            arms.push(MatchArm {
+                pattern,
+                guard,
+                body,
+            });
+        }
+
+        Ok(Expr::Match {
+            subject: Box::new(subject),
+            arms,
+        })
+    }
+
+    fn parse_block(&mut self) -> Result<Expr, ParseError> {
+        self.advance(); // consume '{'
+
+        let mut statements = Vec::new();
+
+        loop {
+            let token = self.current_token()?;
+
+            // Check for closing brace
+            if matches!(token.kind, TokenKind::RightBrace) {
+                self.advance();
+                break;
+            }
+
+            // Parse statement
+            let stmt = self.parse_statement()?;
+            statements.push(stmt);
+        }
+
+        Ok(Expr::Block(statements))
+    }
+
+    /// Parse a complete program with statements and AOC sections
+    pub fn parse_program(&mut self) -> Result<Program, ParseError> {
+        let mut statements = Vec::new();
+        let mut sections = Vec::new();
+
+        while !self.is_at_end() {
+            // Skip any leading semicolons/newlines
+            self.skip_statement_terminators();
+
+            if self.is_at_end() {
+                break;
+            }
+
+            // Check if this is a section (identifier followed by colon)
+            if self.is_section_start() {
+                let section = self.parse_section()?;
+                sections.push(section);
+                self.skip_statement_terminators();
+            } else {
+                // Parse as a regular statement
+                let stmt = self.parse_statement()?;
+                statements.push(stmt);
+                self.skip_statement_terminators();
+            }
+        }
+
+        Ok(Program {
+            statements,
+            sections,
+        })
+    }
+
+    /// Skip semicolons and newlines (statement terminators)
+    fn skip_statement_terminators(&mut self) {
+        while !self.is_at_end() {
+            if let Ok(token) = self.current_token() {
+                if matches!(token.kind, TokenKind::Semicolon) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Check if current position is the start of a section
+    fn is_section_start(&self) -> bool {
+        if let Ok(token) = self.current_token() {
+            if let TokenKind::Identifier(name) = &token.kind {
+                // Check if it's a section keyword and followed by colon
+                if matches!(name.as_str(), "input" | "part_one" | "part_two" | "test") {
+                    // Look ahead to see if there's a colon
+                    if let Some(next) = self.tokens.get(self.current + 1) {
+                        return matches!(next.kind, TokenKind::Colon);
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Parse a section (input, part_one, part_two, or test)
+    fn parse_section(&mut self) -> Result<Section, ParseError> {
+        let token = self.current_token()?.clone();
+
+        if let TokenKind::Identifier(name) = &token.kind {
+            match name.as_str() {
+                "input" => {
+                    self.advance(); // consume 'input'
+                    self.expect(TokenKind::Colon)?;
+                    let expr = self.parse_expression()?;
+                    Ok(Section::Input(expr))
+                }
+                "part_one" => {
+                    self.advance(); // consume 'part_one'
+                    self.expect(TokenKind::Colon)?;
+                    let expr = self.parse_expression()?;
+                    Ok(Section::PartOne(expr))
+                }
+                "part_two" => {
+                    self.advance(); // consume 'part_two'
+                    self.expect(TokenKind::Colon)?;
+                    let expr = self.parse_expression()?;
+                    Ok(Section::PartTwo(expr))
+                }
+                "test" => {
+                    self.advance(); // consume 'test'
+                    self.expect(TokenKind::Colon)?;
+                    self.expect(TokenKind::LeftBrace)?;
+
+                    // Parse test section fields
+                    let mut input_expr = None;
+                    let mut part_one_expr = None;
+                    let mut part_two_expr = None;
+
+                    while !self.is_at_end() {
+                        let token = self.current_token()?;
+
+                        // Check for closing brace
+                        if matches!(token.kind, TokenKind::RightBrace) {
+                            self.advance();
+                            break;
+                        }
+
+                        // Parse field
+                        if let TokenKind::Identifier(field_name) = &token.kind {
+                            match field_name.as_str() {
+                                "input" => {
+                                    self.advance();
+                                    self.expect(TokenKind::Colon)?;
+                                    input_expr = Some(self.parse_expression()?);
+                                }
+                                "part_one" => {
+                                    self.advance();
+                                    self.expect(TokenKind::Colon)?;
+                                    part_one_expr = Some(self.parse_expression()?);
+                                }
+                                "part_two" => {
+                                    self.advance();
+                                    self.expect(TokenKind::Colon)?;
+                                    part_two_expr = Some(self.parse_expression()?);
+                                }
+                                _ => {
+                                    return Err(ParseError {
+                                        message: format!("Unexpected field in test section: {}", field_name),
+                                        line: token.span.start.line as usize,
+                                        column: token.span.start.column as usize,
+                                    });
+                                }
+                            }
+                        } else {
+                            return Err(ParseError {
+                                message: format!("Expected field name in test section, got {:?}", token.kind),
+                                line: token.span.start.line as usize,
+                                column: token.span.start.column as usize,
+                            });
+                        }
+                    }
+
+                    let input = input_expr.ok_or_else(|| ParseError {
+                        message: "test section requires 'input' field".to_string(),
+                        line: token.span.start.line as usize,
+                        column: token.span.start.column as usize,
+                    })?;
+
+                    Ok(Section::Test {
+                        input,
+                        part_one: part_one_expr,
+                        part_two: part_two_expr,
+                    })
+                }
+                _ => Err(ParseError {
+                    message: format!("Unexpected section name: {}", name),
+                    line: token.span.start.line as usize,
+                    column: token.span.start.column as usize,
+                }),
+            }
+        } else {
+            Err(ParseError {
+                message: format!("Expected section identifier, got {:?}", token.kind),
+                line: token.span.start.line as usize,
+                column: token.span.start.column as usize,
+            })
+        }
     }
 }
 
