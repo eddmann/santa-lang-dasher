@@ -1,4 +1,4 @@
-use super::heap::{StringObject, ListObject, SetObject, DictObject, MutableCellObject, ClosureObject};
+use super::heap::{StringObject, ListObject, SetObject, DictObject, MutableCellObject, ClosureObject, ObjectHeader, TypeTag};
 
 /// 64-bit NaN-boxed value representation
 ///
@@ -14,26 +14,44 @@ use super::heap::{StringObject, ListObject, SetObject, DictObject, MutableCellOb
 /// Decimals are stored as actual f64 values (not tagged, identified by
 /// not matching any of the above patterns and not being a valid heap pointer).
 #[repr(transparent)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Value(u64);
 
-// Implement PartialEq for Value
+// Implement PartialEq for Value with proper deep equality for strings
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
-        // For now, simple bitwise equality
-        // TODO: Deep equality for collections in Phase 8
-        self.0 == other.0
+        // Fast path: identical bits (including same heap pointer)
+        if self.0 == other.0 {
+            return true;
+        }
+
+        // Compare based on type
+        match (self.heap_type_tag(), other.heap_type_tag()) {
+            (Some(TypeTag::String), Some(TypeTag::String)) => {
+                // Deep string comparison
+                self.as_string() == other.as_string()
+            }
+            // TODO: Deep equality for collections (lists, sets, dicts)
+            _ => false,
+        }
     }
 }
 
 impl Eq for Value {}
 
-// Implement Hash for Value
+// Implement Hash for Value with proper hashing for strings
 impl std::hash::Hash for Value {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // For now, simple hash of the bits
-        // TODO: Deep hashing for collections in Phase 8
-        self.0.hash(state);
+        // Hash based on type to ensure consistency with PartialEq
+        if let Some(s) = self.as_string() {
+            // Hash the string content
+            std::hash::Hash::hash(&TypeTag::String, state);
+            std::hash::Hash::hash(s, state);
+        } else {
+            // For non-strings, hash the raw bits
+            // TODO: Deep hashing for collections
+            std::hash::Hash::hash(&self.0, state);
+        }
     }
 }
 
@@ -79,7 +97,9 @@ impl Value {
     }
 
     pub fn is_nil(&self) -> bool {
-        (self.0 & TAG_MASK) == TAG_NIL
+        // Nil is exactly TAG_NIL, not just lower 3 bits matching
+        // This distinguishes nil from f64 values that happen to have 0b010 in lower bits
+        self.0 == TAG_NIL
     }
 
     // ===== Boolean Operations =====
@@ -90,8 +110,9 @@ impl Value {
     }
 
     pub fn is_boolean(&self) -> bool {
-        // Check if tag bits match TAG_BOOLEAN
-        (self.0 & TAG_MASK) == TAG_BOOLEAN
+        // Booleans are exactly TAG_BOOLEAN (false) or TAG_BOOLEAN | (1 << 3) (true)
+        // This distinguishes booleans from f64 values that happen to have 0b011 in lower bits
+        self.0 == TAG_BOOLEAN || self.0 == (TAG_BOOLEAN | (1 << 3))
     }
 
     pub fn as_bool(&self) -> Option<bool> {
@@ -140,6 +161,16 @@ impl Value {
         }
     }
 
+    /// Get the type tag of a heap object, or None if not a heap object
+    pub fn heap_type_tag(&self) -> Option<TypeTag> {
+        if self.is_heap_object() {
+            let header_ptr = self.0 as *const ObjectHeader;
+            unsafe { Some((*header_ptr).type_tag) }
+        } else {
+            None
+        }
+    }
+
     // ===== String Operations =====
 
     pub fn from_string(s: impl Into<String>) -> Self {
@@ -149,7 +180,8 @@ impl Value {
     }
 
     pub fn as_string(&self) -> Option<&str> {
-        if let Some(ptr) = self.as_heap_ptr::<StringObject>() {
+        if self.heap_type_tag() == Some(TypeTag::String) {
+            let ptr = self.0 as *const StringObject;
             unsafe { Some((*ptr).as_str()) }
         } else {
             None
@@ -158,7 +190,8 @@ impl Value {
 
     /// Get grapheme cluster at index (LANG.txt §3.3)
     pub fn grapheme_at(&self, index: usize) -> Option<&str> {
-        if let Some(ptr) = self.as_heap_ptr::<StringObject>() {
+        if self.heap_type_tag() == Some(TypeTag::String) {
+            let ptr = self.0 as *const StringObject;
             unsafe { (*ptr).grapheme_at(index) }
         } else {
             None
@@ -167,7 +200,8 @@ impl Value {
 
     /// Number of grapheme clusters in string
     pub fn grapheme_len(&self) -> usize {
-        if let Some(ptr) = self.as_heap_ptr::<StringObject>() {
+        if self.heap_type_tag() == Some(TypeTag::String) {
+            let ptr = self.0 as *const StringObject;
             unsafe { (*ptr).grapheme_len() }
         } else {
             0
@@ -183,7 +217,8 @@ impl Value {
     }
 
     pub fn as_list(&self) -> Option<&im::Vector<Value>> {
-        if let Some(ptr) = self.as_heap_ptr::<ListObject>() {
+        if self.heap_type_tag() == Some(TypeTag::List) {
+            let ptr = self.0 as *const ListObject;
             unsafe { Some(&(*ptr).data) }
         } else {
             None
@@ -199,7 +234,8 @@ impl Value {
     }
 
     pub fn as_set(&self) -> Option<&im::HashSet<Value>> {
-        if let Some(ptr) = self.as_heap_ptr::<SetObject>() {
+        if self.heap_type_tag() == Some(TypeTag::Set) {
+            let ptr = self.0 as *const SetObject;
             unsafe { Some(&(*ptr).data) }
         } else {
             None
@@ -215,7 +251,8 @@ impl Value {
     }
 
     pub fn as_dict(&self) -> Option<&im::HashMap<Value, Value>> {
-        if let Some(ptr) = self.as_heap_ptr::<DictObject>() {
+        if self.heap_type_tag() == Some(TypeTag::Dict) {
+            let ptr = self.0 as *const DictObject;
             unsafe { Some(&(*ptr).data) }
         } else {
             None
@@ -231,8 +268,11 @@ impl Value {
     }
 
     pub fn as_cell(&self) -> Option<*mut MutableCellObject> {
-        self.as_heap_ptr::<MutableCellObject>()
-            .map(|ptr| ptr as *mut MutableCellObject)
+        if self.heap_type_tag() == Some(TypeTag::MutableCell) {
+            Some(self.0 as *mut MutableCellObject)
+        } else {
+            None
+        }
     }
 
     // ===== Closure Operations =====
@@ -243,7 +283,8 @@ impl Value {
     }
 
     pub fn as_closure(&self) -> Option<&ClosureObject> {
-        if let Some(ptr) = self.as_heap_ptr::<ClosureObject>() {
+        if self.heap_type_tag() == Some(TypeTag::Closure) {
+            let ptr = self.0 as *const ClosureObject;
             unsafe { Some(&*ptr) }
         } else {
             None
@@ -251,7 +292,7 @@ impl Value {
     }
 
     pub fn is_closure(&self) -> bool {
-        self.as_closure().is_some()
+        self.heap_type_tag() == Some(TypeTag::Closure)
     }
 
     // ===== Truthiness (LANG.txt §14.1) =====

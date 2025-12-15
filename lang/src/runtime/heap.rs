@@ -4,7 +4,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 /// Type tag for heap-allocated objects
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypeTag {
     String,
     Decimal,       // Boxed decimal (for large values if needed)

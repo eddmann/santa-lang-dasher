@@ -1733,12 +1733,12 @@ fn builtin_collection_modification() { ... }
 
 ### Release Gate 10
 
-- [ ] All type conversion functions work per spec
-- [ ] Collection access handles all types
-- [ ] Collection modification is immutable (returns new)
-- [ ] Edge cases return nil (not errors) where specified
-- [ ] All tests pass
-- [ ] `cargo clippy` clean
+- [x] All type conversion functions work per spec
+- [x] Collection access handles all types
+- [x] Collection modification is immutable (returns new)
+- [x] Edge cases return nil (not errors) where specified
+- [x] All tests pass
+- [x] `cargo clippy` clean
 
 ---
 
