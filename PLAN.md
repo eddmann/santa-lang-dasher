@@ -2274,6 +2274,78 @@ Run all .santa files from examples directory using run-tests.sh.
 
 ---
 
+## Future Enhancements
+
+The following items are documented TODOs in the codebase. They are not required for MVP functionality but would improve completeness and performance.
+
+### Type System & Inference
+
+- [ ] Full type inference implementation (`infer_program` in `lang/src/types/infer.rs`)
+- [ ] Built-in function signatures for all 65 functions (`lang/src/types/builtins.rs`)
+- [ ] Closure parameter type inference from context
+- [ ] Pipeline/composition type propagation
+
+### Value System
+
+- [ ] Large integers (>51 bits) heap boxing (`runtime/src/value.rs`)
+- [ ] Deep equality for collections - lists, sets, dicts (`runtime/src/value.rs:34`)
+- [ ] Deep hashing for collections (`runtime/src/value.rs:52`)
+
+### Runtime Operations
+
+- [ ] List + List concatenation in `rt_add` (`runtime/src/operations.rs:98`)
+- [ ] Set + Set union in `rt_add`
+- [ ] Dict + Dict merge in `rt_add`
+- [ ] Decimal modulo support (`runtime/src/operations.rs:226`)
+- [ ] Collection string representations for puts/debugging (`runtime/src/operations.rs:449`)
+- [ ] Reference counting for Function, Closure, LazySequence types (`runtime/src/refcount.rs:92`)
+
+### Built-in Functions - Range/LazySequence Support
+
+Many built-in functions currently only support List, Set, Dict. The following need Range and/or LazySequence input support:
+
+- [ ] `list()` - Range/LazySequence to List conversion (`runtime/src/builtins.rs:143`)
+- [ ] `set()` - Range to Set conversion (`runtime/src/builtins.rs:181`)
+- [ ] `get()` - Range, LazySequence indexing (`runtime/src/builtins.rs:267`)
+- [ ] `size()` - Range (bounded only) (`runtime/src/builtins.rs:303`)
+- [ ] `first()` - Range support (`runtime/src/builtins.rs:349`)
+- [ ] `second()` - Range, LazySequence (`runtime/src/builtins.rs:382`)
+- [ ] `rest()` - Range (bounded only) (`runtime/src/builtins.rs:415`)
+- [ ] `last()` - Range, LazySequence (`runtime/src/builtins.rs:452`)
+- [ ] `keys()` - Range support (`runtime/src/builtins.rs:807`)
+- [ ] `values()` - Range support (`runtime/src/builtins.rs:897`)
+- [ ] `push()` - Range, LazySequence support (`runtime/src/builtins.rs:974`)
+- [ ] `assoc()` - Range, LazySequence support (`runtime/src/builtins.rs:1066`)
+- [ ] `update()` - Range, LazySequence support (`runtime/src/builtins.rs:1137`)
+- [ ] `filter()` - Range, LazySequence support (`runtime/src/builtins.rs:1510`)
+- [ ] `flat_map()` - Range support (`runtime/src/builtins.rs:1591`)
+- [ ] `find()` - Range, LazySequence support (`runtime/src/builtins.rs:1662`)
+- [ ] `count()` - Range, LazySequence support (`runtime/src/builtins.rs:1732`)
+- [ ] `sum()` - Range, LazySequence support (`runtime/src/builtins.rs:1816`)
+- [ ] `max()` - Range, LazySequence support (`runtime/src/builtins.rs:1870`)
+- [ ] `min()` - Range, LazySequence support (`runtime/src/builtins.rs:1902`)
+- [ ] `skip()` - Range support (`runtime/src/builtins.rs:1936`)
+- [ ] `take()` - Range support (`runtime/src/builtins.rs:2014`)
+- [ ] `chunk()` - Range, String support (`runtime/src/builtins.rs:2115`)
+- [ ] `union()` - Range, LazySequence support (`runtime/src/builtins.rs:2196`)
+- [ ] `intersection()` - Range, LazySequence support (`runtime/src/builtins.rs:2264`)
+- [ ] `sort()` - Range support (NOT LazySequence/Unbounded per spec) (`runtime/src/builtins.rs:2317`)
+- [ ] `reverse()` - Range, LazySequence support (`runtime/src/builtins.rs:2379`)
+
+### Error Handling
+
+- [ ] `reduce` on empty collection should return RuntimeErr (`runtime/src/builtins.rs:1171`)
+- [ ] `max` on empty collection should return RuntimeErr (`runtime/src/builtins.rs:1200`)
+- [ ] `min` on empty collection should return RuntimeErr (`runtime/src/builtins.rs:1221`)
+- [ ] Calling non-callable value should return RuntimeErr (`runtime/src/operations.rs:543`)
+- [ ] Division by zero detailed error message (`runtime/src/builtins.rs:3015`)
+
+### External Functions
+
+- [ ] HTTP/HTTPS fetching for `read()` (`runtime/src/builtins.rs:3734`)
+
+---
+
 ## Summary
 
 | Phase | Component            | Key Deliverable                           |
