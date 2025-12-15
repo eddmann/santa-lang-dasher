@@ -1,0 +1,40 @@
+// Test collection modification builtins
+// Tests: push, assoc, update, update_d
+
+// Test push on list
+let list1 = [1, 2, 3];
+let list2 = push(4, list1);
+
+// Test push on set
+let set1 = #{1, 2, 3};
+let set2 = push(4, set1);
+
+// Test assoc on list (replace)
+let list3 = assoc(0, 10, list1);
+
+// Test assoc on dict
+let dict1 = #{1: "one", 2: "two"};
+let dict2 = assoc(3, "three", dict1);
+
+// Test vec_add
+let vec1 = [1, 2, 3];
+let vec2 = [4, 5, 6];
+let vec_sum = vec_add(vec1, vec2);
+
+// Test bitwise operations
+// 10 = 0b1010, 12 = 0b1100
+let bit_and_result = bit_and(10, 12);
+let bit_or_result = bit_or(10, 12);
+let bit_xor_result = bit_xor(10, 12);
+let bit_not_result = bit_not(0);
+let bit_shl_result = bit_shift_left(1, 4);
+let bit_shr_result = bit_shift_right(16, 2);
+
+part_one: sum(list2) + size(set2) + first(list3) + size(dict2)
+part_two: first(vec_sum) + second(vec_sum) + last(vec_sum) + bit_and_result + bit_or_result + bit_xor_result + bit_shl_result + bit_shr_result
+
+test: {
+  input: nil
+  part_one: 10 + 4 + 10 + 3
+  part_two: 5 + 7 + 9 + 8 + 14 + 6 + 16 + 4
+}

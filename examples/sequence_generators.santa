@@ -1,0 +1,24 @@
+// Test sequence generator builtins
+// Tests: repeat, cycle, iterate
+
+// Note: list() for lazy sequences is not fully implemented yet,
+// so we use take() which does work with lazy sequences
+
+// Test repeat with take - returns a list directly
+let repeated = take(3, repeat(5));
+
+// Test cycle with take - returns a list directly
+let cycled = take(5, cycle([1, 2]));
+
+// Test iterate with take (generates 1, 2, 4, 8, 16, ...)
+let powers = take(5, iterate(|x| x * 2, 1));
+
+// All take() results are already lists, so we can sum them
+part_one: sum(repeated) + sum(cycled) + sum(powers)
+part_two: first(repeated) + last(cycled) + first(powers)
+
+test: {
+  input: nil
+  part_one: 15 + 7 + 31
+  part_two: 5 + 1 + 1
+}

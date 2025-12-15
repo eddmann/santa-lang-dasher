@@ -1,0 +1,24 @@
+// Conditional expressions test
+// Tests if-else and comparison operators
+
+part_one: if input > 0 { input * 2 } else { input * -1 }
+
+part_two: if input == 0 { 100 } else { if input < 0 { 0 } else { input } }
+
+test: {
+  input: 5
+  part_one: 10
+  part_two: 5
+}
+
+test: {
+  input: 0
+  part_one: 0
+  part_two: 100
+}
+
+test: {
+  input: -3
+  part_one: 3
+  part_two: 0
+}

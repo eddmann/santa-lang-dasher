@@ -1,0 +1,32 @@
+// Partial application tests
+// Tests placeholder syntax for creating functions
+
+// Basic partial application: _ + 1 creates |x| x + 1
+let inc = _ + 1;
+
+// _ - 1 creates |x| x - 1
+let dec = _ - 1;
+
+// _ * 2 creates |x| x * 2
+let double = _ * 2;
+
+part_one: inc(input)
+part_two: double(input)
+
+test: {
+  input: 5
+  part_one: 6
+  part_two: 10
+}
+
+test: {
+  input: 0
+  part_one: 1
+  part_two: 0
+}
+
+test: {
+  input: -3
+  part_one: -2
+  part_two: -6
+}

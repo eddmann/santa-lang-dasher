@@ -73,6 +73,12 @@ pub enum Expr {
 
     // Spread
     Spread(Box<Expr>),
+
+    // Assignment (for mutable variables)
+    Assignment {
+        name: String,
+        value: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -163,6 +169,7 @@ pub enum Section {
     PartOne(Expr),
     PartTwo(Expr),
     Test {
+        slow: bool,
         input: Expr,
         part_one: Option<Expr>,
         part_two: Option<Expr>,

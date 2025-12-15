@@ -59,12 +59,12 @@ is_excluded() {
 declare -a PASSED=() FAILED=() SKIPPED=() ERRORS=() TIMEOUTS=()
 
 # Build CLI
-echo -e "${BOLD}${CYAN}Building santa-cli...${NC}"
-cargo build --release -p santa-cli --manifest-path "$PROJECT_ROOT/Cargo.toml" 2>/dev/null || {
+echo -e "${BOLD}${CYAN}Building dasher...${NC}"
+cargo build --release -p dasher --manifest-path "$PROJECT_ROOT/Cargo.toml" 2>/dev/null || {
     echo -e "${RED}Build failed${NC}"; exit 1
 }
 
-CLI="$PROJECT_ROOT/target/release/santa-cli"
+CLI="$PROJECT_ROOT/target/release/dasher"
 
 # Check if CLI exists
 if [ ! -f "$CLI" ]; then

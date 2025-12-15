@@ -1,5 +1,5 @@
 [workspace]
-members = ["lang"]
+members = ["lang", "cli", "runtime", "benchmarks"]
 resolver = "2"
 
 [workspace.package]
@@ -13,4 +13,7 @@ im = { git = "ssh://git@github.com/eddmann/im-rs.git" }
 ordered-float = "4.2"
 unicode-segmentation = "1.10"
 regex = "1.10"
+md-5 = "0.10"  # Phase 14 (Built-ins) - MD5 hashing
+dirs = "5.0"  # Phase 19 (CLI) - Cross-platform directories
+clap = { version = "4.4", features = ["derive"] }  # Phase 19 (CLI) - Argument parsing
 expect-test = "1.5"

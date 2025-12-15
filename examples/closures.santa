@@ -1,0 +1,27 @@
+// Closure tests
+// Tests capturing variables and function composition
+
+let multiplier = |factor| |x| x * factor;
+let double = multiplier(2);
+let triple = multiplier(3);
+
+part_one: double(input)
+part_two: triple(input)
+
+test: {
+  input: 5
+  part_one: 10
+  part_two: 15
+}
+
+test: {
+  input: 0
+  part_one: 0
+  part_two: 0
+}
+
+test: {
+  input: -3
+  part_one: -6
+  part_two: -9
+}

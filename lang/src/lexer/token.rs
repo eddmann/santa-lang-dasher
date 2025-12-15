@@ -85,6 +85,7 @@ pub enum TokenKind {
     // Special
     Underscore,     // _ (placeholder/wildcard)
     DotDotIdent(String),  // ..rest (rest identifier)
+    At,             // @ (attribute marker)
 
     // Comments (lexed but typically filtered during parsing)
     Comment(String),

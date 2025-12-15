@@ -1,4 +1,4 @@
-use crate::runtime::value::Value;
+use crate::value::Value;
 use std::os::raw::c_char;
 
 /// Create a string Value from a C string pointer

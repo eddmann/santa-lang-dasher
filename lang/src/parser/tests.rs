@@ -300,15 +300,79 @@ fn parse_function_multiple_params() {
 #[test]
 fn parse_partial_application() {
     // Test partial application _ + 1
-    // This should parse as a Placeholder in an expression
+    // This should be transformed into a function |__arg_0| __arg_0 + 1
     let expr = parse_expr("_ + 1").unwrap();
     expect![[r#"
-        Infix {
-            left: Placeholder,
-            op: Add,
-            right: Integer(
-                1,
-            ),
+        Function {
+            params: [
+                Param {
+                    name: "__arg_0",
+                },
+            ],
+            body: Infix {
+                left: Identifier(
+                    "__arg_0",
+                ),
+                op: Add,
+                right: Integer(
+                    1,
+                ),
+            },
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_partial_application_multiple_placeholders() {
+    // Test partial application with multiple placeholders _ / _
+    // This should be transformed into a function |__arg_0, __arg_1| __arg_0 / __arg_1
+    let expr = parse_expr("_ / _").unwrap();
+    expect![[r#"
+        Function {
+            params: [
+                Param {
+                    name: "__arg_0",
+                },
+                Param {
+                    name: "__arg_1",
+                },
+            ],
+            body: Infix {
+                left: Identifier(
+                    "__arg_0",
+                ),
+                op: Divide,
+                right: Identifier(
+                    "__arg_1",
+                ),
+            },
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_partial_application_right_operand() {
+    // Test partial application with placeholder on right: 10 - _
+    // This should be transformed into a function |__arg_0| 10 - __arg_0
+    let expr = parse_expr("10 - _").unwrap();
+    expect![[r#"
+        Function {
+            params: [
+                Param {
+                    name: "__arg_0",
+                },
+            ],
+            body: Infix {
+                left: Integer(
+                    10,
+                ),
+                op: Subtract,
+                right: Identifier(
+                    "__arg_0",
+                ),
+            },
         }
     "#]]
     .assert_debug_eq(&expr);
@@ -331,6 +395,36 @@ fn parse_call_expression() {
                     2,
                 ),
             ],
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_call_expression_zero_args() {
+    // Test function call with zero arguments f()
+    let expr = parse_expr("f()").unwrap();
+    expect![[r#"
+        Call {
+            function: Identifier(
+                "f",
+            ),
+            args: [],
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_time_nanos_call() {
+    // Test parsing __time_nanos()
+    let expr = parse_expr("__time_nanos()").unwrap();
+    expect![[r#"
+        Call {
+            function: Identifier(
+                "__time_nanos",
+            ),
+            args: [],
         }
     "#]]
     .assert_debug_eq(&expr);
@@ -484,15 +578,66 @@ fn parse_composition() {
 fn parse_let_binding() {
     // Test simple let binding: let x = 42;
     let stmt = parse_stmt("let x = 42").unwrap();
+}
+
+#[test]
+fn parse_let_binding_with_lambda() {
+    // Test let binding with lambda value
+    let stmt = parse_stmt("let f = |x| x + 1").unwrap();
     expect![[r#"
         Let {
             mutable: false,
             pattern: Identifier(
-                "x",
+                "f",
             ),
-            value: Integer(
-                42,
+            value: Function {
+                params: [
+                    Param {
+                        name: "x",
+                    },
+                ],
+                body: Infix {
+                    left: Identifier(
+                        "x",
+                    ),
+                    op: Add,
+                    right: Integer(
+                        1,
+                    ),
+                },
+            },
+        }
+    "#]]
+    .assert_debug_eq(&stmt);
+}
+
+#[test]
+fn parse_memoize_call() {
+    // Test memoize call: memoize |x| x
+    let stmt = parse_stmt("let identity = memoize |x| x").unwrap();
+    expect![[r#"
+        Let {
+            mutable: false,
+            pattern: Identifier(
+                "identity",
             ),
+            value: Call {
+                function: Identifier(
+                    "memoize",
+                ),
+                args: [
+                    Function {
+                        params: [
+                            Param {
+                                name: "x",
+                            },
+                        ],
+                        body: Identifier(
+                            "x",
+                        ),
+                    },
+                ],
+            },
         }
     "#]]
     .assert_debug_eq(&stmt);
@@ -856,6 +1001,7 @@ test: {
             statements: [],
             sections: [
                 Test {
+                    slow: false,
                     input: String(
                         "test data",
                     ),
@@ -1033,3 +1179,108 @@ fn parse_dict_shorthand() {
     "#]]
     .assert_debug_eq(&expr);
 }
+
+#[test]
+fn parse_slow_test_attribute() {
+    // Test @slow attribute on test sections
+    let source = r#"
+@slow
+test: {
+  input: "test data"
+  part_one: 100
+}
+"#;
+    let tokens = lex(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+
+    expect![[r#"
+        Program {
+            statements: [],
+            sections: [
+                Test {
+                    slow: true,
+                    input: String(
+                        "test data",
+                    ),
+                    part_one: Some(
+                        Integer(
+                            100,
+                        ),
+                    ),
+                    part_two: None,
+                },
+            ],
+        }
+    "#]]
+    .assert_debug_eq(&program);
+}
+
+// Phase 13: break statement tests
+
+#[test]
+fn parse_break_statement_simple() {
+    // Test simple break statement: break acc
+    let stmt = parse_stmt("break acc").unwrap();
+    expect![[r#"
+        Break(
+            Identifier(
+                "acc",
+            ),
+        )
+    "#]]
+    .assert_debug_eq(&stmt);
+}
+
+#[test]
+fn parse_break_in_block() {
+    // Test break inside a block: { break 42 }
+    let expr = parse_expr("{ break 42 }").unwrap();
+    expect![[r#"
+        Block(
+            [
+                Break(
+                    Integer(
+                        42,
+                    ),
+                ),
+            ],
+        )
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_break_in_if_block() {
+    // Test break in if-else: if cond { break x } else { y }
+    let expr = parse_expr("if cond { break x } else { y }").unwrap();
+    expect![[r#"
+        If {
+            condition: Identifier(
+                "cond",
+            ),
+            then_branch: Block(
+                [
+                    Break(
+                        Identifier(
+                            "x",
+                        ),
+                    ),
+                ],
+            ),
+            else_branch: Some(
+                Block(
+                    [
+                        Expr(
+                            Identifier(
+                                "y",
+                            ),
+                        ),
+                    ],
+                ),
+            ),
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+

@@ -75,10 +75,25 @@ impl Lexer {
             '"' => self.lex_string()?,
             // Identifiers and keywords
             'a'..='z' | 'A'..='Z' => self.lex_identifier_or_keyword()?,
-            // Underscore (wildcard or start of rest identifier)
+            // Underscore (wildcard, identifier, or start of rest identifier)
             '_' => {
                 self.advance();
-                TokenKind::Underscore
+                // Check if this is a bare underscore or part of an identifier
+                if !self.is_at_end() {
+                    let next = self.peek();
+                    if next.is_ascii_alphanumeric() || next == '_' || next == '?' {
+                        // It's an identifier starting with underscore (like _foo, __time_nanos)
+                        let mut name = String::from("_");
+                        name.push_str(&self.lex_identifier_name()?);
+                        TokenKind::Identifier(name)
+                    } else {
+                        // Just a bare underscore (wildcard/placeholder)
+                        TokenKind::Underscore
+                    }
+                } else {
+                    // Underscore at end of input
+                    TokenKind::Underscore
+                }
             }
             // Single-character operators
             '+' => {
@@ -237,6 +252,10 @@ impl Lexer {
             '`' => {
                 self.advance();
                 TokenKind::Backtick
+            }
+            '@' => {
+                self.advance();
+                TokenKind::At
             }
             _ => {
                 return Err(LexError::UnexpectedCharacter {

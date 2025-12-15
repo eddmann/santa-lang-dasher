@@ -1,5 +1,5 @@
 use crate::types::{TypedExpr, Type};
-use crate::parser::ast::{Expr, InfixOp, PrefixOp, Stmt, Pattern, Param};
+use crate::parser::ast::{Expr, InfixOp, PrefixOp, Stmt, Pattern, Param, MatchArm, Literal};
 use inkwell::values::BasicValueEnum;
 use inkwell::IntPredicate;
 use super::context::CodegenContext;
@@ -10,6 +10,53 @@ pub enum CompileError {
     UnsupportedExpression(String),
     UnsupportedStatement(String),
     UnsupportedPattern(String),
+    ProtectedName(String),
+}
+
+/// List of protected built-in function names that cannot be shadowed.
+/// Per LANG.txt §14.6: "Built-in functions are protected and cannot be shadowed"
+const PROTECTED_BUILTINS: &[&str] = &[
+    // Type conversion (§11.1)
+    "int", "ints", "list", "set", "dict",
+    // Collection access (§11.2)
+    "get", "size", "first", "second", "last", "rest", "keys", "values",
+    // Collection modification (§11.3)
+    "push", "assoc", "update", "update_d",
+    // Transformation (§11.4)
+    "map", "filter", "flat_map", "filter_map", "find_map",
+    // Reduction (§11.5)
+    "reduce", "fold", "fold_s", "scan",
+    // Iteration (§11.6)
+    "each",
+    // Search (§11.7)
+    "find", "count",
+    // Aggregation (§11.8)
+    "sum", "max", "min",
+    // Sequence manipulation (§11.9)
+    "skip", "take", "sort", "reverse", "rotate", "chunk",
+    // Set operations (§11.10)
+    "union", "intersection",
+    // Membership (§11.11)
+    "includes?", "excludes?", "any?", "all?",
+    // Sequence generators (§11.12)
+    "zip", "repeat", "cycle", "iterate", "combinations", "range",
+    // String functions (§11.14)
+    "lines", "split", "regex_match", "regex_match_all", "md5",
+    "upper", "lower", "replace", "join",
+    // Math functions (§11.15)
+    "abs", "signum", "vec_add",
+    // Bitwise functions (§4.5)
+    "bit_and", "bit_or", "bit_xor", "bit_not", "bit_shift_left", "bit_shift_right",
+    // Utility functions (§11.16)
+    "id", "type", "memoize", "or", "and",
+    // External functions (§13)
+    "puts", "read",
+    // Note: "evaluate" excluded since it's out of scope for Dasher (AOT limitation)
+];
+
+/// Check if a name is a protected built-in that cannot be shadowed
+fn is_protected_builtin(name: &str) -> bool {
+    PROTECTED_BUILTINS.contains(&name)
 }
 
 impl<'ctx> CodegenContext<'ctx> {
@@ -24,7 +71,18 @@ impl<'ctx> CodegenContext<'ctx> {
                 // Look up the variable and load its value
                 if let Some(alloca) = self.variables.get(name) {
                     let load = self.builder.build_load(self.context.i64_type(), *alloca, name).unwrap();
-                    Ok(load)
+                    // If this is a cell variable, unwrap the cell to get the actual value
+                    if self.cell_variables.contains(name) {
+                        let rt_cell_get = self.get_or_declare_rt_cell_get();
+                        let cell_val = self.builder.build_call(
+                            rt_cell_get,
+                            &[load.into()],
+                            &format!("{}_unwrap", name),
+                        ).unwrap();
+                        Ok(cell_val.try_as_basic_value().left().unwrap())
+                    } else {
+                        Ok(load)
+                    }
                 } else {
                     Err(CompileError::UnsupportedExpression(
                         format!("Undefined variable: {}", name)
@@ -64,9 +122,52 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::Call { function, args } => {
                 self.compile_call(function, args)
             },
+            Expr::Match { subject, arms } => {
+                self.compile_match(subject, arms)
+            },
+            Expr::Assignment { name, value } => {
+                self.compile_assignment(name, value)
+            },
             _ => Err(CompileError::UnsupportedExpression(
                 format!("Expression type not yet implemented: {:?}", expr.expr)
             )),
+        }
+    }
+
+    /// Compile an assignment expression (for mutable variables)
+    fn compile_assignment(&mut self, name: &str, value: &Expr) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Look up the variable
+        let alloca = self.variables.get(name).cloned().ok_or_else(|| {
+            CompileError::UnsupportedExpression(format!("Undefined variable for assignment: {}", name))
+        })?;
+
+        // Compile the value expression
+        let value_ty = self.infer_expr_type(value);
+        let value_typed = TypedExpr {
+            expr: value.clone(),
+            ty: value_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        let compiled_value = self.compile_expr(&value_typed)?;
+
+        // If this is a cell variable, use rt_cell_set instead of direct store
+        if self.cell_variables.contains(name) {
+            // Load the cell, then set its value
+            let cell = self.builder.build_load(self.context.i64_type(), alloca, &format!("{}_cell", name)).unwrap();
+            let rt_cell_set = self.get_or_declare_rt_cell_set();
+            let result = self.builder.build_call(
+                rt_cell_set,
+                &[cell.into(), compiled_value.into()],
+                &format!("{}_set", name),
+            ).unwrap();
+            Ok(result.try_as_basic_value().left().unwrap())
+        } else {
+            // Direct store for non-cell variables
+            self.builder.build_store(alloca, compiled_value).unwrap();
+            Ok(compiled_value)
         }
     }
 
@@ -256,6 +357,11 @@ impl<'ctx> CodegenContext<'ctx> {
         right: &Expr,
         _result_ty: &Type,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Pipeline operator: x |> f transforms to f(x)
+        if *op == InfixOp::Pipeline {
+            return self.compile_pipeline(left, right);
+        }
+
         // For now, infer types of sub-expressions based on the structure
         // In a full implementation, these would come from the type inference pass
         let left_ty = self.infer_expr_type(left);
@@ -385,6 +491,17 @@ impl<'ctx> CodegenContext<'ctx> {
                 Ok(call_result.try_as_basic_value().left().unwrap())
             }
         }
+    }
+
+    /// Compile a pipeline operation: x |> f transforms to f(x)
+    fn compile_pipeline(
+        &mut self,
+        value: &Expr,
+        function: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Pipeline transforms x |> f into f(x)
+        // Create a Call expression with function and [value] as args
+        self.compile_call(function, std::slice::from_ref(value))
     }
 
     /// Get or declare the rt_add runtime function
@@ -927,11 +1044,11 @@ impl<'ctx> CodegenContext<'ctx> {
         };
         let index_val = self.compile_expr(&index_typed)?;
 
-        // Call rt_index(collection, index)
-        let rt_index = self.get_or_declare_rt_index();
+        // Call rt_get(index, collection)
+        let rt_get = self.get_or_declare_rt_get();
         let call_result = self.builder.build_call(
-            rt_index,
-            &[collection_val.into(), index_val.into()],
+            rt_get,
+            &[index_val.into(), collection_val.into()],
             "index"
         ).unwrap();
 
@@ -1036,6 +1153,35 @@ impl<'ctx> CodegenContext<'ctx> {
             return Ok(self.compile_nil());
         }
 
+        // Save the current cell_variables set to restore later
+        let saved_cell_vars = self.cell_variables.clone();
+        // Save the current variables to restore after block (for proper shadowing)
+        let saved_variables = self.variables.clone();
+
+        // Pre-analyze block to find mutable variables that will be captured by nested closures
+        // First, collect all mutable variables that will be declared in this block
+        let mut mutable_vars: HashSet<String> = HashSet::new();
+        for stmt in stmts {
+            if let Stmt::Let { mutable: true, pattern: Pattern::Identifier(name), .. } = stmt {
+                mutable_vars.insert(name.clone());
+            }
+        }
+
+        // Now analyze the block to find which mutable vars are captured by nested closures
+        let bound_vars: HashSet<String> = self.variables.keys().cloned().collect();
+        for stmt in stmts {
+            match stmt {
+                Stmt::Let { value, .. } => {
+                    let captures = self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
+                    self.cell_variables.extend(captures);
+                }
+                Stmt::Expr(expr) | Stmt::Return(expr) | Stmt::Break(expr) => {
+                    let captures = self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
+                    self.cell_variables.extend(captures);
+                }
+            }
+        }
+
         let mut last_val = None;
 
         for (i, stmt) in stmts.iter().enumerate() {
@@ -1062,28 +1208,942 @@ impl<'ctx> CodegenContext<'ctx> {
                         last_val = Some(val);
                     }
                 }
-                Stmt::Return(_) | Stmt::Break(_) => {
+                Stmt::Return(_) => {
                     return Err(CompileError::UnsupportedStatement(
-                        "Return and break not yet supported in blocks".to_string()
+                        "Return not yet supported in blocks".to_string()
                     ));
+                }
+                Stmt::Break(expr) => {
+                    // Compile the break value expression
+                    let break_ty = self.infer_expr_type(expr);
+                    let break_typed = TypedExpr {
+                        expr: expr.clone(),
+                        ty: break_ty,
+                        span: crate::lexer::token::Span::new(
+                            crate::lexer::token::Position::new(0, 0),
+                            crate::lexer::token::Position::new(0, 0),
+                        ),
+                    };
+                    let break_val = self.compile_expr(&break_typed)?;
+
+                    // Call rt_break to signal break and store the value
+                    let rt_break = self.get_or_declare_rt_break();
+                    let result = self.builder.build_call(
+                        rt_break,
+                        &[break_val.into()],
+                        "break_result",
+                    ).unwrap();
+
+                    // Return from the current function with the break value
+                    self.builder.build_return(Some(&result.try_as_basic_value().left().unwrap())).unwrap();
+
+                    // Create a new basic block for any code after break (unreachable)
+                    let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let unreachable_block = self.context.append_basic_block(func, "after_break");
+                    self.builder.position_at_end(unreachable_block);
                 }
             }
         }
+
+        // Restore the cell_variables set (local cell vars should not leak out)
+        self.cell_variables = saved_cell_vars;
+        // Restore the variables to restore proper scoping (inner scope variables go out of scope)
+        self.variables = saved_variables;
 
         // Return the last expression value, or nil if the last statement wasn't an expression
         Ok(last_val.unwrap_or_else(|| self.compile_nil()))
     }
 
-    /// Get or declare the rt_index runtime function
-    fn get_or_declare_rt_index(&self) -> inkwell::values::FunctionValue<'ctx> {
-        let fn_name = "rt_index";
+    /// Get or declare the rt_get runtime function for indexing
+    fn get_or_declare_rt_get(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_get";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // rt_get(index: Value, collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_size runtime function
+    fn get_or_declare_rt_size(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_size";
         if let Some(func) = self.module.get_function(fn_name) {
             return func;
         }
 
         let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    fn get_or_declare_rt_skip(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_skip";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // rt_skip(count: Value, collection: Value) -> Value
+        let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
         self.module.add_function(fn_name, fn_type, None)
+    }
+
+    fn get_or_declare_rt_take(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_take";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // rt_take(count: Value, collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    // ===== Phase 16: Pattern Matching =====
+
+    /// Compile a match expression
+    ///
+    /// Generates a decision tree of comparisons and branches for each arm.
+    /// Each arm is checked in order, and the first matching pattern's body is executed.
+    fn compile_match(
+        &mut self,
+        subject: &Expr,
+        arms: &[MatchArm],
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Get the current function
+        let current_fn = self.builder.get_insert_block()
+            .and_then(|bb| bb.get_parent())
+            .ok_or_else(|| CompileError::UnsupportedExpression(
+                "match expression requires a function context".to_string()
+            ))?;
+
+        // Compile the subject expression
+        let subject_ty = self.infer_expr_type(subject);
+        let subject_typed = TypedExpr {
+            expr: subject.clone(),
+            ty: subject_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        let subject_val = self.compile_expr(&subject_typed)?;
+
+        // Create the merge block where all arms converge
+        let merge_bb = self.context.append_basic_block(current_fn, "match_merge");
+
+        // Track incoming values for the phi node
+        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
+
+        // Create blocks for each arm
+        let arm_blocks: Vec<_> = arms.iter().enumerate()
+            .map(|(i, _)| self.context.append_basic_block(current_fn, &format!("match_arm_{}", i)))
+            .collect();
+
+        // Create a fallthrough block for when no pattern matches (returns nil)
+        let no_match_bb = self.context.append_basic_block(current_fn, "match_no_match");
+
+        // Generate pattern tests - each test branches to arm body on match, or continues to next test
+        // We need to create test blocks for each arm (separate from body blocks)
+        let test_blocks: Vec<_> = arms.iter().enumerate()
+            .map(|(i, _)| self.context.append_basic_block(current_fn, &format!("match_test_{}", i)))
+            .collect();
+
+        // Branch from current position to first test block
+        self.builder.build_unconditional_branch(test_blocks[0]).unwrap();
+
+        // Generate pattern tests and branches for each arm
+        for (i, arm) in arms.iter().enumerate() {
+            let arm_bb = arm_blocks[i];
+            let next_bb = if i + 1 < test_blocks.len() {
+                test_blocks[i + 1]
+            } else {
+                no_match_bb
+            };
+
+            // Position builder at this arm's test block
+            self.builder.position_at_end(test_blocks[i]);
+
+            // Build pattern match test and conditional branch
+            self.compile_pattern_test(&arm.pattern, subject_val, arm_bb, next_bb, &arm.guard)?;
+        }
+
+        // Compile the body for each arm that matches
+        for (i, arm) in arms.iter().enumerate() {
+            self.builder.position_at_end(arm_blocks[i]);
+
+            // Save current variables for scoping
+            let saved_variables = self.variables.clone();
+
+            // Bind pattern variables
+            self.bind_pattern_variables(&arm.pattern, subject_val)?;
+
+            // Compile the body
+            let body_ty = self.infer_expr_type(&arm.body);
+            let body_typed = TypedExpr {
+                expr: arm.body.clone(),
+                ty: body_ty,
+                span: crate::lexer::token::Span::new(
+                    crate::lexer::token::Position::new(0, 0),
+                    crate::lexer::token::Position::new(0, 0),
+                ),
+            };
+            let body_val = self.compile_expr(&body_typed)?;
+
+            // Restore variables (pattern bindings go out of scope)
+            self.variables = saved_variables;
+
+            // Get current block BEFORE branching (builder position changes after branch)
+            let current_bb = self.builder.get_insert_block().unwrap();
+
+            // Branch to merge
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+            incoming.push((body_val, current_bb));
+        }
+
+        // No match fallthrough - return nil
+        self.builder.position_at_end(no_match_bb);
+        let nil_val = self.compile_nil();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        incoming.push((nil_val, no_match_bb));
+
+        // Merge block with phi
+        self.builder.position_at_end(merge_bb);
+        let phi = self.builder.build_phi(self.context.i64_type(), "match_result").unwrap();
+        for (val, bb) in incoming {
+            phi.add_incoming(&[(&val, bb)]);
+        }
+
+        Ok(phi.as_basic_value())
+    }
+
+    /// Compile a pattern test and branch to the appropriate block
+    fn compile_pattern_test(
+        &mut self,
+        pattern: &Pattern,
+        subject: BasicValueEnum<'ctx>,
+        match_bb: inkwell::basic_block::BasicBlock<'ctx>,
+        no_match_bb: inkwell::basic_block::BasicBlock<'ctx>,
+        guard: &Option<Expr>,
+    ) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Wildcard => {
+                // Wildcard always matches
+                if let Some(guard_expr) = guard {
+                    // Bind pattern variables first (none for wildcard, but still need to check guard)
+                    let guard_ty = self.infer_expr_type(guard_expr);
+                    let guard_typed = TypedExpr {
+                        expr: guard_expr.clone(),
+                        ty: guard_ty,
+                        span: crate::lexer::token::Span::new(
+                            crate::lexer::token::Position::new(0, 0),
+                            crate::lexer::token::Position::new(0, 0),
+                        ),
+                    };
+                    let guard_val = self.compile_expr(&guard_typed)?;
+                    let guard_bool = self.value_to_bool(guard_val);
+                    self.builder.build_conditional_branch(guard_bool, match_bb, no_match_bb).unwrap();
+                } else {
+                    self.builder.build_unconditional_branch(match_bb).unwrap();
+                }
+            }
+            Pattern::Identifier(_) => {
+                // Identifier pattern always matches (binds subject to name)
+                if let Some(guard_expr) = guard {
+                    // Need to bind the identifier first so guard can reference it
+                    let saved_variables = self.variables.clone();
+                    self.bind_pattern_variables(pattern, subject)?;
+
+                    let guard_ty = self.infer_expr_type(guard_expr);
+                    let guard_typed = TypedExpr {
+                        expr: guard_expr.clone(),
+                        ty: guard_ty,
+                        span: crate::lexer::token::Span::new(
+                            crate::lexer::token::Position::new(0, 0),
+                            crate::lexer::token::Position::new(0, 0),
+                        ),
+                    };
+                    let guard_val = self.compile_expr(&guard_typed)?;
+                    let guard_bool = self.value_to_bool(guard_val);
+
+                    // Restore variables (they'll be re-bound in the arm body)
+                    self.variables = saved_variables;
+
+                    self.builder.build_conditional_branch(guard_bool, match_bb, no_match_bb).unwrap();
+                } else {
+                    self.builder.build_unconditional_branch(match_bb).unwrap();
+                }
+            }
+            Pattern::Literal(lit) => {
+                // Compare subject to literal
+                let lit_val = self.compile_literal(lit);
+                let rt_eq = self.get_or_declare_rt_eq();
+                let eq_result = self.builder.build_call(
+                    rt_eq,
+                    &[subject.into(), lit_val.into()],
+                    "eq_result",
+                ).unwrap();
+                let eq_val = eq_result.try_as_basic_value().left().unwrap();
+                let eq_bool = self.value_to_bool(eq_val);
+
+                if let Some(guard_expr) = guard {
+                    // Create a guard test block
+                    let current_fn = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let guard_bb = self.context.append_basic_block(current_fn, "guard_test");
+
+                    // Branch to guard test if pattern matches, else to no_match
+                    self.builder.build_conditional_branch(eq_bool, guard_bb, no_match_bb).unwrap();
+
+                    // In guard block, test the guard
+                    self.builder.position_at_end(guard_bb);
+                    let guard_ty = self.infer_expr_type(guard_expr);
+                    let guard_typed = TypedExpr {
+                        expr: guard_expr.clone(),
+                        ty: guard_ty,
+                        span: crate::lexer::token::Span::new(
+                            crate::lexer::token::Position::new(0, 0),
+                            crate::lexer::token::Position::new(0, 0),
+                        ),
+                    };
+                    let guard_val = self.compile_expr(&guard_typed)?;
+                    let guard_bool = self.value_to_bool(guard_val);
+                    self.builder.build_conditional_branch(guard_bool, match_bb, no_match_bb).unwrap();
+                } else {
+                    self.builder.build_conditional_branch(eq_bool, match_bb, no_match_bb).unwrap();
+                }
+            }
+            Pattern::Range { start, end, inclusive } => {
+                // Check if subject is >= start and (< end or <= end depending on inclusive)
+                let start_val = self.compile_integer(*start);
+                let subject_int = subject.into_int_value();
+                let start_int = start_val.into_int_value();
+
+                // subject >= start
+                let ge_start = self.builder.build_int_compare(
+                    IntPredicate::SGE,
+                    subject_int,
+                    start_int,
+                    "ge_start"
+                ).unwrap();
+
+                let in_range = if let Some(e) = end {
+                    let end_val = self.compile_integer(*e);
+                    let end_int = end_val.into_int_value();
+
+                    let cmp = if *inclusive {
+                        // subject <= end
+                        self.builder.build_int_compare(IntPredicate::SLE, subject_int, end_int, "le_end").unwrap()
+                    } else {
+                        // subject < end
+                        self.builder.build_int_compare(IntPredicate::SLT, subject_int, end_int, "lt_end").unwrap()
+                    };
+
+                    // Combine: subject >= start AND subject </<=end
+                    self.builder.build_and(ge_start, cmp, "in_range").unwrap()
+                } else {
+                    // Unbounded end: just subject >= start
+                    ge_start
+                };
+
+                if let Some(guard_expr) = guard {
+                    let current_fn = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let guard_bb = self.context.append_basic_block(current_fn, "guard_test");
+                    self.builder.build_conditional_branch(in_range, guard_bb, no_match_bb).unwrap();
+
+                    self.builder.position_at_end(guard_bb);
+                    let guard_ty = self.infer_expr_type(guard_expr);
+                    let guard_typed = TypedExpr {
+                        expr: guard_expr.clone(),
+                        ty: guard_ty,
+                        span: crate::lexer::token::Span::new(
+                            crate::lexer::token::Position::new(0, 0),
+                            crate::lexer::token::Position::new(0, 0),
+                        ),
+                    };
+                    let guard_val = self.compile_expr(&guard_typed)?;
+                    let guard_bool = self.value_to_bool(guard_val);
+                    self.builder.build_conditional_branch(guard_bool, match_bb, no_match_bb).unwrap();
+                } else {
+                    self.builder.build_conditional_branch(in_range, match_bb, no_match_bb).unwrap();
+                }
+            }
+            Pattern::List(patterns) => {
+                // List pattern matching:
+                // 1. Check if subject is a list (via rt_size not returning 0 for non-collections)
+                // 2. Check length matches expected count (if no rest pattern)
+                // 3. Check each element matches its pattern
+
+                // Count non-rest patterns and find rest pattern position
+                let mut fixed_count = 0usize;
+                let mut has_rest = false;
+                let mut rest_position = None;
+                for (i, p) in patterns.iter().enumerate() {
+                    if matches!(p, Pattern::RestIdentifier(_)) {
+                        has_rest = true;
+                        rest_position = Some(i);
+                    } else {
+                        fixed_count += 1;
+                    }
+                }
+
+                // Get subject's length
+                let rt_size = self.get_or_declare_rt_size();
+                let size_result = self.builder.build_call(
+                    rt_size,
+                    &[subject.into()],
+                    "list_size",
+                ).unwrap();
+                let size_val = size_result.try_as_basic_value().left().unwrap();
+
+                // Extract the integer value from tagged result (shift right by 3)
+                let size_int = size_val.into_int_value();
+                let actual_len = self.builder.build_right_shift(
+                    size_int,
+                    self.context.i64_type().const_int(3, false),
+                    false,
+                    "actual_len"
+                ).unwrap();
+
+                let expected_len = self.context.i64_type().const_int(fixed_count as u64, false);
+
+                // Check length
+                let len_ok = if has_rest {
+                    // With rest pattern: actual_len >= fixed_count
+                    self.builder.build_int_compare(
+                        IntPredicate::UGE,
+                        actual_len,
+                        expected_len,
+                        "len_ge"
+                    ).unwrap()
+                } else {
+                    // Without rest: actual_len == patterns.len()
+                    self.builder.build_int_compare(
+                        IntPredicate::EQ,
+                        actual_len,
+                        expected_len,
+                        "len_eq"
+                    ).unwrap()
+                };
+
+                // If length doesn't match, go to no_match
+                let current_fn = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                let check_elements_bb = self.context.append_basic_block(current_fn, "check_elements");
+                self.builder.build_conditional_branch(len_ok, check_elements_bb, no_match_bb).unwrap();
+
+                // Check each element pattern
+                self.builder.position_at_end(check_elements_bb);
+
+                // For now, just match on fixed patterns (not rest)
+                // We check elements from the start and from the end
+                //
+                // For rest pattern at any position:
+                // - Elements before rest: access at index i (from start)
+                // - Elements after rest: access at index (length - patterns_after_rest + offset)
+                //   where offset is the position within after-rest elements (0, 1, 2, ...)
+                //
+                // Example: [first, ..middle, last] with list [1,2,3,4,5]
+                //   first -> index 0
+                //   last -> index (5 - 1) = 4  (patterns_after_rest = 1, offset = 0)
+
+                // Count patterns after rest
+                let patterns_after_rest = if let Some(rest_pos) = rest_position {
+                    patterns.len() - rest_pos - 1
+                } else {
+                    0
+                };
+
+                let mut elem_idx = 0usize;
+                let mut after_rest_offset = 0usize;
+                for (i, p) in patterns.iter().enumerate() {
+                    if matches!(p, Pattern::RestIdentifier(_)) {
+                        continue; // Skip rest pattern in matching
+                    }
+
+                    // Determine the actual index to check
+                    let is_after_rest = rest_position.is_some_and(|pos| i > pos);
+
+                    // Get element at computed index
+                    let elem_val = if is_after_rest {
+                        // Element after rest: compute index from end
+                        // index = actual_len - (patterns_after_rest - after_rest_offset)
+                        let offset_from_end = (patterns_after_rest - after_rest_offset) as u64;
+                        let idx_from_end = self.builder.build_int_sub(
+                            actual_len,
+                            self.context.i64_type().const_int(offset_from_end, false),
+                            "idx_from_end"
+                        ).unwrap();
+
+                        let rt_get = self.get_or_declare_rt_get();
+                        // Convert to tagged integer for rt_get
+                        let tagged_idx = self.builder.build_left_shift(
+                            idx_from_end,
+                            self.context.i64_type().const_int(3, false),
+                            "shift_idx"
+                        ).unwrap();
+                        let tagged_idx = self.builder.build_or(
+                            tagged_idx,
+                            self.context.i64_type().const_int(0b001, false),
+                            "tag_idx"
+                        ).unwrap();
+
+                        let elem_result = self.builder.build_call(
+                            rt_get,
+                            &[tagged_idx.into(), subject.into()],
+                            &format!("elem_from_end_{}", after_rest_offset),
+                        ).unwrap();
+                        after_rest_offset += 1;
+                        elem_result.try_as_basic_value().left().unwrap()
+                    } else {
+                        // Element before rest (or no rest): use direct index
+                        let idx_val = self.compile_integer(i as i64);
+                        let rt_get = self.get_or_declare_rt_get();
+                        let elem_result = self.builder.build_call(
+                            rt_get,
+                            &[idx_val.into(), subject.into()],
+                            &format!("elem_{}", i),
+                        ).unwrap();
+                        elem_result.try_as_basic_value().left().unwrap()
+                    };
+
+                    // Check if element matches pattern
+                    match p {
+                        Pattern::Wildcard | Pattern::Identifier(_) => {
+                            // Always matches - continue to next element
+                        }
+                        Pattern::Literal(lit) => {
+                            // Compare element to literal
+                            let lit_val = self.compile_literal(lit);
+                            let rt_eq = self.get_or_declare_rt_eq();
+                            let eq_result = self.builder.build_call(
+                                rt_eq,
+                                &[elem_val.into(), lit_val.into()],
+                                "elem_eq",
+                            ).unwrap();
+                            let eq_val = eq_result.try_as_basic_value().left().unwrap();
+                            let eq_bool = self.value_to_bool(eq_val);
+
+                            // If element doesn't match, fail
+                            let next_bb = self.context.append_basic_block(current_fn, &format!("check_elem_{}", elem_idx + 1));
+                            self.builder.build_conditional_branch(eq_bool, next_bb, no_match_bb).unwrap();
+                            self.builder.position_at_end(next_bb);
+                        }
+                        Pattern::List(nested_patterns) => {
+                            // Nested list pattern - recursively check the nested pattern
+                            // We already have elem_val from above
+
+                            // Check the nested list's length
+                            let nested_size_result = self.builder.build_call(
+                                rt_size,
+                                &[elem_val.into()],
+                                "nested_size",
+                            ).unwrap();
+                            let nested_size_val = nested_size_result.try_as_basic_value().left().unwrap();
+                            let nested_size_int = nested_size_val.into_int_value();
+                            let nested_actual_len = self.builder.build_right_shift(
+                                nested_size_int,
+                                self.context.i64_type().const_int(3, false),
+                                false,
+                                "nested_actual_len"
+                            ).unwrap();
+
+                            // Count fixed patterns in nested list (excluding rest patterns)
+                            let mut nested_fixed_count = 0usize;
+                            let mut nested_has_rest = false;
+                            for np in nested_patterns.iter() {
+                                if matches!(np, Pattern::RestIdentifier(_)) {
+                                    nested_has_rest = true;
+                                } else {
+                                    nested_fixed_count += 1;
+                                }
+                            }
+
+                            let nested_expected_len = self.context.i64_type().const_int(nested_fixed_count as u64, false);
+                            let nested_len_ok = if nested_has_rest {
+                                self.builder.build_int_compare(
+                                    IntPredicate::UGE,
+                                    nested_actual_len,
+                                    nested_expected_len,
+                                    "nested_len_ge"
+                                ).unwrap()
+                            } else {
+                                self.builder.build_int_compare(
+                                    IntPredicate::EQ,
+                                    nested_actual_len,
+                                    nested_expected_len,
+                                    "nested_len_eq"
+                                ).unwrap()
+                            };
+
+                            // If nested length doesn't match, fail
+                            let nested_check_bb = self.context.append_basic_block(current_fn, &format!("check_nested_{}", i));
+                            self.builder.build_conditional_branch(nested_len_ok, nested_check_bb, no_match_bb).unwrap();
+                            self.builder.position_at_end(nested_check_bb);
+
+                            // Check each element in the nested pattern
+                            let rt_get_nested = self.get_or_declare_rt_get();
+                            for (ni, np) in nested_patterns.iter().enumerate() {
+                                match np {
+                                    Pattern::Wildcard | Pattern::Identifier(_) => {
+                                        // Always matches - continue
+                                    }
+                                    Pattern::Literal(lit) => {
+                                        // Compare nested element to literal
+                                        let nested_idx_val = self.compile_integer(ni as i64);
+                                        let nested_elem_result = self.builder.build_call(
+                                            rt_get_nested,
+                                            &[nested_idx_val.into(), elem_val.into()],
+                                            &format!("nested_elem_{}_{}", i, ni),
+                                        ).unwrap();
+                                        let nested_elem_val = nested_elem_result.try_as_basic_value().left().unwrap();
+
+                                        let lit_val = self.compile_literal(lit);
+                                        let rt_eq = self.get_or_declare_rt_eq();
+                                        let eq_result = self.builder.build_call(
+                                            rt_eq,
+                                            &[nested_elem_val.into(), lit_val.into()],
+                                            "nested_elem_eq",
+                                        ).unwrap();
+                                        let eq_val_cmp = eq_result.try_as_basic_value().left().unwrap();
+                                        let eq_bool = self.value_to_bool(eq_val_cmp);
+
+                                        let next_nested_bb = self.context.append_basic_block(current_fn, &format!("check_nested_elem_{}_{}", i, ni + 1));
+                                        self.builder.build_conditional_branch(eq_bool, next_nested_bb, no_match_bb).unwrap();
+                                        self.builder.position_at_end(next_nested_bb);
+                                    }
+                                    Pattern::RestIdentifier(_) => {
+                                        // Skip rest pattern in matching
+                                    }
+                                    _ => {
+                                        return Err(CompileError::UnsupportedPattern(
+                                            format!("Deeply nested pattern not yet supported: {:?}", np)
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            // Other patterns in list
+                            return Err(CompileError::UnsupportedPattern(
+                                format!("Pattern type not supported in list: {:?}", p)
+                            ));
+                        }
+                    }
+
+                    elem_idx += 1;
+                }
+
+                // All elements matched - check guard if present
+                if let Some(guard_expr) = guard {
+                    // Bind variables for guard evaluation
+                    let saved_variables = self.variables.clone();
+                    self.bind_pattern_variables(pattern, subject)?;
+
+                    let guard_ty = self.infer_expr_type(guard_expr);
+                    let guard_typed = TypedExpr {
+                        expr: guard_expr.clone(),
+                        ty: guard_ty,
+                        span: crate::lexer::token::Span::new(
+                            crate::lexer::token::Position::new(0, 0),
+                            crate::lexer::token::Position::new(0, 0),
+                        ),
+                    };
+                    let guard_val = self.compile_expr(&guard_typed)?;
+                    let guard_bool = self.value_to_bool(guard_val);
+
+                    self.variables = saved_variables;
+                    self.builder.build_conditional_branch(guard_bool, match_bb, no_match_bb).unwrap();
+                } else {
+                    self.builder.build_unconditional_branch(match_bb).unwrap();
+                }
+            }
+            Pattern::RestIdentifier(_) => {
+                // Rest pattern can only appear inside a list pattern
+                return Err(CompileError::UnsupportedPattern(
+                    "Rest pattern (..) can only appear inside list patterns".to_string()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Bind pattern variables to the subject value
+    fn bind_pattern_variables(
+        &mut self,
+        pattern: &Pattern,
+        subject: BasicValueEnum<'ctx>,
+    ) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Wildcard => {
+                // Nothing to bind
+                Ok(())
+            }
+            Pattern::Identifier(name) => {
+                // Bind the subject to this name
+                let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
+                self.builder.build_store(alloca, subject).unwrap();
+                self.variables.insert(name.clone(), alloca);
+                Ok(())
+            }
+            Pattern::Literal(_) | Pattern::Range { .. } => {
+                // No variables to bind
+                Ok(())
+            }
+            Pattern::List(patterns) => {
+                // Bind variables in list patterns
+                // First find the rest pattern position (if any)
+                let mut rest_position = None;
+                for (i, p) in patterns.iter().enumerate() {
+                    if matches!(p, Pattern::RestIdentifier(_)) {
+                        rest_position = Some(i);
+                        break;
+                    }
+                }
+
+                // Count patterns after rest
+                let patterns_after_rest = if let Some(rest_pos) = rest_position {
+                    patterns.len() - rest_pos - 1
+                } else {
+                    0
+                };
+
+                // Get subject's length for computing indices from end
+                let rt_size = self.get_or_declare_rt_size();
+                let size_result = self.builder.build_call(
+                    rt_size,
+                    &[subject.into()],
+                    "subject_size",
+                ).unwrap();
+                let size_val = size_result.try_as_basic_value().left().unwrap();
+                let size_int = size_val.into_int_value();
+                let actual_len = self.builder.build_right_shift(
+                    size_int,
+                    self.context.i64_type().const_int(3, false),
+                    false,
+                    "actual_len"
+                ).unwrap();
+
+                let mut after_rest_offset = 0usize;
+                for (i, p) in patterns.iter().enumerate() {
+                    let is_after_rest = rest_position.is_some_and(|pos| i > pos);
+
+                    match p {
+                        Pattern::Identifier(name) => {
+                            // Compute index based on position relative to rest
+                            let elem_val = if is_after_rest {
+                                // Element after rest: compute index from end
+                                let offset_from_end = (patterns_after_rest - after_rest_offset) as u64;
+                                let idx_from_end = self.builder.build_int_sub(
+                                    actual_len,
+                                    self.context.i64_type().const_int(offset_from_end, false),
+                                    "idx_from_end"
+                                ).unwrap();
+
+                                // Convert to tagged integer
+                                let tagged_idx = self.builder.build_left_shift(
+                                    idx_from_end,
+                                    self.context.i64_type().const_int(3, false),
+                                    "shift_idx"
+                                ).unwrap();
+                                let tagged_idx = self.builder.build_or(
+                                    tagged_idx,
+                                    self.context.i64_type().const_int(0b001, false),
+                                    "tag_idx"
+                                ).unwrap();
+
+                                let rt_get = self.get_or_declare_rt_get();
+                                let elem_result = self.builder.build_call(
+                                    rt_get,
+                                    &[tagged_idx.into(), subject.into()],
+                                    &format!("elem_from_end_{}", after_rest_offset),
+                                ).unwrap();
+                                after_rest_offset += 1;
+                                elem_result.try_as_basic_value().left().unwrap()
+                            } else {
+                                // Element before rest (or no rest): use direct index
+                                let idx_val = self.compile_integer(i as i64);
+                                let rt_get = self.get_or_declare_rt_get();
+                                let elem_result = self.builder.build_call(
+                                    rt_get,
+                                    &[idx_val.into(), subject.into()],
+                                    &format!("elem_{}", i),
+                                ).unwrap();
+                                elem_result.try_as_basic_value().left().unwrap()
+                            };
+
+                            let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
+                            self.builder.build_store(alloca, elem_val).unwrap();
+                            self.variables.insert(name.clone(), alloca);
+                        }
+                        Pattern::RestIdentifier(name) => {
+                            // Bind the rest of the list to this name
+                            // We need to slice from current position (i) to (len - patterns_after_rest)
+                            // Use rt_skip to skip the first 'i' elements
+                            let rt_skip = self.get_or_declare_rt_skip();
+                            let skip_count = self.compile_integer(i as i64);
+                            let after_skip = self.builder.build_call(
+                                rt_skip,
+                                &[skip_count.into(), subject.into()],
+                                "after_skip",
+                            ).unwrap();
+                            let after_skip_val = after_skip.try_as_basic_value().left().unwrap();
+
+                            // Now take (len - patterns_after_rest - i) elements from after_skip
+                            // That's (actual_len - patterns_after_rest - i) elements
+                            // But we can compute: we want actual_len - i - patterns_after_rest
+                            let total_skip = self.context.i64_type().const_int(
+                                (i + patterns_after_rest) as u64, false
+                            );
+                            let rest_len = self.builder.build_int_sub(
+                                actual_len,
+                                total_skip,
+                                "rest_len"
+                            ).unwrap();
+
+                            // Convert to tagged integer
+                            let tagged_rest_len = self.builder.build_left_shift(
+                                rest_len,
+                                self.context.i64_type().const_int(3, false),
+                                "shift_rest_len"
+                            ).unwrap();
+                            let tagged_rest_len = self.builder.build_or(
+                                tagged_rest_len,
+                                self.context.i64_type().const_int(0b001, false),
+                                "tag_rest_len"
+                            ).unwrap();
+
+                            let rt_take = self.get_or_declare_rt_take();
+                            let rest_result = self.builder.build_call(
+                                rt_take,
+                                &[tagged_rest_len.into(), after_skip_val.into()],
+                                "rest_val",
+                            ).unwrap();
+                            let rest_val = rest_result.try_as_basic_value().left().unwrap();
+
+                            let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
+                            self.builder.build_store(alloca, rest_val).unwrap();
+                            self.variables.insert(name.clone(), alloca);
+                        }
+                        Pattern::Wildcard | Pattern::Literal(_) => {
+                            // No binding needed
+                            if is_after_rest {
+                                after_rest_offset += 1;
+                            }
+                        }
+                        Pattern::List(nested_patterns) => {
+                            // Nested list - get the element first (considering rest position)
+                            let nested_elem = if is_after_rest {
+                                // Element after rest: compute index from end
+                                let offset_from_end = (patterns_after_rest - after_rest_offset) as u64;
+                                let idx_from_end = self.builder.build_int_sub(
+                                    actual_len,
+                                    self.context.i64_type().const_int(offset_from_end, false),
+                                    "nested_idx_from_end"
+                                ).unwrap();
+
+                                let tagged_idx = self.builder.build_left_shift(
+                                    idx_from_end,
+                                    self.context.i64_type().const_int(3, false),
+                                    "shift_nested_idx"
+                                ).unwrap();
+                                let tagged_idx = self.builder.build_or(
+                                    tagged_idx,
+                                    self.context.i64_type().const_int(0b001, false),
+                                    "tag_nested_idx"
+                                ).unwrap();
+
+                                let rt_get = self.get_or_declare_rt_get();
+                                let nested_elem_result = self.builder.build_call(
+                                    rt_get,
+                                    &[tagged_idx.into(), subject.into()],
+                                    &format!("nested_elem_from_end_{}", after_rest_offset),
+                                ).unwrap();
+                                after_rest_offset += 1;
+                                nested_elem_result.try_as_basic_value().left().unwrap()
+                            } else {
+                                let idx_val = self.compile_integer(i as i64);
+                                let rt_get = self.get_or_declare_rt_get();
+                                let nested_elem_result = self.builder.build_call(
+                                    rt_get,
+                                    &[idx_val.into(), subject.into()],
+                                    &format!("nested_elem_{}", i),
+                                ).unwrap();
+                                nested_elem_result.try_as_basic_value().left().unwrap()
+                            };
+
+                            // Then bind variables in the nested pattern
+                            let rt_get_inner = self.get_or_declare_rt_get();
+                            for (ni, np) in nested_patterns.iter().enumerate() {
+                                match np {
+                                    Pattern::Identifier(name) => {
+                                        // Get element at index within nested list
+                                        let nested_idx_val = self.compile_integer(ni as i64);
+                                        let elem_result = self.builder.build_call(
+                                            rt_get_inner,
+                                            &[nested_idx_val.into(), nested_elem.into()],
+                                            &format!("nested_elem_{}_{}", i, ni),
+                                        ).unwrap();
+                                        let elem_val = elem_result.try_as_basic_value().left().unwrap();
+
+                                        let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
+                                        self.builder.build_store(alloca, elem_val).unwrap();
+                                        self.variables.insert(name.clone(), alloca);
+                                    }
+                                    Pattern::Wildcard | Pattern::Literal(_) | Pattern::RestIdentifier(_) => {
+                                        // No binding needed
+                                    }
+                                    Pattern::List(_) => {
+                                        // Deeply nested list - for now return error
+                                        return Err(CompileError::UnsupportedPattern(
+                                            "Deeply nested list pattern binding not yet implemented".to_string()
+                                        ));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(())
+            }
+            Pattern::RestIdentifier(_) => {
+                // Rest pattern on its own - shouldn't happen
+                Ok(())
+            }
+        }
+    }
+
+    /// Compile a literal value
+    fn compile_literal(&mut self, lit: &Literal) -> BasicValueEnum<'ctx> {
+        match lit {
+            Literal::Integer(n) => self.compile_integer(*n),
+            Literal::Decimal(f) => self.compile_decimal(*f),
+            Literal::Boolean(b) => self.compile_boolean(*b),
+            Literal::String(s) => self.compile_string(s).unwrap_or_else(|_| self.compile_nil()),
+            Literal::Nil => self.compile_nil(),
+        }
+    }
+
+    /// Convert a NaN-boxed value to a boolean for conditional branching
+    fn value_to_bool(&self, value: BasicValueEnum<'ctx>) -> inkwell::values::IntValue<'ctx> {
+        // Extract the boolean from NaN-boxed value
+        // Boolean tag is 0b010, value is in upper bits
+        let int_val = value.into_int_value();
+        let shifted = self.builder.build_right_shift(
+            int_val,
+            self.context.i64_type().const_int(3, false),
+            false,
+            "shift"
+        ).unwrap();
+        self.builder.build_int_truncate(
+            shifted,
+            self.context.bool_type(),
+            "to_bool"
+        ).unwrap()
     }
 
     /// Compile a statement
@@ -1101,29 +2161,68 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Compile a let binding
-    fn compile_let(&mut self, pattern: &Pattern, value: &Expr, _mutable: bool) -> Result<(), CompileError> {
+    fn compile_let(&mut self, pattern: &Pattern, value: &Expr, mutable: bool) -> Result<(), CompileError> {
         match pattern {
             Pattern::Identifier(name) => {
-                // Compile the value expression
-                let value_ty = self.infer_expr_type(value);
-                let value_typed = TypedExpr {
-                    expr: value.clone(),
-                    ty: value_ty,
-                    span: crate::lexer::token::Span::new(
-                        crate::lexer::token::Position::new(0, 0),
-                        crate::lexer::token::Position::new(0, 0),
-                    ),
-                };
-                let value_compiled = self.compile_expr(&value_typed)?;
+                // Check if trying to shadow a protected built-in name
+                if is_protected_builtin(name) {
+                    return Err(CompileError::ProtectedName(name.clone()));
+                }
 
-                // Create an alloca for the variable at the entry block
+                // For recursive function bindings, we need to pre-allocate the variable
+                // so the function body can reference itself
+                let is_function = matches!(value, Expr::Function { .. });
+
+                // Check if this mutable variable needs to be cell-wrapped
+                // (because it will be captured by a nested closure)
+                let needs_cell = mutable && self.cell_variables.contains(name);
+
+                // Pre-allocate space for the variable (enables self-reference for closures)
                 let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
 
-                // Store the value
-                self.builder.build_store(alloca, value_compiled).unwrap();
+                if is_function {
+                    // Register the variable BEFORE compiling the function
+                    // This allows the function body to capture a reference to itself
+                    self.variables.insert(name.clone(), alloca);
+                }
 
-                // Register the variable
-                self.variables.insert(name.clone(), alloca);
+                // Compile the value expression
+                // For functions, pass the binding name for TCO support
+                let value_compiled = if let Expr::Function { params, body } = value {
+                    self.compile_function_with_name(params, body, Some(name.clone()))?
+                } else {
+                    let value_ty = self.infer_expr_type(value);
+                    let value_typed = TypedExpr {
+                        expr: value.clone(),
+                        ty: value_ty,
+                        span: crate::lexer::token::Span::new(
+                            crate::lexer::token::Position::new(0, 0),
+                            crate::lexer::token::Position::new(0, 0),
+                        ),
+                    };
+                    self.compile_expr(&value_typed)?
+                };
+
+                // If this is a cell variable, wrap the value in a cell
+                let final_value = if needs_cell {
+                    let rt_cell_new = self.get_or_declare_rt_cell_new();
+                    let cell = self.builder.build_call(
+                        rt_cell_new,
+                        &[value_compiled.into()],
+                        &format!("{}_cell", name),
+                    ).unwrap();
+                    cell.try_as_basic_value().left().unwrap()
+                } else {
+                    value_compiled
+                };
+
+                // Store the value (or cell)
+                self.builder.build_store(alloca, final_value).unwrap();
+
+                // Register the variable (for non-functions, or update if already registered)
+                if !is_function {
+                    self.variables.insert(name.clone(), alloca);
+                }
 
                 Ok(())
             }
@@ -1134,6 +2233,7 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     // ===== Phase 9: Closures & Function Calls =====
+    // ===== Phase 15: Tail-Call Optimization =====
 
     /// Compile a function expression into a closure
     ///
@@ -1144,6 +2244,20 @@ impl<'ctx> CodegenContext<'ctx> {
         &mut self,
         params: &[Param],
         body: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Anonymous function - no TCO self-name
+        self.compile_function_with_name(params, body, None)
+    }
+
+    /// Compile a function expression with optional self-name for TCO
+    ///
+    /// When `self_name` is provided, enables tail-call optimization for
+    /// self-recursive calls within the function body.
+    fn compile_function_with_name(
+        &mut self,
+        params: &[Param],
+        body: &Expr,
+        self_name: Option<String>,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Generate a unique name for this closure function
         static CLOSURE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1168,11 +2282,17 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Create the closure function
         let closure_fn = self.module.add_function(&closure_name, closure_fn_type, None);
-        let entry_block = self.context.append_basic_block(closure_fn, "entry");
 
-        // Save current builder position
+        // For TCO: Create a "start" block that loads parameters, then jumps to "body"
+        // For tail calls, we jump back to "body" after updating parameter allocas
+        let entry_block = self.context.append_basic_block(closure_fn, "entry");
+        let body_block = self.context.append_basic_block(closure_fn, "body");
+
+        // Save current builder position and state
         let saved_block = self.builder.get_insert_block();
         let saved_variables = self.variables.clone();
+        let saved_tco_state = self.tco_state.clone();
+        let saved_cell_vars = self.cell_variables.clone();
 
         // Position builder at the closure function's entry
         self.builder.position_at_end(entry_block);
@@ -1184,6 +2304,20 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Clear variables for the closure's scope
         self.variables.clear();
+
+        // Determine which captured variables are cells (they were cell vars in the outer scope)
+        // These need to remain as cell vars in this scope too
+        // NOTE: We use the CURRENT cell_variables (not saved_cell_vars) because the outer
+        // scope's block analysis may have added cell vars AFTER we saved the state.
+        let outer_cell_vars = self.cell_variables.clone();
+        let captured_cell_vars: HashSet<String> = captured_vars.iter()
+            .filter(|name| outer_cell_vars.contains(*name))
+            .cloned()
+            .collect();
+        self.cell_variables = captured_cell_vars;
+
+        // Track parameter allocas for TCO
+        let mut param_allocas = Vec::new();
 
         // Load parameters from argv into local variables
         for (i, param) in params.iter().enumerate() {
@@ -1205,6 +2339,7 @@ impl<'ctx> CodegenContext<'ctx> {
             let alloca = self.builder.build_alloca(i64_type, &param.name).unwrap();
             self.builder.build_store(alloca, arg_val).unwrap();
             self.variables.insert(param.name.clone(), alloca);
+            param_allocas.push(alloca);
         }
 
         // Load captured variables from the closure environment
@@ -1226,22 +2361,27 @@ impl<'ctx> CodegenContext<'ctx> {
             self.variables.insert(var_name.clone(), alloca);
         }
 
-        // Compile the body
-        let body_ty = self.infer_expr_type(body);
-        let body_typed = TypedExpr {
-            expr: body.clone(),
-            ty: body_ty,
-            span: crate::lexer::token::Span::new(
-                crate::lexer::token::Position::new(0, 0),
-                crate::lexer::token::Position::new(0, 0),
-            ),
-        };
-        let body_result = self.compile_expr(&body_typed)?;
+        // Jump from entry to body (for TCO, tail calls will jump directly to body_block)
+        self.builder.build_unconditional_branch(body_block).unwrap();
+
+        // Position at the body block
+        self.builder.position_at_end(body_block);
+
+        // Set up TCO state for compiling the body
+        self.tco_state = Some(super::context::TcoState {
+            self_name,
+            entry_block: body_block,  // Tail calls jump to body_block
+            param_allocas,
+        });
+
+        // Compile the body (in tail position - any self-recursive calls here are tail calls)
+        let body_result = self.compile_expr_in_tail_position(body)?;
 
         // Return the result
         self.builder.build_return(Some(&body_result)).unwrap();
 
-        // Restore builder position and variables
+        // Restore builder position and state
+        self.tco_state = saved_tco_state;
         if let Some(block) = saved_block {
             self.builder.position_at_end(block);
         }
@@ -1285,8 +2425,9 @@ impl<'ctx> CodegenContext<'ctx> {
             self.builder.build_pointer_cast(array_alloca, ptr_type, "captures_ptr").unwrap()
         };
 
-        // Now restore self.variables
+        // Now restore self.variables and cell_variables
         self.variables = saved_variables;
+        self.cell_variables = saved_cell_vars;
 
         let captures_count_val = self.context.i64_type().const_int(captures_count as u64, false);
 
@@ -1298,6 +2439,397 @@ impl<'ctx> CodegenContext<'ctx> {
         ).unwrap();
 
         Ok(closure_result.try_as_basic_value().left().unwrap())
+    }
+
+    /// Compile an expression in tail position (for TCO)
+    ///
+    /// When in tail position and we encounter a self-recursive call,
+    /// we can optimize it to a jump instead of a call.
+    fn compile_expr_in_tail_position(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        match expr {
+            // If expressions: both branches are in tail position
+            Expr::If { condition, then_branch, else_branch } => {
+                self.compile_if_tail(condition, then_branch, else_branch.as_deref())
+            }
+            // Match expressions: arm bodies are in tail position
+            Expr::Match { subject, arms } => {
+                self.compile_match_tail(subject, arms)
+            }
+            // Function calls might be tail calls
+            Expr::Call { function, args } => {
+                // Check if this is a self-recursive tail call
+                if let Some(ref tco) = self.tco_state {
+                    if let (Some(ref self_name), Expr::Identifier(name)) = (&tco.self_name, function.as_ref()) {
+                        if name == self_name && args.len() == tco.param_allocas.len() {
+                            // This is a self-recursive tail call! Optimize it.
+                            return self.compile_tail_call(args);
+                        }
+                    }
+                }
+                // Not a tail call, compile normally
+                self.compile_call(function, args)
+            }
+            // Blocks: last expression is in tail position
+            Expr::Block(stmts) => {
+                self.compile_block_tail(stmts)
+            }
+            // All other expressions compile normally
+            _ => {
+                let ty = self.infer_expr_type(expr);
+                let typed = TypedExpr {
+                    expr: expr.clone(),
+                    ty,
+                    span: crate::lexer::token::Span::new(
+                        crate::lexer::token::Position::new(0, 0),
+                        crate::lexer::token::Position::new(0, 0),
+                    ),
+                };
+                self.compile_expr(&typed)
+            }
+        }
+    }
+
+    /// Compile an optimized tail call (jump instead of call)
+    fn compile_tail_call(&mut self, args: &[Expr]) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        let tco = self.tco_state.clone().unwrap();
+
+        // First, evaluate all arguments to temporaries
+        // (We must do this BEFORE updating param allocas, in case args reference params)
+        let mut arg_values = Vec::new();
+        for arg in args {
+            let arg_ty = self.infer_expr_type(arg);
+            let arg_typed = TypedExpr {
+                expr: arg.clone(),
+                ty: arg_ty,
+                span: crate::lexer::token::Span::new(
+                    crate::lexer::token::Position::new(0, 0),
+                    crate::lexer::token::Position::new(0, 0),
+                ),
+            };
+            let val = self.compile_expr(&arg_typed)?;
+            arg_values.push(val);
+        }
+
+        // Now update param allocas with new values
+        for (alloca, val) in tco.param_allocas.iter().zip(arg_values.iter()) {
+            self.builder.build_store(*alloca, *val).unwrap();
+        }
+
+        // Jump to the body block
+        self.builder.build_unconditional_branch(tco.entry_block).unwrap();
+
+        // Create a new block for any code after this (unreachable, but LLVM needs it)
+        let current_fn = self.builder.get_insert_block()
+            .and_then(|bb| bb.get_parent())
+            .ok_or_else(|| CompileError::UnsupportedExpression(
+                "tail call requires a function context".to_string()
+            ))?;
+        let unreachable_bb = self.context.append_basic_block(current_fn, "unreachable");
+        self.builder.position_at_end(unreachable_bb);
+
+        // Return a dummy value (this code is unreachable)
+        Ok(self.compile_nil())
+    }
+
+    /// Compile an if expression with tail-position awareness
+    fn compile_if_tail(
+        &mut self,
+        condition: &Expr,
+        then_branch: &Expr,
+        else_branch: Option<&Expr>,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Get the current function
+        let current_fn = self.builder.get_insert_block()
+            .and_then(|bb| bb.get_parent())
+            .ok_or_else(|| CompileError::UnsupportedExpression(
+                "if expression requires a function context".to_string()
+            ))?;
+
+        // Compile the condition
+        let cond_ty = self.infer_expr_type(condition);
+        let cond_typed = TypedExpr {
+            expr: condition.clone(),
+            ty: cond_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        let cond_val = self.compile_expr(&cond_typed)?;
+
+        // Extract boolean from NaN-boxed value
+        let cond_int = cond_val.into_int_value();
+        let shifted = self.builder.build_right_shift(
+            cond_int,
+            self.context.i64_type().const_int(3, false),
+            false,
+            "shift"
+        ).unwrap();
+        let cond_bool = self.builder.build_int_truncate(
+            shifted,
+            self.context.bool_type(),
+            "to_bool"
+        ).unwrap();
+
+        // Create basic blocks
+        let then_bb = self.context.append_basic_block(current_fn, "then");
+        let else_bb = self.context.append_basic_block(current_fn, "else");
+        let merge_bb = self.context.append_basic_block(current_fn, "merge");
+
+        // Branch based on condition
+        self.builder.build_conditional_branch(cond_bool, then_bb, else_bb).unwrap();
+
+        // Compile then branch (in tail position)
+        self.builder.position_at_end(then_bb);
+        let then_val = self.compile_expr_in_tail_position(then_branch)?;
+        // Check if we need a branch to merge (tail calls don't)
+        let then_needs_branch = self.builder.get_insert_block()
+            .map(|bb| bb.get_terminator().is_none())
+            .unwrap_or(false);
+        if then_needs_branch {
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+        let then_end_bb = self.builder.get_insert_block().unwrap();
+
+        // Compile else branch (in tail position)
+        self.builder.position_at_end(else_bb);
+        let else_val = if let Some(else_expr) = else_branch {
+            self.compile_expr_in_tail_position(else_expr)?
+        } else {
+            self.compile_nil()
+        };
+        let else_needs_branch = self.builder.get_insert_block()
+            .map(|bb| bb.get_terminator().is_none())
+            .unwrap_or(false);
+        if else_needs_branch {
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+        let else_end_bb = self.builder.get_insert_block().unwrap();
+
+        // Merge block with phi node
+        self.builder.position_at_end(merge_bb);
+
+        // Only add phi incoming if the branch doesn't have a terminator (wasn't a tail call)
+        let phi = self.builder.build_phi(self.context.i64_type(), "if_result").unwrap();
+        if then_needs_branch {
+            phi.add_incoming(&[(&then_val, then_end_bb)]);
+        }
+        if else_needs_branch {
+            phi.add_incoming(&[(&else_val, else_end_bb)]);
+        }
+
+        Ok(phi.as_basic_value())
+    }
+
+    /// Compile a match expression with arm bodies in tail position (for TCO)
+    ///
+    /// Similar to `compile_match` but arm bodies are compiled with tail-position awareness.
+    fn compile_match_tail(
+        &mut self,
+        subject: &Expr,
+        arms: &[MatchArm],
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Get the current function
+        let current_fn = self.builder.get_insert_block()
+            .and_then(|bb| bb.get_parent())
+            .ok_or_else(|| CompileError::UnsupportedExpression(
+                "match expression requires a function context".to_string()
+            ))?;
+
+        // Compile the subject expression
+        let subject_ty = self.infer_expr_type(subject);
+        let subject_typed = TypedExpr {
+            expr: subject.clone(),
+            ty: subject_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        let subject_val = self.compile_expr(&subject_typed)?;
+
+        // Create the merge block where all arms converge
+        let merge_bb = self.context.append_basic_block(current_fn, "match_merge");
+
+        // Track incoming values for the phi node
+        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
+
+        // Create blocks for each arm
+        let arm_blocks: Vec<_> = arms.iter().enumerate()
+            .map(|(i, _)| self.context.append_basic_block(current_fn, &format!("match_arm_{}", i)))
+            .collect();
+
+        // Create a fallthrough block for when no pattern matches (returns nil)
+        let no_match_bb = self.context.append_basic_block(current_fn, "match_no_match");
+
+        // Generate pattern tests
+        let test_blocks: Vec<_> = arms.iter().enumerate()
+            .map(|(i, _)| self.context.append_basic_block(current_fn, &format!("match_test_{}", i)))
+            .collect();
+
+        // Branch from current position to first test block
+        self.builder.build_unconditional_branch(test_blocks[0]).unwrap();
+
+        // Generate pattern tests and branches for each arm
+        for (i, arm) in arms.iter().enumerate() {
+            let arm_bb = arm_blocks[i];
+            let next_bb = if i + 1 < test_blocks.len() {
+                test_blocks[i + 1]
+            } else {
+                no_match_bb
+            };
+
+            self.builder.position_at_end(test_blocks[i]);
+            self.compile_pattern_test(&arm.pattern, subject_val, arm_bb, next_bb, &arm.guard)?;
+        }
+
+        // Compile the body for each arm IN TAIL POSITION
+        for (i, arm) in arms.iter().enumerate() {
+            self.builder.position_at_end(arm_blocks[i]);
+
+            // Save current variables for scoping
+            let saved_variables = self.variables.clone();
+
+            // Bind pattern variables
+            self.bind_pattern_variables(&arm.pattern, subject_val)?;
+
+            // Compile the body IN TAIL POSITION
+            let body_val = self.compile_expr_in_tail_position(&arm.body)?;
+
+            // Restore variables (pattern bindings go out of scope)
+            self.variables = saved_variables;
+
+            // Check if we need a branch to merge (tail calls don't need it)
+            let needs_branch = self.builder.get_insert_block()
+                .map(|bb| bb.get_terminator().is_none())
+                .unwrap_or(false);
+
+            if needs_branch {
+                let current_bb = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                incoming.push((body_val, current_bb));
+            }
+        }
+
+        // No match fallthrough - return nil
+        self.builder.position_at_end(no_match_bb);
+        let nil_val = self.compile_nil();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        incoming.push((nil_val, no_match_bb));
+
+        // Merge block with phi
+        self.builder.position_at_end(merge_bb);
+        let phi = self.builder.build_phi(self.context.i64_type(), "match_result").unwrap();
+        for (val, bb) in incoming {
+            phi.add_incoming(&[(&val, bb)]);
+        }
+
+        Ok(phi.as_basic_value())
+    }
+
+    /// Compile a block with the last expression in tail position
+    fn compile_block_tail(&mut self, stmts: &[Stmt]) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        if stmts.is_empty() {
+            return Ok(self.compile_nil());
+        }
+
+        // Save the current cell_variables set to restore later
+        let saved_cell_vars = self.cell_variables.clone();
+        // Save the current variables to restore after block (for proper shadowing)
+        let saved_variables = self.variables.clone();
+
+        // Pre-analyze block to find mutable variables that will be captured by nested closures
+        let mut mutable_vars: HashSet<String> = HashSet::new();
+        for stmt in stmts {
+            if let Stmt::Let { mutable: true, pattern: Pattern::Identifier(name), .. } = stmt {
+                mutable_vars.insert(name.clone());
+            }
+        }
+
+        // Analyze the block to find which mutable vars are captured by nested closures
+        let bound_vars: HashSet<String> = self.variables.keys().cloned().collect();
+        for stmt in stmts {
+            match stmt {
+                Stmt::Let { value, .. } => {
+                    let captures = self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
+                    self.cell_variables.extend(captures);
+                }
+                Stmt::Expr(expr) | Stmt::Return(expr) | Stmt::Break(expr) => {
+                    let captures = self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
+                    self.cell_variables.extend(captures);
+                }
+            }
+        }
+
+        let mut last_val = None;
+
+        for (i, stmt) in stmts.iter().enumerate() {
+            let is_last = i == stmts.len() - 1;
+
+            match stmt {
+                Stmt::Let { .. } => {
+                    self.compile_stmt(stmt)?;
+                }
+                Stmt::Expr(expr) => {
+                    if is_last {
+                        // Last expression is in tail position
+                        last_val = Some(self.compile_expr_in_tail_position(expr)?);
+                    } else {
+                        let expr_ty = self.infer_expr_type(expr);
+                        let expr_typed = TypedExpr {
+                            expr: expr.clone(),
+                            ty: expr_ty,
+                            span: crate::lexer::token::Span::new(
+                                crate::lexer::token::Position::new(0, 0),
+                                crate::lexer::token::Position::new(0, 0),
+                            ),
+                        };
+                        self.compile_expr(&expr_typed)?;
+                    }
+                }
+                Stmt::Return(_) => {
+                    return Err(CompileError::UnsupportedStatement(
+                        "Return not yet supported in blocks".to_string()
+                    ));
+                }
+                Stmt::Break(expr) => {
+                    // Compile the break value expression
+                    let break_ty = self.infer_expr_type(expr);
+                    let break_typed = TypedExpr {
+                        expr: expr.clone(),
+                        ty: break_ty,
+                        span: crate::lexer::token::Span::new(
+                            crate::lexer::token::Position::new(0, 0),
+                            crate::lexer::token::Position::new(0, 0),
+                        ),
+                    };
+                    let break_val = self.compile_expr(&break_typed)?;
+
+                    // Call rt_break to signal break and store the value
+                    let rt_break = self.get_or_declare_rt_break();
+                    let result = self.builder.build_call(
+                        rt_break,
+                        &[break_val.into()],
+                        "break_result",
+                    ).unwrap();
+
+                    // Return from the current function with the break value
+                    self.builder.build_return(Some(&result.try_as_basic_value().left().unwrap())).unwrap();
+
+                    // Create a new basic block for any code after break (unreachable)
+                    let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let unreachable_block = self.context.append_basic_block(func, "after_break_tail");
+                    self.builder.position_at_end(unreachable_block);
+                }
+            }
+        }
+
+        // Restore the cell_variables set
+        self.cell_variables = saved_cell_vars;
+        // Restore the variables to restore proper scoping (inner scope variables go out of scope)
+        self.variables = saved_variables;
+
+        Ok(last_val.unwrap_or_else(|| self.compile_nil()))
     }
 
     /// Find variables that need to be captured by a closure
@@ -1401,10 +2933,179 @@ impl<'ctx> CodegenContext<'ctx> {
                     Self::collect_free_variables(e, bound, free);
                 }
             }
+            Expr::Match { subject, arms } => {
+                Self::collect_free_variables(subject, bound, free);
+                for arm in arms {
+                    // Extend bound set with pattern variables
+                    let mut new_bound = bound.clone();
+                    Self::collect_pattern_bindings(&arm.pattern, &mut new_bound);
+
+                    // Collect from guard if present
+                    if let Some(guard) = &arm.guard {
+                        Self::collect_free_variables(guard, &new_bound, free);
+                    }
+
+                    // Collect from body
+                    Self::collect_free_variables(&arm.body, &new_bound, free);
+                }
+            }
+            Expr::Assignment { name, value } => {
+                // The target variable and the value both contribute free variables
+                if !bound.contains(name) {
+                    free.insert(name.clone());
+                }
+                Self::collect_free_variables(value, bound, free);
+            }
             // Literals and constants have no free variables
             Expr::Integer(_) | Expr::Decimal(_) | Expr::String(_) |
             Expr::Boolean(_) | Expr::Nil | Expr::Placeholder => {}
             // Other expressions - add as needed
+            _ => {}
+        }
+    }
+
+    /// Collect variable bindings introduced by a pattern
+    fn collect_pattern_bindings(pattern: &Pattern, bound: &mut HashSet<String>) {
+        match pattern {
+            Pattern::Identifier(name) => {
+                bound.insert(name.clone());
+            }
+            Pattern::RestIdentifier(name) => {
+                bound.insert(name.clone());
+            }
+            Pattern::List(patterns) => {
+                for p in patterns {
+                    Self::collect_pattern_bindings(p, bound);
+                }
+            }
+            // Wildcard, Literal, Range don't introduce bindings
+            Pattern::Wildcard | Pattern::Literal(_) | Pattern::Range { .. } => {}
+        }
+    }
+
+    /// Find mutable variables that are captured by nested closures.
+    ///
+    /// These variables need to be wrapped in cells so the inner closure
+    /// can share mutable state with the outer scope.
+    fn find_mutable_captures_in_expr(
+        &self,
+        expr: &Expr,
+        mutable_vars: &HashSet<String>,
+        bound: &HashSet<String>,
+    ) -> HashSet<String> {
+        let mut captured = HashSet::new();
+        Self::collect_mutable_captures_recursive(expr, mutable_vars, bound, &mut captured);
+        captured
+    }
+
+    /// Recursively find mutable variables that are captured by nested closures
+    fn collect_mutable_captures_recursive(
+        expr: &Expr,
+        mutable_vars: &HashSet<String>,
+        bound: &HashSet<String>,
+        captured: &mut HashSet<String>,
+    ) {
+        match expr {
+            // When we hit a nested closure, check what mutable vars it captures
+            Expr::Function { params, body } => {
+                // Variables bound by this closure's parameters
+                let mut inner_bound = bound.clone();
+                for param in params {
+                    inner_bound.insert(param.name.clone());
+                }
+
+                // Find free variables in the closure body
+                let mut free_vars = HashSet::new();
+                Self::collect_free_variables(body, &inner_bound, &mut free_vars);
+
+                // Any free variable that's also in mutable_vars needs to be cell-wrapped
+                for var in free_vars {
+                    if mutable_vars.contains(&var) && !bound.contains(&var) {
+                        captured.insert(var);
+                    }
+                }
+
+                // Also check for nested closures in the body
+                Self::collect_mutable_captures_recursive(body, mutable_vars, &inner_bound, captured);
+            }
+
+            // Recurse into subexpressions
+            Expr::Infix { left, right, .. } => {
+                Self::collect_mutable_captures_recursive(left, mutable_vars, bound, captured);
+                Self::collect_mutable_captures_recursive(right, mutable_vars, bound, captured);
+            }
+            Expr::Prefix { right, .. } => {
+                Self::collect_mutable_captures_recursive(right, mutable_vars, bound, captured);
+            }
+            Expr::If { condition, then_branch, else_branch } => {
+                Self::collect_mutable_captures_recursive(condition, mutable_vars, bound, captured);
+                Self::collect_mutable_captures_recursive(then_branch, mutable_vars, bound, captured);
+                if let Some(else_br) = else_branch {
+                    Self::collect_mutable_captures_recursive(else_br, mutable_vars, bound, captured);
+                }
+            }
+            Expr::Call { function, args } => {
+                Self::collect_mutable_captures_recursive(function, mutable_vars, bound, captured);
+                for arg in args {
+                    Self::collect_mutable_captures_recursive(arg, mutable_vars, bound, captured);
+                }
+            }
+            Expr::Block(stmts) => {
+                let mut new_bound = bound.clone();
+                let mut new_mutable = mutable_vars.clone();
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Let { mutable, pattern, value } => {
+                            Self::collect_mutable_captures_recursive(value, &new_mutable, &new_bound, captured);
+                            if let Pattern::Identifier(name) = pattern {
+                                new_bound.insert(name.clone());
+                                if *mutable {
+                                    new_mutable.insert(name.clone());
+                                }
+                            }
+                        }
+                        Stmt::Expr(e) | Stmt::Return(e) | Stmt::Break(e) => {
+                            Self::collect_mutable_captures_recursive(e, &new_mutable, &new_bound, captured);
+                        }
+                    }
+                }
+            }
+            Expr::List(elements) | Expr::Set(elements) => {
+                for elem in elements {
+                    Self::collect_mutable_captures_recursive(elem, mutable_vars, bound, captured);
+                }
+            }
+            Expr::Dict(entries) => {
+                for (k, v) in entries {
+                    Self::collect_mutable_captures_recursive(k, mutable_vars, bound, captured);
+                    Self::collect_mutable_captures_recursive(v, mutable_vars, bound, captured);
+                }
+            }
+            Expr::Index { collection, index } => {
+                Self::collect_mutable_captures_recursive(collection, mutable_vars, bound, captured);
+                Self::collect_mutable_captures_recursive(index, mutable_vars, bound, captured);
+            }
+            Expr::Range { start, end, .. } => {
+                Self::collect_mutable_captures_recursive(start, mutable_vars, bound, captured);
+                if let Some(e) = end {
+                    Self::collect_mutable_captures_recursive(e, mutable_vars, bound, captured);
+                }
+            }
+            Expr::Match { subject, arms } => {
+                Self::collect_mutable_captures_recursive(subject, mutable_vars, bound, captured);
+                for arm in arms {
+                    let mut arm_bound = bound.clone();
+                    Self::collect_pattern_bindings(&arm.pattern, &mut arm_bound);
+                    if let Some(guard) = &arm.guard {
+                        Self::collect_mutable_captures_recursive(guard, mutable_vars, &arm_bound, captured);
+                    }
+                    Self::collect_mutable_captures_recursive(&arm.body, mutable_vars, &arm_bound, captured);
+                }
+            }
+            Expr::Assignment { name: _, value } => {
+                Self::collect_mutable_captures_recursive(value, mutable_vars, bound, captured);
+            }
+            // Terminals - no recursion needed
             _ => {}
         }
     }
@@ -1415,6 +3116,13 @@ impl<'ctx> CodegenContext<'ctx> {
         function: &Expr,
         args: &[Expr],
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Check if this is a call to a builtin function
+        if let Expr::Identifier(name) = function {
+            if let Some(result) = self.try_compile_builtin_call(name, args)? {
+                return Ok(result);
+            }
+        }
+
         // Compile the function expression
         let fn_ty = self.infer_expr_type(function);
         let fn_typed = TypedExpr {
@@ -1487,6 +3195,1404 @@ impl<'ctx> CodegenContext<'ctx> {
         Ok(call_result.try_as_basic_value().left().unwrap())
     }
 
+    /// Try to compile a call to a builtin function.
+    /// Returns Some(result) if the function is a known builtin, None otherwise.
+    fn try_compile_builtin_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+    ) -> Result<Option<BasicValueEnum<'ctx>>, CompileError> {
+        match name {
+            "puts" => {
+                // puts(..values) - print values to stdout
+                // Compile all arguments
+                let mut compiled_args = Vec::new();
+                for arg in args {
+                    let arg_ty = self.infer_expr_type(arg);
+                    let arg_typed = TypedExpr {
+                        expr: arg.clone(),
+                        ty: arg_ty,
+                        span: crate::lexer::token::Span::new(
+                            crate::lexer::token::Position::new(0, 0),
+                            crate::lexer::token::Position::new(0, 0),
+                        ),
+                    };
+                    compiled_args.push(self.compile_expr(&arg_typed)?);
+                }
+
+                // Call rt_puts(argc, argv)
+                let rt_puts = self.get_or_declare_rt_puts();
+                let argc = args.len();
+                let i64_type = self.context.i64_type();
+                let argc_val = self.context.i32_type().const_int(argc as u64, false);
+
+                let argv_ptr = if argc == 0 {
+                    self.context.ptr_type(inkwell::AddressSpace::from(0)).const_null()
+                } else {
+                    // Allocate stack space for arguments
+                    let array_type = i64_type.array_type(argc as u32);
+                    let array_alloca = self.builder.build_alloca(array_type, "puts_args").unwrap();
+
+                    // Store each argument
+                    for (i, arg) in compiled_args.iter().enumerate() {
+                        let index = i64_type.const_int(i as u64, false);
+                        let elem_ptr = unsafe {
+                            self.builder.build_in_bounds_gep(
+                                array_type,
+                                array_alloca,
+                                &[i64_type.const_zero(), index],
+                                &format!("puts_arg_ptr_{}", i),
+                            ).unwrap()
+                        };
+                        self.builder.build_store(elem_ptr, *arg).unwrap();
+                    }
+
+                    // Cast to pointer
+                    let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+                    self.builder.build_pointer_cast(array_alloca, ptr_type, "puts_argv").unwrap()
+                };
+
+                let result = self.builder.build_call(
+                    rt_puts,
+                    &[argc_val.into(), argv_ptr.into()],
+                    "puts_result",
+                ).unwrap();
+
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "__time_nanos" => {
+                // __time_nanos() - get current time in nanoseconds (for timing)
+                // Takes no arguments, returns i64
+                let rt_time_nanos = self.get_or_declare_rt_time_nanos();
+                let result = self.builder.build_call(
+                    rt_time_nanos,
+                    &[],
+                    "time_nanos_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "sum" => {
+                // sum(collection) - sum all elements
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("sum expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let collection = self.compile_arg(&args[0])?;
+                let rt_sum = self.get_or_declare_rt_sum();
+                let result = self.builder.build_call(
+                    rt_sum,
+                    &[collection.into()],
+                    "sum_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "fold" => {
+                // fold(initial, folder, collection)
+                if args.len() != 3 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("fold expects 3 arguments, got {}", args.len())
+                    ));
+                }
+                let initial = self.compile_arg(&args[0])?;
+                let folder = self.compile_arg(&args[1])?;
+                let collection = self.compile_arg(&args[2])?;
+                let rt_fold = self.get_or_declare_rt_fold();
+                let result = self.builder.build_call(
+                    rt_fold,
+                    &[initial.into(), folder.into(), collection.into()],
+                    "fold_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "memoize" => {
+                // memoize(function) - wrap a function with memoization cache
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("memoize expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let func_arg = self.compile_arg(&args[0])?;
+                let rt_memoize = self.get_or_declare_rt_memoize();
+                let result = self.builder.build_call(
+                    rt_memoize,
+                    &[func_arg.into()],
+                    "memoize_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "map" => {
+                // map(mapper, collection) - transform each element
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("map expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let mapper = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_map = self.get_or_declare_rt_map();
+                let result = self.builder.build_call(
+                    rt_map,
+                    &[mapper.into(), collection.into()],
+                    "map_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "filter" => {
+                // filter(predicate, collection) - keep matching elements
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("filter expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let predicate = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_filter = self.get_or_declare_rt_filter();
+                let result = self.builder.build_call(
+                    rt_filter,
+                    &[predicate.into(), collection.into()],
+                    "filter_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "reduce" => {
+                // reduce(reducer, collection) - reduce with first element as initial
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("reduce expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let reducer = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_reduce = self.get_or_declare_rt_reduce();
+                let result = self.builder.build_call(
+                    rt_reduce,
+                    &[reducer.into(), collection.into()],
+                    "reduce_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "first" => {
+                // first(collection) - get first element
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("first expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let collection = self.compile_arg(&args[0])?;
+                let rt_first = self.get_or_declare_rt_first();
+                let result = self.builder.build_call(
+                    rt_first,
+                    &[collection.into()],
+                    "first_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "second" => {
+                // second(collection) - get second element
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("second expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let collection = self.compile_arg(&args[0])?;
+                let rt_second = self.get_or_declare_rt_second();
+                let result = self.builder.build_call(
+                    rt_second,
+                    &[collection.into()],
+                    "second_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "last" => {
+                // last(collection) - get last element
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("last expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let collection = self.compile_arg(&args[0])?;
+                let rt_last = self.get_or_declare_rt_last();
+                let result = self.builder.build_call(
+                    rt_last,
+                    &[collection.into()],
+                    "last_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "rest" => {
+                // rest(collection) - get all elements except first
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("rest expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let collection = self.compile_arg(&args[0])?;
+                let rt_rest = self.get_or_declare_rt_rest();
+                let result = self.builder.build_call(
+                    rt_rest,
+                    &[collection.into()],
+                    "rest_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "size" => {
+                // size(collection) - get number of elements
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("size expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let collection = self.compile_arg(&args[0])?;
+                let rt_size = self.get_or_declare_rt_size();
+                let result = self.builder.build_call(
+                    rt_size,
+                    &[collection.into()],
+                    "size_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "get" => {
+                // get(index, collection) - get element at index
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("get expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let index = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_get = self.get_or_declare_rt_get();
+                let result = self.builder.build_call(
+                    rt_get,
+                    &[index.into(), collection.into()],
+                    "get_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "int" => {
+                // int(value) - convert to integer
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("int expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let rt_int = self.get_or_declare_rt_int();
+                let result = self.builder.build_call(
+                    rt_int,
+                    &[value.into()],
+                    "int_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "ints" => {
+                // ints(string) - extract all integers from string
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("ints expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let rt_ints = self.get_or_declare_rt_ints();
+                let result = self.builder.build_call(
+                    rt_ints,
+                    &[value.into()],
+                    "ints_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "list" => {
+                // list(value) - convert to list
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("list expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let rt_list = self.get_or_declare_rt_list();
+                let result = self.builder.build_call(
+                    rt_list,
+                    &[value.into()],
+                    "list_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "set" => {
+                // set(value) - convert to set
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("set expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let rt_set = self.get_or_declare_rt_set();
+                let result = self.builder.build_call(
+                    rt_set,
+                    &[value.into()],
+                    "set_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "dict" => {
+                // dict(value) - convert to dict
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("dict expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let rt_dict = self.get_or_declare_rt_dict();
+                let result = self.builder.build_call(
+                    rt_dict,
+                    &[value.into()],
+                    "dict_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "keys" => {
+                // keys(dict) - get dict keys as list
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("keys expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let collection = self.compile_arg(&args[0])?;
+                let rt_keys = self.get_or_declare_rt_keys();
+                let result = self.builder.build_call(
+                    rt_keys,
+                    &[collection.into()],
+                    "keys_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "values" => {
+                // values(dict) - get dict values as list
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("values expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let collection = self.compile_arg(&args[0])?;
+                let rt_values = self.get_or_declare_rt_values();
+                let result = self.builder.build_call(
+                    rt_values,
+                    &[collection.into()],
+                    "values_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "each" => {
+                // each(fn, collection) - apply fn to each element for side effects
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("each expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let func = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_each = self.get_or_declare_rt_each();
+                let result = self.builder.build_call(
+                    rt_each,
+                    &[func.into(), collection.into()],
+                    "each_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "find" => {
+                // find(predicate, collection) - find first matching element
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("find expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let predicate = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_find = self.get_or_declare_rt_find();
+                let result = self.builder.build_call(
+                    rt_find,
+                    &[predicate.into(), collection.into()],
+                    "find_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "count" => {
+                // count(predicate, collection) - count matching elements
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("count expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let predicate = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_count = self.get_or_declare_rt_count();
+                let result = self.builder.build_call(
+                    rt_count,
+                    &[predicate.into(), collection.into()],
+                    "count_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "flat_map" => {
+                // flat_map(mapper, collection) - map and flatten
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("flat_map expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let mapper = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_flat_map = self.get_or_declare_rt_flat_map();
+                let result = self.builder.build_call(
+                    rt_flat_map,
+                    &[mapper.into(), collection.into()],
+                    "flat_map_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "filter_map" => {
+                // filter_map(mapper, collection) - map and keep truthy
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("filter_map expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let mapper = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_filter_map = self.get_or_declare_rt_filter_map();
+                let result = self.builder.build_call(
+                    rt_filter_map,
+                    &[mapper.into(), collection.into()],
+                    "filter_map_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "find_map" => {
+                // find_map(mapper, collection) - find first truthy mapped
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("find_map expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let mapper = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_find_map = self.get_or_declare_rt_find_map();
+                let result = self.builder.build_call(
+                    rt_find_map,
+                    &[mapper.into(), collection.into()],
+                    "find_map_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "scan" => {
+                // scan(initial, folder, collection) - fold with intermediate results
+                if args.len() != 3 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("scan expects 3 arguments, got {}", args.len())
+                    ));
+                }
+                let initial = self.compile_arg(&args[0])?;
+                let folder = self.compile_arg(&args[1])?;
+                let collection = self.compile_arg(&args[2])?;
+                let rt_scan = self.get_or_declare_rt_scan();
+                let result = self.builder.build_call(
+                    rt_scan,
+                    &[initial.into(), folder.into(), collection.into()],
+                    "scan_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "fold_s" => {
+                // fold_s(initial, folder, collection) - fold with state
+                if args.len() != 3 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("fold_s expects 3 arguments, got {}", args.len())
+                    ));
+                }
+                let initial = self.compile_arg(&args[0])?;
+                let folder = self.compile_arg(&args[1])?;
+                let collection = self.compile_arg(&args[2])?;
+                let rt_fold_s = self.get_or_declare_rt_fold_s();
+                let result = self.builder.build_call(
+                    rt_fold_s,
+                    &[initial.into(), folder.into(), collection.into()],
+                    "fold_s_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "max" => {
+                // max(collection) - get maximum element
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("max expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let collection = self.compile_arg(&args[0])?;
+                let rt_max = self.get_or_declare_rt_max();
+                let result = self.builder.build_call(
+                    rt_max,
+                    &[collection.into()],
+                    "max_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "min" => {
+                // min(collection) - get minimum element
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("min expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let collection = self.compile_arg(&args[0])?;
+                let rt_min = self.get_or_declare_rt_min();
+                let result = self.builder.build_call(
+                    rt_min,
+                    &[collection.into()],
+                    "min_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "skip" => {
+                // skip(n, collection) - skip first n elements
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("skip expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let n = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_skip = self.get_or_declare_rt_skip();
+                let result = self.builder.build_call(
+                    rt_skip,
+                    &[n.into(), collection.into()],
+                    "skip_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "take" => {
+                // take(n, collection) - take first n elements
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("take expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let n = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_take = self.get_or_declare_rt_take();
+                let result = self.builder.build_call(
+                    rt_take,
+                    &[n.into(), collection.into()],
+                    "take_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "sort" => {
+                // sort(comparator, collection) - sort collection
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("sort expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let comparator = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_sort = self.get_or_declare_rt_sort();
+                let result = self.builder.build_call(
+                    rt_sort,
+                    &[comparator.into(), collection.into()],
+                    "sort_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "reverse" => {
+                // reverse(collection) - reverse collection
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("reverse expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let collection = self.compile_arg(&args[0])?;
+                let rt_reverse = self.get_or_declare_rt_reverse();
+                let result = self.builder.build_call(
+                    rt_reverse,
+                    &[collection.into()],
+                    "reverse_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "rotate" => {
+                // rotate(steps, collection) - rotate collection
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("rotate expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let steps = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_rotate = self.get_or_declare_rt_rotate();
+                let result = self.builder.build_call(
+                    rt_rotate,
+                    &[steps.into(), collection.into()],
+                    "rotate_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "chunk" => {
+                // chunk(size, collection) - split into chunks
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("chunk expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let size_arg = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_chunk = self.get_or_declare_rt_chunk();
+                let result = self.builder.build_call(
+                    rt_chunk,
+                    &[size_arg.into(), collection.into()],
+                    "chunk_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "union" => {
+                // union(collection1, collection2) - set union
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("union expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let coll1 = self.compile_arg(&args[0])?;
+                let coll2 = self.compile_arg(&args[1])?;
+                let rt_union = self.get_or_declare_rt_union();
+                let result = self.builder.build_call(
+                    rt_union,
+                    &[coll1.into(), coll2.into()],
+                    "union_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "intersection" => {
+                // intersection(collection1, collection2) - set intersection
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("intersection expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let coll1 = self.compile_arg(&args[0])?;
+                let coll2 = self.compile_arg(&args[1])?;
+                let rt_intersection = self.get_or_declare_rt_intersection();
+                let result = self.builder.build_call(
+                    rt_intersection,
+                    &[coll1.into(), coll2.into()],
+                    "intersection_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "includes?" => {
+                // includes?(collection, value) - check if value is in collection
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("includes? expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let collection = self.compile_arg(&args[0])?;
+                let value = self.compile_arg(&args[1])?;
+                let rt_includes = self.get_or_declare_rt_includes();
+                let result = self.builder.build_call(
+                    rt_includes,
+                    &[collection.into(), value.into()],
+                    "includes_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "excludes?" => {
+                // excludes?(collection, value) - check if value is not in collection
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("excludes? expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let collection = self.compile_arg(&args[0])?;
+                let value = self.compile_arg(&args[1])?;
+                let rt_excludes = self.get_or_declare_rt_excludes();
+                let result = self.builder.build_call(
+                    rt_excludes,
+                    &[collection.into(), value.into()],
+                    "excludes_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "any?" => {
+                // any?(predicate, collection) - check if any element matches
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("any? expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let predicate = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_any = self.get_or_declare_rt_any();
+                let result = self.builder.build_call(
+                    rt_any,
+                    &[predicate.into(), collection.into()],
+                    "any_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "all?" => {
+                // all?(predicate, collection) - check if all elements match
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("all? expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let predicate = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_all = self.get_or_declare_rt_all();
+                let result = self.builder.build_call(
+                    rt_all,
+                    &[predicate.into(), collection.into()],
+                    "all_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "lines" => {
+                // lines(string) - split string into lines
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("lines expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let string = self.compile_arg(&args[0])?;
+                let rt_lines = self.get_or_declare_rt_lines();
+                let result = self.builder.build_call(
+                    rt_lines,
+                    &[string.into()],
+                    "lines_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "split" => {
+                // split(separator, string) - split string by separator
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("split expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let separator = self.compile_arg(&args[0])?;
+                let string = self.compile_arg(&args[1])?;
+                let rt_split = self.get_or_declare_rt_split();
+                let result = self.builder.build_call(
+                    rt_split,
+                    &[separator.into(), string.into()],
+                    "split_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "join" => {
+                // join(separator, collection) - join collection with separator
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("join expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let separator = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_join = self.get_or_declare_rt_join();
+                let result = self.builder.build_call(
+                    rt_join,
+                    &[separator.into(), collection.into()],
+                    "join_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "upper" => {
+                // upper(string) - convert to uppercase
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("upper expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let string = self.compile_arg(&args[0])?;
+                let rt_upper = self.get_or_declare_rt_upper();
+                let result = self.builder.build_call(
+                    rt_upper,
+                    &[string.into()],
+                    "upper_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "lower" => {
+                // lower(string) - convert to lowercase
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("lower expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let string = self.compile_arg(&args[0])?;
+                let rt_lower = self.get_or_declare_rt_lower();
+                let result = self.builder.build_call(
+                    rt_lower,
+                    &[string.into()],
+                    "lower_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "replace" => {
+                // replace(from, to, string) - replace occurrences
+                if args.len() != 3 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("replace expects 3 arguments, got {}", args.len())
+                    ));
+                }
+                let from = self.compile_arg(&args[0])?;
+                let to = self.compile_arg(&args[1])?;
+                let string = self.compile_arg(&args[2])?;
+                let rt_replace = self.get_or_declare_rt_replace();
+                let result = self.builder.build_call(
+                    rt_replace,
+                    &[from.into(), to.into(), string.into()],
+                    "replace_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "abs" => {
+                // abs(value) - absolute value
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("abs expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let rt_abs = self.get_or_declare_rt_abs();
+                let result = self.builder.build_call(
+                    rt_abs,
+                    &[value.into()],
+                    "abs_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "signum" => {
+                // signum(value) - sign of value
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("signum expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let rt_signum = self.get_or_declare_rt_signum();
+                let result = self.builder.build_call(
+                    rt_signum,
+                    &[value.into()],
+                    "signum_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "id" => {
+                // id(value) - identity function
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("id expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let rt_id = self.get_or_declare_rt_id();
+                let result = self.builder.build_call(
+                    rt_id,
+                    &[value.into()],
+                    "id_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "type" => {
+                // type(value) - get type name
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("type expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let rt_type = self.get_or_declare_rt_type();
+                let result = self.builder.build_call(
+                    rt_type,
+                    &[value.into()],
+                    "type_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "or" => {
+                // or(a, b) - return a if truthy, else b
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("or expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let a = self.compile_arg(&args[0])?;
+                let b = self.compile_arg(&args[1])?;
+                let rt_or = self.get_or_declare_rt_or();
+                let result = self.builder.build_call(
+                    rt_or,
+                    &[a.into(), b.into()],
+                    "or_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "and" => {
+                // and(a, b) - return b if a is truthy, else a
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("and expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let a = self.compile_arg(&args[0])?;
+                let b = self.compile_arg(&args[1])?;
+                let rt_and = self.get_or_declare_rt_and();
+                let result = self.builder.build_call(
+                    rt_and,
+                    &[a.into(), b.into()],
+                    "and_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "read" => {
+                // read(path) - read file contents
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("read expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let path = self.compile_arg(&args[0])?;
+                let rt_read = self.get_or_declare_rt_read();
+                let result = self.builder.build_call(
+                    rt_read,
+                    &[path.into()],
+                    "read_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "push" => {
+                // push(value, collection) - add value to collection
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("push expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_push = self.get_or_declare_rt_push();
+                let result = self.builder.build_call(
+                    rt_push,
+                    &[value.into(), collection.into()],
+                    "push_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "assoc" => {
+                // assoc(key, value, collection) - associate key with value
+                if args.len() != 3 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("assoc expects 3 arguments, got {}", args.len())
+                    ));
+                }
+                let key = self.compile_arg(&args[0])?;
+                let value = self.compile_arg(&args[1])?;
+                let collection = self.compile_arg(&args[2])?;
+                let rt_assoc = self.get_or_declare_rt_assoc();
+                let result = self.builder.build_call(
+                    rt_assoc,
+                    &[key.into(), value.into(), collection.into()],
+                    "assoc_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "update" => {
+                // update(key, updater, collection) - update key using updater function
+                if args.len() != 3 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("update expects 3 arguments, got {}", args.len())
+                    ));
+                }
+                let key = self.compile_arg(&args[0])?;
+                let updater = self.compile_arg(&args[1])?;
+                let collection = self.compile_arg(&args[2])?;
+                let rt_update = self.get_or_declare_rt_update();
+                let result = self.builder.build_call(
+                    rt_update,
+                    &[key.into(), updater.into(), collection.into()],
+                    "update_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "update_d" => {
+                // update_d(key, default, updater, collection) - update with default
+                if args.len() != 4 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("update_d expects 4 arguments, got {}", args.len())
+                    ));
+                }
+                let key = self.compile_arg(&args[0])?;
+                let default = self.compile_arg(&args[1])?;
+                let updater = self.compile_arg(&args[2])?;
+                let collection = self.compile_arg(&args[3])?;
+                let rt_update_d = self.get_or_declare_rt_update_d();
+                let result = self.builder.build_call(
+                    rt_update_d,
+                    &[key.into(), default.into(), updater.into(), collection.into()],
+                    "update_d_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "vec_add" => {
+                // vec_add(a, b) - element-wise addition of lists
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("vec_add expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let a = self.compile_arg(&args[0])?;
+                let b = self.compile_arg(&args[1])?;
+                let rt_vec_add = self.get_or_declare_rt_vec_add();
+                let result = self.builder.build_call(
+                    rt_vec_add,
+                    &[a.into(), b.into()],
+                    "vec_add_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "bit_and" => {
+                // bit_and(a, b) - bitwise AND
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("bit_and expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let a = self.compile_arg(&args[0])?;
+                let b = self.compile_arg(&args[1])?;
+                let rt_bit_and = self.get_or_declare_rt_bit_and();
+                let result = self.builder.build_call(
+                    rt_bit_and,
+                    &[a.into(), b.into()],
+                    "bit_and_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "bit_or" => {
+                // bit_or(a, b) - bitwise OR
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("bit_or expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let a = self.compile_arg(&args[0])?;
+                let b = self.compile_arg(&args[1])?;
+                let rt_bit_or = self.get_or_declare_rt_bit_or();
+                let result = self.builder.build_call(
+                    rt_bit_or,
+                    &[a.into(), b.into()],
+                    "bit_or_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "bit_xor" => {
+                // bit_xor(a, b) - bitwise XOR
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("bit_xor expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let a = self.compile_arg(&args[0])?;
+                let b = self.compile_arg(&args[1])?;
+                let rt_bit_xor = self.get_or_declare_rt_bit_xor();
+                let result = self.builder.build_call(
+                    rt_bit_xor,
+                    &[a.into(), b.into()],
+                    "bit_xor_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "bit_not" => {
+                // bit_not(value) - bitwise NOT
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("bit_not expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let rt_bit_not = self.get_or_declare_rt_bit_not();
+                let result = self.builder.build_call(
+                    rt_bit_not,
+                    &[value.into()],
+                    "bit_not_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "bit_shift_left" => {
+                // bit_shift_left(value, shift) - bitwise left shift
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("bit_shift_left expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let shift = self.compile_arg(&args[1])?;
+                let rt_bit_shift_left = self.get_or_declare_rt_bit_shift_left();
+                let result = self.builder.build_call(
+                    rt_bit_shift_left,
+                    &[value.into(), shift.into()],
+                    "bit_shift_left_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "bit_shift_right" => {
+                // bit_shift_right(value, shift) - bitwise right shift
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("bit_shift_right expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let shift = self.compile_arg(&args[1])?;
+                let rt_bit_shift_right = self.get_or_declare_rt_bit_shift_right();
+                let result = self.builder.build_call(
+                    rt_bit_shift_right,
+                    &[value.into(), shift.into()],
+                    "bit_shift_right_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "repeat" => {
+                // repeat(value) - create infinite sequence repeating value
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("repeat expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let rt_repeat = self.get_or_declare_rt_repeat();
+                let result = self.builder.build_call(
+                    rt_repeat,
+                    &[value.into()],
+                    "repeat_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "cycle" => {
+                // cycle(collection) - cycle through collection infinitely
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("cycle expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let collection = self.compile_arg(&args[0])?;
+                let rt_cycle = self.get_or_declare_rt_cycle();
+                let result = self.builder.build_call(
+                    rt_cycle,
+                    &[collection.into()],
+                    "cycle_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "iterate" => {
+                // iterate(generator, initial) - generate infinite sequence by repeated application
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("iterate expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let generator = self.compile_arg(&args[0])?;
+                let initial = self.compile_arg(&args[1])?;
+                let rt_iterate = self.get_or_declare_rt_iterate();
+                let result = self.builder.build_call(
+                    rt_iterate,
+                    &[generator.into(), initial.into()],
+                    "iterate_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "combinations" => {
+                // combinations(size, collection) - generate all combinations of given size
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("combinations expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let size = self.compile_arg(&args[0])?;
+                let collection = self.compile_arg(&args[1])?;
+                let rt_combinations = self.get_or_declare_rt_combinations();
+                let result = self.builder.build_call(
+                    rt_combinations,
+                    &[size.into(), collection.into()],
+                    "combinations_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "range" => {
+                // range(from, to, step) - generate range with step
+                if args.len() != 3 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("range expects 3 arguments, got {}", args.len())
+                    ));
+                }
+                let from = self.compile_arg(&args[0])?;
+                let to = self.compile_arg(&args[1])?;
+                let step = self.compile_arg(&args[2])?;
+                let rt_range = self.get_or_declare_rt_range();
+                let result = self.builder.build_call(
+                    rt_range,
+                    &[from.into(), to.into(), step.into()],
+                    "range_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "zip" => {
+                // zip(collection, ..collections) - zip multiple collections
+                // Variadic function similar to puts
+                if args.is_empty() {
+                    return Err(CompileError::UnsupportedExpression(
+                        "zip expects at least 1 argument".to_string()
+                    ));
+                }
+
+                // Compile all arguments
+                let mut compiled_args = Vec::new();
+                for arg in args {
+                    let arg_ty = self.infer_expr_type(arg);
+                    let arg_typed = TypedExpr {
+                        expr: arg.clone(),
+                        ty: arg_ty,
+                        span: crate::lexer::token::Span::new(
+                            crate::lexer::token::Position::new(0, 0),
+                            crate::lexer::token::Position::new(0, 0),
+                        ),
+                    };
+                    compiled_args.push(self.compile_expr(&arg_typed)?);
+                }
+
+                // Call rt_zip(argc, argv)
+                let rt_zip = self.get_or_declare_rt_zip();
+                let argc = args.len();
+                let i64_type = self.context.i64_type();
+                let argc_val = self.context.i32_type().const_int(argc as u64, false);
+
+                let argv_ptr = if argc == 0 {
+                    self.context.ptr_type(inkwell::AddressSpace::from(0)).const_null()
+                } else {
+                    // Allocate stack space for arguments
+                    let array_type = i64_type.array_type(argc as u32);
+                    let array_alloca = self.builder.build_alloca(array_type, "zip_args").unwrap();
+
+                    // Store each argument
+                    for (i, arg) in compiled_args.iter().enumerate() {
+                        let index = i64_type.const_int(i as u64, false);
+                        let elem_ptr = unsafe {
+                            self.builder.build_in_bounds_gep(
+                                array_type,
+                                array_alloca,
+                                &[i64_type.const_zero(), index],
+                                &format!("zip_arg_ptr_{}", i),
+                            ).unwrap()
+                        };
+                        self.builder.build_store(elem_ptr, *arg).unwrap();
+                    }
+
+                    // Cast to pointer
+                    let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+                    self.builder.build_pointer_cast(array_alloca, ptr_type, "zip_argv").unwrap()
+                };
+
+                let result = self.builder.build_call(
+                    rt_zip,
+                    &[argc_val.into(), argv_ptr.into()],
+                    "zip_result",
+                ).unwrap();
+
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "regex_match" => {
+                // regex_match(pattern, string) - match regex and return captures
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("regex_match expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let pattern = self.compile_arg(&args[0])?;
+                let string = self.compile_arg(&args[1])?;
+                let rt_regex_match = self.get_or_declare_rt_regex_match();
+                let result = self.builder.build_call(
+                    rt_regex_match,
+                    &[pattern.into(), string.into()],
+                    "regex_match_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "regex_match_all" => {
+                // regex_match_all(pattern, string) - match all occurrences
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("regex_match_all expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let pattern = self.compile_arg(&args[0])?;
+                let string = self.compile_arg(&args[1])?;
+                let rt_regex_match_all = self.get_or_declare_rt_regex_match_all();
+                let result = self.builder.build_call(
+                    rt_regex_match_all,
+                    &[pattern.into(), string.into()],
+                    "regex_match_all_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "md5" => {
+                // md5(value) - compute MD5 hash
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("md5 expects 1 argument, got {}", args.len())
+                    ));
+                }
+                let value = self.compile_arg(&args[0])?;
+                let rt_md5 = self.get_or_declare_rt_md5();
+                let result = self.builder.build_call(
+                    rt_md5,
+                    &[value.into()],
+                    "md5_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            _ => Ok(None), // Not a builtin, let compile_call handle it
+        }
+    }
+
+    /// Get or declare the rt_time_nanos runtime function
+    fn get_or_declare_rt_time_nanos(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_time_nanos";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: () -> i64
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_puts runtime function
+    fn get_or_declare_rt_puts(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_puts";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (argc: i32, argv: ptr) -> i64
+        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+        let i32_type = self.context.i32_type();
+        let i64_type = self.context.i64_type();
+
+        let fn_type = i64_type.fn_type(
+            &[i32_type.into(), ptr_type.into()],
+            false,
+        );
+
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
     /// Get or declare the rt_make_closure runtime function
     fn get_or_declare_rt_make_closure(&self) -> inkwell::values::FunctionValue<'ctx> {
         let fn_name = "rt_make_closure";
@@ -1543,6 +4649,958 @@ impl<'ctx> CodegenContext<'ctx> {
             false,
         );
 
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Helper to compile an argument expression
+    fn compile_arg(&mut self, arg: &Expr) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        let arg_ty = self.infer_expr_type(arg);
+        let arg_typed = TypedExpr {
+            expr: arg.clone(),
+            ty: arg_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        self.compile_expr(&arg_typed)
+    }
+
+    /// Get or declare the rt_sum runtime function
+    fn get_or_declare_rt_sum(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_sum";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_fold runtime function
+    fn get_or_declare_rt_fold(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_fold";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (initial: Value, folder: Value, collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(
+            &[i64_type.into(), i64_type.into(), i64_type.into()],
+            false,
+        );
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_break runtime function
+    fn get_or_declare_rt_break(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_break";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (value: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_memoize runtime function
+    fn get_or_declare_rt_memoize(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_memoize";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (func: Value) -> Value (returns memoized closure)
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_map runtime function
+    fn get_or_declare_rt_map(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_map";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (mapper: Value, collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_filter runtime function
+    fn get_or_declare_rt_filter(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_filter";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (predicate: Value, collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_reduce runtime function
+    fn get_or_declare_rt_reduce(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_reduce";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (reducer: Value, collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_first runtime function
+    fn get_or_declare_rt_first(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_first";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_second runtime function
+    fn get_or_declare_rt_second(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_second";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_last runtime function
+    fn get_or_declare_rt_last(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_last";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_rest runtime function
+    fn get_or_declare_rt_rest(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_rest";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_int runtime function
+    fn get_or_declare_rt_int(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_int";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (value: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_ints runtime function
+    fn get_or_declare_rt_ints(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_ints";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (string: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_list runtime function
+    fn get_or_declare_rt_list(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_list";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (value: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_set runtime function
+    fn get_or_declare_rt_set(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_set";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (value: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_dict runtime function
+    fn get_or_declare_rt_dict(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_dict";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (value: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_keys runtime function
+    fn get_or_declare_rt_keys(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_keys";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_values runtime function
+    fn get_or_declare_rt_values(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_values";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_each runtime function
+    fn get_or_declare_rt_each(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_each";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (func: Value, collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_find runtime function
+    fn get_or_declare_rt_find(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_find";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (predicate: Value, collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_count runtime function
+    fn get_or_declare_rt_count(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_count";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (predicate: Value, collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_flat_map runtime function
+    fn get_or_declare_rt_flat_map(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_flat_map";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_filter_map runtime function
+    fn get_or_declare_rt_filter_map(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_filter_map";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_find_map runtime function
+    fn get_or_declare_rt_find_map(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_find_map";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_scan runtime function
+    fn get_or_declare_rt_scan(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_scan";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_fold_s runtime function
+    fn get_or_declare_rt_fold_s(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_fold_s";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_max runtime function
+    fn get_or_declare_rt_max(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_max";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_min runtime function
+    fn get_or_declare_rt_min(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_min";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_sort runtime function
+    fn get_or_declare_rt_sort(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_sort";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_reverse runtime function
+    fn get_or_declare_rt_reverse(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_reverse";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_rotate runtime function
+    fn get_or_declare_rt_rotate(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_rotate";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_chunk runtime function
+    fn get_or_declare_rt_chunk(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_chunk";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_union runtime function
+    fn get_or_declare_rt_union(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_union";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_intersection runtime function
+    fn get_or_declare_rt_intersection(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_intersection";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_includes runtime function
+    fn get_or_declare_rt_includes(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_includes";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_excludes runtime function
+    fn get_or_declare_rt_excludes(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_excludes";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_any runtime function
+    fn get_or_declare_rt_any(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_any";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_all runtime function
+    fn get_or_declare_rt_all(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_all";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_lines runtime function
+    fn get_or_declare_rt_lines(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_lines";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_split runtime function
+    fn get_or_declare_rt_split(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_split";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_join runtime function
+    fn get_or_declare_rt_join(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_join";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_upper runtime function
+    fn get_or_declare_rt_upper(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_upper";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_lower runtime function
+    fn get_or_declare_rt_lower(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_lower";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_replace runtime function
+    fn get_or_declare_rt_replace(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_replace";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_abs runtime function
+    fn get_or_declare_rt_abs(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_abs";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_signum runtime function
+    fn get_or_declare_rt_signum(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_signum";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_id runtime function
+    fn get_or_declare_rt_id(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_id";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_type runtime function
+    fn get_or_declare_rt_type(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_type";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_or runtime function
+    fn get_or_declare_rt_or(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_or";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_and runtime function
+    fn get_or_declare_rt_and(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_and";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_read runtime function
+    fn get_or_declare_rt_read(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_read";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    // ===== Collection Modification Functions =====
+
+    /// Get or declare the rt_push runtime function
+    fn get_or_declare_rt_push(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_push";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: rt_push(value: Value, collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_assoc runtime function
+    fn get_or_declare_rt_assoc(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_assoc";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: rt_assoc(key: Value, value: Value, collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_update runtime function
+    fn get_or_declare_rt_update(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_update";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: rt_update(key: Value, updater: Value, collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_update_d runtime function
+    fn get_or_declare_rt_update_d(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_update_d";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: rt_update_d(key: Value, default: Value, updater: Value, collection: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_vec_add runtime function
+    fn get_or_declare_rt_vec_add(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_vec_add";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: rt_vec_add(a: Value, b: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    // ===== Bitwise Functions =====
+
+    /// Get or declare the rt_bit_and runtime function
+    fn get_or_declare_rt_bit_and(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_bit_and";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_bit_or runtime function
+    fn get_or_declare_rt_bit_or(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_bit_or";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_bit_xor runtime function
+    fn get_or_declare_rt_bit_xor(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_bit_xor";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_bit_not runtime function
+    fn get_or_declare_rt_bit_not(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_bit_not";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_bit_shift_left runtime function
+    fn get_or_declare_rt_bit_shift_left(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_bit_shift_left";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_bit_shift_right runtime function
+    fn get_or_declare_rt_bit_shift_right(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_bit_shift_right";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    // ===== Sequence Generator Functions =====
+
+    /// Get or declare the rt_repeat runtime function
+    fn get_or_declare_rt_repeat(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_repeat";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_cycle runtime function
+    fn get_or_declare_rt_cycle(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_cycle";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_iterate runtime function
+    fn get_or_declare_rt_iterate(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_iterate";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_combinations runtime function
+    fn get_or_declare_rt_combinations(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_combinations";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_range_fn runtime function
+    fn get_or_declare_rt_range(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_range_fn";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_zip runtime function
+    fn get_or_declare_rt_zip(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_zip";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (argc: i32, argv: ptr) -> i64
+        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+        let i32_type = self.context.i32_type();
+        let i64_type = self.context.i64_type();
+
+        let fn_type = i64_type.fn_type(
+            &[i32_type.into(), ptr_type.into()],
+            false,
+        );
+
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    // ===== String/Regex Functions =====
+
+    /// Get or declare the rt_regex_match runtime function
+    fn get_or_declare_rt_regex_match(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_regex_match";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_regex_match_all runtime function
+    fn get_or_declare_rt_regex_match_all(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_regex_match_all";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_md5 runtime function
+    fn get_or_declare_rt_md5(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_md5";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    // ===== Mutable Cell Functions =====
+
+    /// Get or declare the rt_cell_new runtime function
+    fn get_or_declare_rt_cell_new(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_cell_new";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: rt_cell_new(value: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_cell_get runtime function
+    fn get_or_declare_rt_cell_get(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_cell_get";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: rt_cell_get(cell: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_cell_set runtime function
+    fn get_or_declare_rt_cell_set(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_cell_set";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: rt_cell_set(cell: Value, value: Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
         self.module.add_function(fn_name, fn_type, None)
     }
 }

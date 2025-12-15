@@ -19,11 +19,142 @@ pub struct Parser {
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, current: 0 }
+        // Filter out comment tokens - they're lexed but not needed for parsing
+        let filtered_tokens: Vec<Token> = tokens
+            .into_iter()
+            .filter(|t| !matches!(t.kind, TokenKind::Comment(_)))
+            .collect();
+        Self { tokens: filtered_tokens, current: 0 }
     }
 
     pub fn parse_expression(&mut self) -> Result<Expr, ParseError> {
-        self.parse_pratt_expr(0)
+        let expr = self.parse_pratt_expr(0)?;
+        // Transform expressions containing placeholders into functions
+        Ok(self.transform_partial_application(expr))
+    }
+
+    /// Transform an expression containing placeholders into a function.
+    /// For example: `_ + 1` becomes `|__arg_0| __arg_0 + 1`
+    /// Multiple placeholders: `_ / _` becomes `|__arg_0, __arg_1| __arg_0 / __arg_1`
+    fn transform_partial_application(&self, expr: Expr) -> Expr {
+        // Count placeholders to see if we need to transform
+        let placeholder_count = self.count_placeholders(&expr);
+        if placeholder_count == 0 {
+            return expr;
+        }
+
+        // Generate parameter names
+        let params: Vec<Param> = (0..placeholder_count)
+            .map(|i| Param { name: format!("__arg_{}", i) })
+            .collect();
+
+        // Replace placeholders with identifiers
+        let mut counter = 0;
+        let body = self.replace_placeholders(expr, &mut counter);
+
+        Expr::Function {
+            params,
+            body: Box::new(body),
+        }
+    }
+
+    /// Count the number of placeholders in an expression
+    fn count_placeholders(&self, expr: &Expr) -> usize {
+        match expr {
+            Expr::Placeholder => 1,
+            Expr::Prefix { right, .. } => self.count_placeholders(right),
+            Expr::Infix { left, right, .. } => {
+                self.count_placeholders(left) + self.count_placeholders(right)
+            }
+            Expr::Call { function, args } => {
+                self.count_placeholders(function) +
+                args.iter().map(|a| self.count_placeholders(a)).sum::<usize>()
+            }
+            Expr::Index { collection, index } => {
+                self.count_placeholders(collection) + self.count_placeholders(index)
+            }
+            Expr::List(elements) => {
+                elements.iter().map(|e| self.count_placeholders(e)).sum()
+            }
+            Expr::Set(elements) => {
+                elements.iter().map(|e| self.count_placeholders(e)).sum()
+            }
+            Expr::Dict(entries) => {
+                entries.iter()
+                    .map(|(k, v)| self.count_placeholders(k) + self.count_placeholders(v))
+                    .sum()
+            }
+            // Don't count placeholders inside nested functions (they belong to that scope)
+            Expr::Function { .. } => 0,
+            // Other expressions don't contain placeholders
+            _ => 0,
+        }
+    }
+
+    /// Replace placeholders with identifiers
+    fn replace_placeholders(&self, expr: Expr, counter: &mut usize) -> Expr {
+        match expr {
+            Expr::Placeholder => {
+                let name = format!("__arg_{}", *counter);
+                *counter += 1;
+                Expr::Identifier(name)
+            }
+            Expr::Prefix { op, right } => {
+                Expr::Prefix {
+                    op,
+                    right: Box::new(self.replace_placeholders(*right, counter)),
+                }
+            }
+            Expr::Infix { left, op, right } => {
+                Expr::Infix {
+                    left: Box::new(self.replace_placeholders(*left, counter)),
+                    op,
+                    right: Box::new(self.replace_placeholders(*right, counter)),
+                }
+            }
+            Expr::Call { function, args } => {
+                Expr::Call {
+                    function: Box::new(self.replace_placeholders(*function, counter)),
+                    args: args.into_iter()
+                        .map(|a| self.replace_placeholders(a, counter))
+                        .collect(),
+                }
+            }
+            Expr::Index { collection, index } => {
+                Expr::Index {
+                    collection: Box::new(self.replace_placeholders(*collection, counter)),
+                    index: Box::new(self.replace_placeholders(*index, counter)),
+                }
+            }
+            Expr::List(elements) => {
+                Expr::List(
+                    elements.into_iter()
+                        .map(|e| self.replace_placeholders(e, counter))
+                        .collect()
+                )
+            }
+            Expr::Set(elements) => {
+                Expr::Set(
+                    elements.into_iter()
+                        .map(|e| self.replace_placeholders(e, counter))
+                        .collect()
+                )
+            }
+            Expr::Dict(entries) => {
+                Expr::Dict(
+                    entries.into_iter()
+                        .map(|(k, v)| (
+                            self.replace_placeholders(k, counter),
+                            self.replace_placeholders(v, counter)
+                        ))
+                        .collect()
+                )
+            }
+            // Don't transform inside nested functions
+            Expr::Function { params, body } => Expr::Function { params, body },
+            // Other expressions pass through unchanged
+            other => other,
+        }
     }
 
     fn parse_pratt_expr(&mut self, min_precedence: u8) -> Result<Expr, ParseError> {
@@ -124,6 +255,21 @@ impl Parser {
             TokenKind::Identifier(name) => {
                 let value = name.clone();
                 self.advance();
+
+                // Check for direct trailing lambda syntax: identifier |params| body
+                // e.g., memoize |x| x becomes memoize(|x| x)
+                // This is the LANG.txt §8.8 "Direct trailing lambda" feature
+                if let Some(next) = self.tokens.get(self.current) {
+                    if matches!(next.kind, TokenKind::VerticalBar | TokenKind::OrOr) {
+                        // This is a direct trailing lambda call
+                        let lambda = self.parse_expression()?;
+                        return Ok(Expr::Call {
+                            function: Box::new(Expr::Identifier(value)),
+                            args: vec![lambda],
+                        });
+                    }
+                }
+
                 Ok(Expr::Identifier(value))
             }
             TokenKind::Underscore => {
@@ -160,6 +306,9 @@ impl Parser {
                 // We need to check if this is a function (|| ...) or a logical OR
                 // For now, treat it as a function with empty params
                 self.parse_function_empty_params()
+            }
+            TokenKind::If => {
+                self.parse_if()
             }
             TokenKind::Match => {
                 self.parse_match()
@@ -258,22 +407,19 @@ impl Parser {
     }
 
     /// Parse an expression in "body" context where {} is always a Block
+    ///
+    /// For function bodies that start with `{`, we parse ONLY the block - not any
+    /// trailing postfix operations like `()`. This ensures `|| { ... }()` is parsed
+    /// as `(|| { ... })()` rather than `|| ({ ... }())`.
     fn parse_body_expr(&mut self) -> Result<Expr, ParseError> {
         let token = self.current_token()?;
 
-        // Special handling for empty braces in body context
+        // If body starts with `{`, parse just the block (no postfix operations)
         if matches!(token.kind, TokenKind::LeftBrace) {
-            if let Some(next) = self.tokens.get(self.current + 1) {
-                if matches!(next.kind, TokenKind::RightBrace) {
-                    // Empty braces in body context → Block
-                    self.advance(); // consume '{'
-                    self.advance(); // consume '}'
-                    return Ok(Expr::Block(Vec::new()));
-                }
-            }
+            return self.parse_block();
         }
 
-        // Otherwise parse normally
+        // Otherwise parse normally (e.g., for `|x| x + 1`)
         self.parse_pratt_expr(0)
     }
 
@@ -573,6 +719,31 @@ impl Parser {
 
     fn parse_infix(&mut self, left: Expr, precedence: u8) -> Result<Expr, ParseError> {
         let token = self.current_token()?.clone();
+
+        // Handle assignment specially - left must be an identifier
+        if matches!(token.kind, TokenKind::Equal) {
+            self.advance();
+            // Assignment is right-associative, so use same precedence instead of +1
+            let value = self.parse_pratt_expr(precedence)?;
+
+            // Left side must be an identifier for assignment
+            match left {
+                Expr::Identifier(name) => {
+                    return Ok(Expr::Assignment {
+                        name,
+                        value: Box::new(value),
+                    });
+                }
+                _ => {
+                    return Err(ParseError {
+                        message: "Invalid assignment target - must be an identifier".to_string(),
+                        line: token.span.start.line as usize,
+                        column: token.span.start.column as usize,
+                    });
+                }
+            }
+        }
+
         let op = self.token_to_infix_op(&token.kind)?;
 
         self.advance();
@@ -867,6 +1038,53 @@ impl Parser {
         Ok(Stmt::Break(expr))
     }
 
+    fn parse_if(&mut self) -> Result<Expr, ParseError> {
+        self.advance(); // consume 'if'
+
+        // Parse condition expression
+        let condition = self.parse_expression()?;
+
+        // Parse then branch (expect '{')
+        let token = self.current_token()?;
+        if !matches!(token.kind, TokenKind::LeftBrace) {
+            return Err(ParseError {
+                message: format!("Expected '{{' after if condition, got {:?}", token.kind),
+                line: token.span.start.line as usize,
+                column: token.span.start.column as usize,
+            });
+        }
+        let then_branch = self.parse_block()?;
+
+        // Check for else branch
+        let else_branch = if matches!(self.current_token().map(|t| &t.kind), Ok(TokenKind::Else)) {
+            self.advance(); // consume 'else'
+
+            // Check if else-if or else
+            let token = self.current_token()?;
+            if matches!(token.kind, TokenKind::If) {
+                // else if - parse as another if expression
+                Some(self.parse_if()?)
+            } else if matches!(token.kind, TokenKind::LeftBrace) {
+                // else { ... }
+                Some(self.parse_block()?)
+            } else {
+                return Err(ParseError {
+                    message: format!("Expected '{{' or 'if' after else, got {:?}", token.kind),
+                    line: token.span.start.line as usize,
+                    column: token.span.start.column as usize,
+                });
+            }
+        } else {
+            None
+        };
+
+        Ok(Expr::If {
+            condition: Box::new(condition),
+            then_branch: Box::new(then_branch),
+            else_branch: else_branch.map(Box::new),
+        })
+    }
+
     fn parse_match(&mut self) -> Result<Expr, ParseError> {
         self.advance(); // consume 'match'
 
@@ -938,6 +1156,9 @@ impl Parser {
         let mut statements = Vec::new();
 
         loop {
+            // Skip any semicolons between statements
+            self.skip_statement_terminators();
+
             let token = self.current_token()?;
 
             // Check for closing brace
@@ -967,11 +1188,46 @@ impl Parser {
                 break;
             }
 
+            // Check for @slow attribute before test section
+            let slow = if matches!(self.current_token()?.kind, TokenKind::At) {
+                self.advance(); // consume '@'
+                // Expect 'slow' identifier
+                let token = self.current_token()?;
+                if let TokenKind::Identifier(name) = &token.kind {
+                    if name == "slow" {
+                        self.advance(); // consume 'slow'
+                        true
+                    } else {
+                        return Err(ParseError {
+                            message: format!("Unknown attribute: @{}", name),
+                            line: token.span.start.line as usize,
+                            column: token.span.start.column as usize,
+                        });
+                    }
+                } else {
+                    return Err(ParseError {
+                        message: format!("Expected attribute name after @, got {:?}", token.kind),
+                        line: token.span.start.line as usize,
+                        column: token.span.start.column as usize,
+                    });
+                }
+            } else {
+                false
+            };
+
             // Check if this is a section (identifier followed by colon)
             if self.is_section_start() {
-                let section = self.parse_section()?;
+                let section = self.parse_section_with_slow(slow)?;
                 sections.push(section);
                 self.skip_statement_terminators();
+            } else if slow {
+                // @slow can only be applied to test sections
+                let token = self.current_token()?;
+                return Err(ParseError {
+                    message: "@slow attribute can only be applied to test sections".to_string(),
+                    line: token.span.start.line as usize,
+                    column: token.span.start.column as usize,
+                });
             } else {
                 // Parse as a regular statement
                 let stmt = self.parse_statement()?;
@@ -1017,25 +1273,46 @@ impl Parser {
         false
     }
 
-    /// Parse a section (input, part_one, part_two, or test)
-    fn parse_section(&mut self) -> Result<Section, ParseError> {
+    /// Parse a section (input, part_one, part_two, or test) with optional slow attribute
+    fn parse_section_with_slow(&mut self, slow: bool) -> Result<Section, ParseError> {
         let token = self.current_token()?.clone();
 
         if let TokenKind::Identifier(name) = &token.kind {
             match name.as_str() {
                 "input" => {
+                    if slow {
+                        return Err(ParseError {
+                            message: "@slow attribute can only be applied to test sections".to_string(),
+                            line: token.span.start.line as usize,
+                            column: token.span.start.column as usize,
+                        });
+                    }
                     self.advance(); // consume 'input'
                     self.expect(TokenKind::Colon)?;
                     let expr = self.parse_expression()?;
                     Ok(Section::Input(expr))
                 }
                 "part_one" => {
+                    if slow {
+                        return Err(ParseError {
+                            message: "@slow attribute can only be applied to test sections".to_string(),
+                            line: token.span.start.line as usize,
+                            column: token.span.start.column as usize,
+                        });
+                    }
                     self.advance(); // consume 'part_one'
                     self.expect(TokenKind::Colon)?;
                     let expr = self.parse_expression()?;
                     Ok(Section::PartOne(expr))
                 }
                 "part_two" => {
+                    if slow {
+                        return Err(ParseError {
+                            message: "@slow attribute can only be applied to test sections".to_string(),
+                            line: token.span.start.line as usize,
+                            column: token.span.start.column as usize,
+                        });
+                    }
                     self.advance(); // consume 'part_two'
                     self.expect(TokenKind::Colon)?;
                     let expr = self.parse_expression()?;
@@ -1102,6 +1379,7 @@ impl Parser {
                     })?;
 
                     Ok(Section::Test {
+                        slow,
                         input,
                         part_one: part_one_expr,
                         part_two: part_two_expr,

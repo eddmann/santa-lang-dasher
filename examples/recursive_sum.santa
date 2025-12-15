@@ -1,0 +1,30 @@
+// Tail-recursive list sum using an accumulator
+// Note: Non-tail recursive closures return nil in Dasher (known limitation)
+let sum_list_tail = |acc, list| match list {
+  [] { acc }
+  [head, ..tail] { sum_list_tail(acc + head, tail) }
+};
+
+let sum_list = |list| sum_list_tail(0, list);
+
+part_one: sum_list(input)
+
+test: {
+  input: [1, 2, 3, 4, 5]
+  part_one: 15
+}
+
+test: {
+  input: []
+  part_one: 0
+}
+
+test: {
+  input: [10]
+  part_one: 10
+}
+
+test: {
+  input: [1, 2, 3]
+  part_one: 6
+}

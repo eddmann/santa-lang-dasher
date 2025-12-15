@@ -1,0 +1,40 @@
+// Test core builtin functions
+// Tests: map, filter, reduce, first, rest, size, get, int, ints
+
+let numbers = [1, 2, 3, 4, 5];
+
+// Test map
+let doubled = map(|x| x * 2, numbers);
+
+// Test filter
+let evens = filter(|x| x % 2 == 0, numbers);
+
+// Test reduce
+let product = reduce(|a, b| a * b, numbers);
+
+// Test first
+let head = first(numbers);
+
+// Test rest
+let tail = rest(numbers);
+
+// Test size
+let len = size(numbers);
+
+// Test get
+let third = get(2, numbers);
+
+// Test int (string to int)
+let num = int("42");
+
+// Test ints (extract integers from string)
+let extracted = ints("abc 1 def 2 ghi 3");
+
+part_one: sum(doubled) + sum(evens) + product + head + sum(tail) + len + third + num
+part_two: sum(extracted)
+
+test: {
+  input: nil
+  part_one: 30 + 6 + 120 + 1 + 14 + 5 + 3 + 42
+  part_two: 6
+}

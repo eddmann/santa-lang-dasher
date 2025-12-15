@@ -1,0 +1,19 @@
+// Nested conditional expressions test
+// Tests else-if chains
+
+part_one: if input < 0 { -1 } else if input == 0 { 0 } else { 1 }
+
+test: {
+  input: -5
+  part_one: -1
+}
+
+test: {
+  input: 0
+  part_one: 0
+}
+
+test: {
+  input: 10
+  part_one: 1
+}

@@ -1439,3 +1439,57 @@ fn lex_range_operators() {
             ],
         )"#]]);
 }
+
+#[test]
+fn lex_at_symbol() {
+    // The @ symbol is used for attributes like @slow
+    check_tokens(
+        "@slow",
+        expect![[r#"
+            Ok(
+                [
+                    Token {
+                        kind: At,
+                        span: Span {
+                            start: Position {
+                                line: 1,
+                                column: 1,
+                            },
+                            end: Position {
+                                line: 1,
+                                column: 2,
+                            },
+                        },
+                    },
+                    Token {
+                        kind: Identifier(
+                            "slow",
+                        ),
+                        span: Span {
+                            start: Position {
+                                line: 1,
+                                column: 2,
+                            },
+                            end: Position {
+                                line: 1,
+                                column: 6,
+                            },
+                        },
+                    },
+                    Token {
+                        kind: Eof,
+                        span: Span {
+                            start: Position {
+                                line: 1,
+                                column: 6,
+                            },
+                            end: Position {
+                                line: 1,
+                                column: 6,
+                            },
+                        },
+                    },
+                ],
+            )"#]],
+    );
+}

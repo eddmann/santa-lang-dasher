@@ -1,0 +1,40 @@
+// Test extended builtin functions
+// Tests: flat_map, max, min, skip, take, reverse, lines, split, join, abs, signum
+
+let numbers = [1, 2, 3, 4, 5];
+let text = "hello world";
+
+// Test max and min
+let biggest = max(numbers);
+let smallest = min(numbers);
+
+// Test skip and take
+let skipped = skip(2, numbers);
+let taken = take(2, numbers);
+
+// Test reverse
+let reversed = reverse(numbers);
+
+// Test lines
+let multiline = "line1
+line2
+line3";
+let line_list = lines(multiline);
+
+// Test split and join
+let words = split(" ", text);
+let rejoined = join("-", words);
+
+// Test abs and signum
+let negative = -42;
+let absolute = abs(negative);
+let sign = signum(negative);
+
+part_one: biggest + smallest + sum(skipped) + sum(taken) + first(reversed) + size(line_list)
+part_two: absolute + sign
+
+test: {
+  input: nil
+  part_one: 5 + 1 + 12 + 3 + 5 + 3
+  part_two: 42 + -1
+}

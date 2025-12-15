@@ -1,0 +1,35 @@
+// Pattern matching test
+// Tests various match patterns
+
+let classify = |n| match n {
+  0 { "zero" }
+  1 { "one" }
+  _ { "other" }
+};
+
+part_one: match input {
+  [] { 0 }
+  [x] { x }
+  [a, b] { a + b }
+  _ { -1 }
+}
+
+test: {
+  input: []
+  part_one: 0
+}
+
+test: {
+  input: [42]
+  part_one: 42
+}
+
+test: {
+  input: [10, 20]
+  part_one: 30
+}
+
+test: {
+  input: [1, 2, 3]
+  part_one: -1
+}

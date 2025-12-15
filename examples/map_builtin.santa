@@ -1,0 +1,13 @@
+// Test map builtin function
+// Maps a function over a list
+
+let double = |x| x * 2;
+let numbers = [1, 2, 3];
+let doubled = map(double, numbers);
+
+part_one: sum(doubled)
+
+test: {
+  input: nil
+  part_one: 12
+}

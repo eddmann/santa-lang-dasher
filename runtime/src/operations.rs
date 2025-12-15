@@ -1,5 +1,55 @@
 use super::value::Value;
 
+/// Terminate execution with a runtime error.
+///
+/// Per LANG.txt §15.5, serious errors terminate execution with a RuntimeErr.
+/// This function prints to stderr and exits with code 2.
+///
+/// Note: This function is marked as allowing unwinding panic for tests,
+/// but in production use it will terminate the process.
+#[cfg_attr(test, allow(unreachable_code))]
+pub fn runtime_error(message: &str) -> ! {
+    // In test builds, we use a testing flag to control behavior
+    #[cfg(test)]
+    {
+        // For tests, panic with a message that can be caught
+        panic!("RuntimeError: {}", message);
+    }
+
+    #[cfg(not(test))]
+    {
+        eprintln!("RuntimeError: {}", message);
+        std::process::exit(2)
+    }
+}
+
+/// Get a human-readable type name for a Value (for error messages)
+pub fn type_name(value: &Value) -> &'static str {
+    if value.is_integer() {
+        "Integer"
+    } else if value.is_nil() {
+        "Nil"
+    } else if value.is_boolean() {
+        "Boolean"
+    } else if value.as_decimal().is_some() {
+        "Decimal"
+    } else if value.as_string().is_some() {
+        "String"
+    } else if value.as_list().is_some() {
+        "List"
+    } else if value.as_set().is_some() {
+        "Set"
+    } else if value.as_dict().is_some() {
+        "Dictionary"
+    } else if value.as_closure().is_some() {
+        "Function"
+    } else if value.as_lazy_sequence().is_some() {
+        "LazySequence"
+    } else {
+        "Unknown"
+    }
+}
+
 /// Add two values following santa-lang semantics
 ///
 /// Per LANG.txt §4.1:
@@ -117,12 +167,11 @@ pub extern "C" fn rt_mul(left: Value, right: Value) -> Value {
 /// - -7 / 2 = -4 (NOT -3 like Rust's default)
 /// - 7 / -2 = -4 (NOT -3)
 #[no_mangle]
-pub extern "C" fn rt_div(left: Value, right: Value) -> Value {
+pub extern "C-unwind" fn rt_div(left: Value, right: Value) -> Value {
     // Handle integers with floored division
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
         if r == 0 {
-            // TODO: Return RuntimeErr for division by zero
-            return Value::nil();
+            runtime_error("Division by zero");
         }
         return Value::from_integer(floored_div(l, r));
     }
@@ -130,8 +179,7 @@ pub extern "C" fn rt_div(left: Value, right: Value) -> Value {
     // Handle decimals (normal division)
     if let (Some(l), Some(r)) = (left.as_decimal(), right.as_decimal()) {
         if r == 0.0 {
-            // TODO: Return RuntimeErr for division by zero
-            return Value::nil();
+            runtime_error("Division by zero");
         }
         return Value::from_decimal(l / r);
     }
@@ -140,7 +188,7 @@ pub extern "C" fn rt_div(left: Value, right: Value) -> Value {
     if let Some(l) = left.as_integer() {
         if let Some(r) = right.as_decimal() {
             if r == 0.0 {
-                return Value::nil();
+                runtime_error("Division by zero");
             }
             return Value::from_integer((l as f64 / r) as i64);
         }
@@ -150,7 +198,7 @@ pub extern "C" fn rt_div(left: Value, right: Value) -> Value {
     if let Some(l) = left.as_decimal() {
         if let Some(r) = right.as_integer() {
             if r == 0 {
-                return Value::nil();
+                runtime_error("Division by zero");
             }
             return Value::from_decimal(l / r as f64);
         }
@@ -166,12 +214,11 @@ pub extern "C" fn rt_div(left: Value, right: Value) -> Value {
 /// - -7 % 3 = 2 (NOT -1 like Rust)
 /// - 7 % -3 = -2 (NOT 1 like Rust)
 #[no_mangle]
-pub extern "C" fn rt_mod(left: Value, right: Value) -> Value {
+pub extern "C-unwind" fn rt_mod(left: Value, right: Value) -> Value {
     // Handle integers with floored modulo
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
         if r == 0 {
-            // TODO: Return RuntimeErr for modulo by zero
-            return Value::nil();
+            runtime_error("Division by zero");
         }
         return Value::from_integer(floored_mod(l, r));
     }
@@ -219,10 +266,11 @@ pub extern "C" fn rt_ne(left: Value, right: Value) -> Value {
 
 /// Less-than comparison
 ///
-/// Per LANG.txt §4 and PLAN.md §8.5:
-/// Only Integer, Decimal, and String support comparison
+/// Per LANG.txt §4.4:
+/// Only Integer, Decimal, and String support comparison operators.
+/// Comparing other types (List, Set, Dict, Function, LazySequence) produces RuntimeErr.
 #[no_mangle]
-pub extern "C" fn rt_lt(left: Value, right: Value) -> Value {
+pub extern "C-unwind" fn rt_lt(left: Value, right: Value) -> Value {
     // Integer comparison
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
         return Value::from_bool(l < r);
@@ -251,14 +299,20 @@ pub extern "C" fn rt_lt(left: Value, right: Value) -> Value {
         return Value::from_bool(l < r);
     }
 
-    // TODO: Return RuntimeErr for unsupported types (List, Set, Dict, etc.)
-    // For now, return nil
-    Value::nil()
+    // Per LANG.txt §4.4: Other types are not comparable
+    runtime_error(&format!(
+        "Cannot compare {} with {} using '<'",
+        type_name(&left),
+        type_name(&right)
+    ))
 }
 
 /// Less-than-or-equal comparison
+///
+/// Per LANG.txt §4.4:
+/// Only Integer, Decimal, and String support comparison operators.
 #[no_mangle]
-pub extern "C" fn rt_le(left: Value, right: Value) -> Value {
+pub extern "C-unwind" fn rt_le(left: Value, right: Value) -> Value {
     // Integer comparison
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
         return Value::from_bool(l <= r);
@@ -287,12 +341,20 @@ pub extern "C" fn rt_le(left: Value, right: Value) -> Value {
         return Value::from_bool(l <= r);
     }
 
-    Value::nil()
+    // Per LANG.txt §4.4: Other types are not comparable
+    runtime_error(&format!(
+        "Cannot compare {} with {} using '<='",
+        type_name(&left),
+        type_name(&right)
+    ))
 }
 
 /// Greater-than comparison
+///
+/// Per LANG.txt §4.4:
+/// Only Integer, Decimal, and String support comparison operators.
 #[no_mangle]
-pub extern "C" fn rt_gt(left: Value, right: Value) -> Value {
+pub extern "C-unwind" fn rt_gt(left: Value, right: Value) -> Value {
     // Integer comparison
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
         return Value::from_bool(l > r);
@@ -321,12 +383,20 @@ pub extern "C" fn rt_gt(left: Value, right: Value) -> Value {
         return Value::from_bool(l > r);
     }
 
-    Value::nil()
+    // Per LANG.txt §4.4: Other types are not comparable
+    runtime_error(&format!(
+        "Cannot compare {} with {} using '>'",
+        type_name(&left),
+        type_name(&right)
+    ))
 }
 
 /// Greater-than-or-equal comparison
+///
+/// Per LANG.txt §4.4:
+/// Only Integer, Decimal, and String support comparison operators.
 #[no_mangle]
-pub extern "C" fn rt_ge(left: Value, right: Value) -> Value {
+pub extern "C-unwind" fn rt_ge(left: Value, right: Value) -> Value {
     // Integer comparison
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
         return Value::from_bool(l >= r);
@@ -355,7 +425,12 @@ pub extern "C" fn rt_ge(left: Value, right: Value) -> Value {
         return Value::from_bool(l >= r);
     }
 
-    Value::nil()
+    // Per LANG.txt §4.4: Other types are not comparable
+    runtime_error(&format!(
+        "Cannot compare {} with {} using '>='",
+        type_name(&left),
+        type_name(&right)
+    ))
 }
 
 /// Convert a Value to its string representation
@@ -417,19 +492,56 @@ pub unsafe extern "C" fn rt_make_closure(
 ///
 /// The closure's function expects the signature:
 ///   fn(env: *const ClosureObject, argc: u32, argv: *const Value) -> Value
+///
+/// This function also handles memoized closures by delegating to rt_call_memoized.
+///
+/// # Safety
+/// The caller must ensure `argv` points to a valid array of `argc` Values.
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn rt_call(callee: Value, argc: u32, argv: *const Value) -> Value {
+    // Try regular closure first
     if let Some(closure) = callee.as_closure() {
         // Cast the function pointer to the expected signature
         let fn_ptr: extern "C" fn(*const ClosureObject, u32, *const Value) -> Value =
             unsafe { std::mem::transmute(closure.function_ptr) };
 
         // Call the function with the closure environment and arguments
-        fn_ptr(closure as *const ClosureObject, argc, argv)
-    } else {
-        // TODO: Return RuntimeErr for calling non-callable value
-        Value::nil()
+        return fn_ptr(closure as *const ClosureObject, argc, argv);
     }
+
+    // Try memoized closure
+    if let Some(memoized) = callee.as_memoized_closure() {
+        // Collect arguments into a vector for cache lookup
+        let args: Vec<Value> = if argc == 0 || argv.is_null() {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(argv, argc as usize).to_vec() }
+        };
+
+        // Check cache first
+        if let Some(cached) = memoized.get_cached(&args) {
+            return cached;
+        }
+
+        // Not in cache - call the inner closure
+        let inner_closure = memoized.inner_closure;
+        if let Some(closure) = inner_closure.as_closure() {
+            // Call the inner closure
+            let result = crate::builtins::call_closure(closure, &args);
+
+            // Cache the result
+            memoized.cache_result(args, result);
+
+            return result;
+        }
+
+        // Inner value is not a closure - shouldn't happen with rt_memoize
+        return Value::nil();
+    }
+
+    // TODO: Return RuntimeErr for calling non-callable value
+    Value::nil()
 }
 
 /// Get a captured value from a closure environment
@@ -449,4 +561,52 @@ pub unsafe extern "C" fn rt_get_capture(env_ptr: *const ClosureObject, index: us
 
     let closure = &*env_ptr;
     closure.get_capture(index).unwrap_or_else(Value::nil)
+}
+
+// ===== Mutable Cell Operations =====
+//
+// Mutable cells are used to implement mutable variable capture in closures.
+// When a mutable variable is captured by an inner closure, we wrap it in a cell
+// so both the outer scope and the inner closure share the same mutable storage.
+
+/// Create a new mutable cell containing the given value.
+///
+/// Allocates a heap object that can be shared between closures to enable
+/// mutable captures (LANG.txt §8.3 counter pattern).
+#[no_mangle]
+pub extern "C" fn rt_cell_new(value: Value) -> Value {
+    Value::from_cell(value)
+}
+
+/// Get the current value from a mutable cell.
+///
+/// # Safety
+///
+/// The `cell` argument must be a valid mutable cell Value, or this will panic.
+#[no_mangle]
+pub extern "C" fn rt_cell_get(cell: Value) -> Value {
+    if let Some(cell_ptr) = cell.as_cell() {
+        unsafe { (*cell_ptr).value }
+    } else {
+        runtime_error("rt_cell_get: expected a mutable cell")
+    }
+}
+
+/// Set the value in a mutable cell.
+///
+/// # Safety
+///
+/// The `cell` argument must be a valid mutable cell Value, or this will panic.
+/// This function mutates the cell in place - the old value is not decremented
+/// (caller should handle reference counting if needed).
+#[no_mangle]
+pub extern "C" fn rt_cell_set(cell: Value, value: Value) -> Value {
+    if let Some(cell_ptr) = cell.as_cell() {
+        unsafe {
+            (*cell_ptr).value = value;
+        }
+        value // Return the set value (assignment returns the assigned value)
+    } else {
+        runtime_error("rt_cell_set: expected a mutable cell")
+    }
 }

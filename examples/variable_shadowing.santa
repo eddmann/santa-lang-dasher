@@ -1,0 +1,30 @@
+// Variable shadowing tests
+// Tests that variables in inner scopes properly shadow outer scopes
+
+// Shadowing in a nested block
+let outer = 1;
+let result1 = {
+  let outer = 2;  // shadows outer
+  outer
+};
+// After block, outer should be restored to 1
+
+// Multiple levels of shadowing
+let a = 10;
+let result2 = {
+  let a = 20;  // first shadow
+  let b = {
+    let a = 30;  // second shadow
+    a
+  };
+  a + b  // 20 + 30 = 50
+};
+
+part_one: outer + result1
+part_two: a + result2
+
+test: {
+  input: 0
+  part_one: 3    // outer (1) + result1 (2) = 3
+  part_two: 60   // a (10) + result2 (50) = 60
+}

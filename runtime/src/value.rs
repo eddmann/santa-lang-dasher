@@ -1,4 +1,4 @@
-use super::heap::{StringObject, ListObject, SetObject, DictObject, MutableCellObject, ClosureObject, ObjectHeader, TypeTag};
+use super::heap::{StringObject, ListObject, SetObject, DictObject, MutableCellObject, ClosureObject, LazySequenceObject, MemoizedClosureObject, ObjectHeader, TypeTag};
 
 /// 64-bit NaN-boxed value representation
 ///
@@ -295,6 +295,46 @@ impl Value {
         self.heap_type_tag() == Some(TypeTag::Closure)
     }
 
+    // ===== LazySequence Operations =====
+
+    pub fn from_lazy_sequence(lazy: Box<LazySequenceObject>) -> Self {
+        let ptr = Box::into_raw(lazy);
+        Value::from_heap_ptr(ptr)
+    }
+
+    pub fn as_lazy_sequence(&self) -> Option<&LazySequenceObject> {
+        if self.heap_type_tag() == Some(TypeTag::LazySequence) {
+            let ptr = self.0 as *const LazySequenceObject;
+            unsafe { Some(&*ptr) }
+        } else {
+            None
+        }
+    }
+
+    pub fn is_lazy_sequence(&self) -> bool {
+        self.heap_type_tag() == Some(TypeTag::LazySequence)
+    }
+
+    // ===== Memoized Closure Operations =====
+
+    pub fn from_memoized_closure(memoized: Box<MemoizedClosureObject>) -> Self {
+        let ptr = Box::into_raw(memoized);
+        Value::from_heap_ptr(ptr)
+    }
+
+    pub fn as_memoized_closure(&self) -> Option<&MemoizedClosureObject> {
+        if self.heap_type_tag() == Some(TypeTag::MemoizedClosure) {
+            let ptr = self.0 as *const MemoizedClosureObject;
+            unsafe { Some(&*ptr) }
+        } else {
+            None
+        }
+    }
+
+    pub fn is_memoized_closure(&self) -> bool {
+        self.heap_type_tag() == Some(TypeTag::MemoizedClosure)
+    }
+
     // ===== Truthiness (LANG.txt §14.1) =====
 
     pub fn is_truthy(&self) -> bool {
@@ -318,6 +358,41 @@ impl Value {
             // Other heap objects (functions, closures, lazy sequences) are truthy
             true
         }
+    }
+
+    // ===== Hashability (LANG.txt §3.11) =====
+
+    /// Check if this value can be used as a Set element or Dict key.
+    ///
+    /// Per LANG.txt §3.11:
+    /// - Hashable: Nil, Integer, Decimal, Boolean, String, Set
+    /// - Hashable if elements hashable: List
+    /// - Non-hashable: Dictionary, LazySequence, Function
+    pub fn is_hashable(&self) -> bool {
+        // Primitives are always hashable
+        if self.is_integer() || self.is_nil() || self.is_boolean() {
+            return true;
+        }
+        if self.as_decimal().is_some() {
+            return true;
+        }
+        if self.as_string().is_some() {
+            return true;
+        }
+
+        // Sets are hashable
+        if self.as_set().is_some() {
+            return true;
+        }
+
+        // Lists are hashable only if all elements are hashable
+        if let Some(list) = self.as_list() {
+            return list.iter().all(|v| v.is_hashable());
+        }
+
+        // Non-hashable types: Dict, LazySequence, Function
+        // Dicts, closures, memoized closures, and lazy sequences are NOT hashable
+        false
     }
 }
 

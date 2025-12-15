@@ -1,0 +1,33 @@
+// Let binding tests
+// Tests variable bindings in blocks
+
+part_one: {
+  let x = input + 1;
+  let y = x * 2;
+  y + 3
+}
+
+part_two: {
+  let a = input;
+  let b = a + a;
+  let c = b * b;
+  c
+}
+
+test: {
+  input: 5
+  part_one: 15
+  part_two: 100
+}
+
+test: {
+  input: 0
+  part_one: 5
+  part_two: 0
+}
+
+test: {
+  input: 3
+  part_one: 11
+  part_two: 36
+}
