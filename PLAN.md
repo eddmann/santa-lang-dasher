@@ -1681,12 +1681,12 @@ fn nested_closures() { ... }
 
 ### Release Gate 9
 
-- [ ] Simple closures capture variables correctly
-- [ ] Nested closures work
-- [ ] Mutable captures update correctly
-- [ ] Counter example from LANG.txt works correctly
-- [ ] All tests pass
-- [ ] `cargo clippy` clean
+- [x] Simple closures capture variables correctly
+- [x] Nested closures work
+- [ ] Mutable captures update correctly (deferred - requires MutableCell boxes for shared mutation)
+- [ ] Counter example from LANG.txt works correctly (deferred - requires mutable captures)
+- [x] All tests pass
+- [x] `cargo clippy` clean
 
 ---
 

@@ -375,3 +375,78 @@ fn value_to_string(value: &Value) -> String {
         "<?>".to_string()
     }
 }
+
+// ===== Closure Operations =====
+
+use super::heap::ClosureObject;
+
+/// Create a new closure with the given function pointer and captured values
+///
+/// Called from generated LLVM code to create closure objects.
+///
+/// # Safety
+///
+/// - `captures_ptr` must be a valid pointer to an array of `captures_count` Values,
+///   or null if `captures_count` is 0
+/// - The caller must ensure the captures array is valid for the duration of this call
+///
+/// Arguments:
+/// - function_ptr: Pointer to the compiled function code
+/// - arity: Number of parameters the function expects
+/// - captures_ptr: Pointer to an array of captured values
+/// - captures_count: Number of captured values
+#[no_mangle]
+pub unsafe extern "C" fn rt_make_closure(
+    function_ptr: *const (),
+    arity: u32,
+    captures_ptr: *const Value,
+    captures_count: usize,
+) -> Value {
+    // Collect captured values into a Vec
+    let captures = if captures_count == 0 || captures_ptr.is_null() {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(captures_ptr, captures_count).to_vec()
+    };
+
+    let closure = ClosureObject::new(function_ptr, arity, captures);
+    Value::from_closure(closure)
+}
+
+/// Call a closure with the given arguments
+///
+/// The closure's function expects the signature:
+///   fn(env: *const ClosureObject, argc: u32, argv: *const Value) -> Value
+#[no_mangle]
+pub extern "C" fn rt_call(callee: Value, argc: u32, argv: *const Value) -> Value {
+    if let Some(closure) = callee.as_closure() {
+        // Cast the function pointer to the expected signature
+        let fn_ptr: extern "C" fn(*const ClosureObject, u32, *const Value) -> Value =
+            unsafe { std::mem::transmute(closure.function_ptr) };
+
+        // Call the function with the closure environment and arguments
+        fn_ptr(closure as *const ClosureObject, argc, argv)
+    } else {
+        // TODO: Return RuntimeErr for calling non-callable value
+        Value::nil()
+    }
+}
+
+/// Get a captured value from a closure environment
+///
+/// Called from generated LLVM code to access captured values within a closure body.
+///
+/// # Safety
+///
+/// - `env_ptr` must be a valid pointer to a ClosureObject, or null
+/// - The caller must ensure the closure object is valid for the duration of this call
+#[no_mangle]
+pub unsafe extern "C" fn rt_get_capture(env_ptr: *const ClosureObject, index: usize) -> Value {
+    if env_ptr.is_null() {
+        // No closure environment - shouldn't happen if codegen is correct
+        return Value::nil();
+    }
+
+    let closure = &*env_ptr;
+    closure.get_capture(index).unwrap_or_else(Value::nil)
+}

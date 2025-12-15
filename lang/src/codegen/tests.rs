@@ -643,3 +643,229 @@ fn codegen_block_expression() {
     assert!(result.is_ok());
     assert!(result.unwrap().is_int_value());
 }
+
+// ===== Phase 9: Closures & Function Calls Tests =====
+
+#[test]
+fn codegen_simple_function_expression() {
+    use crate::parser::ast::Param;
+
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    let _function = codegen.create_test_function();
+
+    // Create a simple function expression: |x| x + 1
+    let expr = TypedExpr {
+        expr: Expr::Function {
+            params: vec![Param { name: "x".to_string() }],
+            body: Box::new(Expr::Infix {
+                left: Box::new(Expr::Identifier("x".to_string())),
+                op: InfixOp::Add,
+                right: Box::new(Expr::Integer(1)),
+            }),
+        },
+        ty: Type::Function {
+            params: vec![Type::Int],
+            ret: Box::new(Type::Int),
+        },
+        span: Span::new(Position::new(1, 1), Position::new(1, 10)),
+    };
+
+    // Compile the expression - should produce a closure value
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok(), "Failed to compile function expression: {:?}", result.err());
+    // The result should be a heap object (closure)
+    assert!(result.unwrap().is_int_value());
+}
+
+#[test]
+fn codegen_function_call() {
+    use crate::parser::ast::Param;
+
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    let _function = codegen.create_test_function();
+
+    // Create a function call: (|x| x + 1)(5)
+    let expr = TypedExpr {
+        expr: Expr::Call {
+            function: Box::new(Expr::Function {
+                params: vec![Param { name: "x".to_string() }],
+                body: Box::new(Expr::Infix {
+                    left: Box::new(Expr::Identifier("x".to_string())),
+                    op: InfixOp::Add,
+                    right: Box::new(Expr::Integer(1)),
+                }),
+            }),
+            args: vec![Expr::Integer(5)],
+        },
+        ty: Type::Int,
+        span: Span::new(Position::new(1, 1), Position::new(1, 20)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok(), "Failed to compile function call: {:?}", result.err());
+    assert!(result.unwrap().is_int_value());
+}
+
+#[test]
+fn codegen_function_with_multiple_params() {
+    use crate::parser::ast::Param;
+
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    let _function = codegen.create_test_function();
+
+    // Create a multi-param function: |a, b| a + b
+    let expr = TypedExpr {
+        expr: Expr::Function {
+            params: vec![
+                Param { name: "a".to_string() },
+                Param { name: "b".to_string() },
+            ],
+            body: Box::new(Expr::Infix {
+                left: Box::new(Expr::Identifier("a".to_string())),
+                op: InfixOp::Add,
+                right: Box::new(Expr::Identifier("b".to_string())),
+            }),
+        },
+        ty: Type::Function {
+            params: vec![Type::Int, Type::Int],
+            ret: Box::new(Type::Int),
+        },
+        span: Span::new(Position::new(1, 1), Position::new(1, 15)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok(), "Failed to compile multi-param function: {:?}", result.err());
+    assert!(result.unwrap().is_int_value());
+}
+
+#[test]
+fn codegen_zero_arg_function() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    let _function = codegen.create_test_function();
+
+    // Create a zero-arg function: || 42
+    let expr = TypedExpr {
+        expr: Expr::Function {
+            params: vec![],
+            body: Box::new(Expr::Integer(42)),
+        },
+        ty: Type::Function {
+            params: vec![],
+            ret: Box::new(Type::Int),
+        },
+        span: Span::new(Position::new(1, 1), Position::new(1, 6)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok(), "Failed to compile zero-arg function: {:?}", result.err());
+    assert!(result.unwrap().is_int_value());
+}
+
+#[test]
+fn codegen_zero_arg_function_call() {
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    let _function = codegen.create_test_function();
+
+    // Create a zero-arg function call: (|| 42)()
+    let expr = TypedExpr {
+        expr: Expr::Call {
+            function: Box::new(Expr::Function {
+                params: vec![],
+                body: Box::new(Expr::Integer(42)),
+            }),
+            args: vec![],
+        },
+        ty: Type::Int,
+        span: Span::new(Position::new(1, 1), Position::new(1, 10)),
+    };
+
+    // Compile the expression
+    let result = codegen.compile_expr(&expr);
+    assert!(result.is_ok(), "Failed to compile zero-arg function call: {:?}", result.err());
+    assert!(result.unwrap().is_int_value());
+}
+
+#[test]
+fn codegen_closure_captures_variable() {
+    use crate::parser::ast::{Param, Stmt, Pattern};
+
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    let _function = codegen.create_test_function();
+
+    // First, define a variable: let x = 5;
+    let let_stmt = Stmt::Let {
+        mutable: false,
+        pattern: Pattern::Identifier("x".to_string()),
+        value: Expr::Integer(5),
+    };
+    codegen.compile_stmt(&let_stmt).unwrap();
+
+    // Create a closure that captures x: |y| x + y
+    let closure_expr = TypedExpr {
+        expr: Expr::Function {
+            params: vec![Param { name: "y".to_string() }],
+            body: Box::new(Expr::Infix {
+                left: Box::new(Expr::Identifier("x".to_string())),
+                op: InfixOp::Add,
+                right: Box::new(Expr::Identifier("y".to_string())),
+            }),
+        },
+        ty: Type::Function {
+            params: vec![Type::Int],
+            ret: Box::new(Type::Int),
+        },
+        span: Span::new(Position::new(1, 1), Position::new(1, 15)),
+    };
+
+    // Compile the closure
+    let result = codegen.compile_expr(&closure_expr);
+    assert!(result.is_ok(), "Failed to compile closure with capture: {:?}", result.err());
+    assert!(result.unwrap().is_int_value());
+}
+
+#[test]
+fn codegen_make_adder_pattern() {
+    use crate::parser::ast::Param;
+
+    let context = Context::create();
+    let mut codegen = super::context::CodegenContext::new(&context, "test_module");
+    let _function = codegen.create_test_function();
+
+    // Create make_adder pattern: |x| |y| x + y
+    // This is a function that returns a closure capturing x
+    let make_adder_expr = TypedExpr {
+        expr: Expr::Function {
+            params: vec![Param { name: "x".to_string() }],
+            body: Box::new(Expr::Function {
+                params: vec![Param { name: "y".to_string() }],
+                body: Box::new(Expr::Infix {
+                    left: Box::new(Expr::Identifier("x".to_string())),
+                    op: InfixOp::Add,
+                    right: Box::new(Expr::Identifier("y".to_string())),
+                }),
+            }),
+        },
+        ty: Type::Function {
+            params: vec![Type::Int],
+            ret: Box::new(Type::Function {
+                params: vec![Type::Int],
+                ret: Box::new(Type::Int),
+            }),
+        },
+        span: Span::new(Position::new(1, 1), Position::new(1, 20)),
+    };
+
+    // Compile the function
+    let result = codegen.compile_expr(&make_adder_expr);
+    assert!(result.is_ok(), "Failed to compile make_adder pattern: {:?}", result.err());
+    assert!(result.unwrap().is_int_value());
+}

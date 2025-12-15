@@ -1,8 +1,9 @@
 use crate::types::{TypedExpr, Type};
-use crate::parser::ast::{Expr, InfixOp, PrefixOp, Stmt, Pattern};
+use crate::parser::ast::{Expr, InfixOp, PrefixOp, Stmt, Pattern, Param};
 use inkwell::values::BasicValueEnum;
 use inkwell::IntPredicate;
 use super::context::CodegenContext;
+use std::collections::HashSet;
 
 #[derive(Debug)]
 pub enum CompileError {
@@ -56,6 +57,12 @@ impl<'ctx> CodegenContext<'ctx> {
             },
             Expr::Block(stmts) => {
                 self.compile_block(stmts)
+            },
+            Expr::Function { params, body } => {
+                self.compile_function(params, body)
+            },
+            Expr::Call { function, args } => {
+                self.compile_call(function, args)
             },
             _ => Err(CompileError::UnsupportedExpression(
                 format!("Expression type not yet implemented: {:?}", expr.expr)
@@ -1124,5 +1131,418 @@ impl<'ctx> CodegenContext<'ctx> {
                 format!("Pattern type not yet implemented: {:?}", pattern)
             ))
         }
+    }
+
+    // ===== Phase 9: Closures & Function Calls =====
+
+    /// Compile a function expression into a closure
+    ///
+    /// This creates:
+    /// 1. A new LLVM function for the closure body
+    /// 2. A call to rt_make_closure to create the closure object
+    fn compile_function(
+        &mut self,
+        params: &[Param],
+        body: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Generate a unique name for this closure function
+        static CLOSURE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let closure_id = CLOSURE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let closure_name = format!("closure_{}", closure_id);
+
+        // Analyze what variables this closure captures from the enclosing scope
+        let captured_vars: Vec<String> = self.find_captured_variables(params, body)
+            .into_iter()
+            .collect();
+
+        // Create the closure function type
+        // Signature: fn(env: *ClosureObject, argc: u32, argv: *Value) -> Value (i64)
+        let i64_type = self.context.i64_type();
+        let i32_type = self.context.i32_type();
+        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+
+        let closure_fn_type = i64_type.fn_type(
+            &[ptr_type.into(), i32_type.into(), ptr_type.into()],
+            false,
+        );
+
+        // Create the closure function
+        let closure_fn = self.module.add_function(&closure_name, closure_fn_type, None);
+        let entry_block = self.context.append_basic_block(closure_fn, "entry");
+
+        // Save current builder position
+        let saved_block = self.builder.get_insert_block();
+        let saved_variables = self.variables.clone();
+
+        // Position builder at the closure function's entry
+        self.builder.position_at_end(entry_block);
+
+        // Get function parameters
+        let env_ptr = closure_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let _argc = closure_fn.get_nth_param(1).unwrap().into_int_value();
+        let argv = closure_fn.get_nth_param(2).unwrap().into_pointer_value();
+
+        // Clear variables for the closure's scope
+        self.variables.clear();
+
+        // Load parameters from argv into local variables
+        for (i, param) in params.iter().enumerate() {
+            // Calculate pointer to argv[i]
+            let index = self.context.i64_type().const_int(i as u64, false);
+            let arg_ptr = unsafe {
+                self.builder.build_in_bounds_gep(
+                    i64_type,
+                    argv,
+                    &[index],
+                    &format!("arg_ptr_{}", i),
+                ).unwrap()
+            };
+
+            // Load the argument value
+            let arg_val = self.builder.build_load(i64_type, arg_ptr, &param.name).unwrap();
+
+            // Create an alloca for this parameter
+            let alloca = self.builder.build_alloca(i64_type, &param.name).unwrap();
+            self.builder.build_store(alloca, arg_val).unwrap();
+            self.variables.insert(param.name.clone(), alloca);
+        }
+
+        // Load captured variables from the closure environment
+        // The closure object has captures stored after the header fields
+        // We call rt_get_capture(env_ptr, index) to get each captured value
+        for (i, var_name) in captured_vars.iter().enumerate() {
+            let rt_get_capture = self.get_or_declare_rt_get_capture();
+            let capture_index = self.context.i64_type().const_int(i as u64, false);
+
+            let captured_val = self.builder.build_call(
+                rt_get_capture,
+                &[env_ptr.into(), capture_index.into()],
+                &format!("cap_{}", var_name),
+            ).unwrap();
+
+            // Create an alloca for this captured variable
+            let alloca = self.builder.build_alloca(i64_type, var_name).unwrap();
+            self.builder.build_store(alloca, captured_val.try_as_basic_value().left().unwrap()).unwrap();
+            self.variables.insert(var_name.clone(), alloca);
+        }
+
+        // Compile the body
+        let body_ty = self.infer_expr_type(body);
+        let body_typed = TypedExpr {
+            expr: body.clone(),
+            ty: body_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        let body_result = self.compile_expr(&body_typed)?;
+
+        // Return the result
+        self.builder.build_return(Some(&body_result)).unwrap();
+
+        // Restore builder position and variables
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+
+        // Now create the closure object by calling rt_make_closure
+        // Note: We need to use saved_variables to get capture values BEFORE restoring self.variables
+        let fn_ptr = closure_fn.as_global_value().as_pointer_value();
+        let arity = self.context.i32_type().const_int(params.len() as u64, false);
+
+        // Create array of captured values
+        let captures_count = captured_vars.len();
+        let captures_ptr = if captures_count == 0 {
+            self.context.ptr_type(inkwell::AddressSpace::from(0)).const_null()
+        } else {
+            // Allocate stack space for captures array
+            let array_type = i64_type.array_type(captures_count as u32);
+            let array_alloca = self.builder.build_alloca(array_type, "captures").unwrap();
+
+            // Store each captured value
+            for (i, var_name) in captured_vars.iter().enumerate() {
+                // Get the captured variable's current value from saved_variables
+                let var_ptr = saved_variables.get(var_name).ok_or_else(|| {
+                    CompileError::UnsupportedExpression(format!("Undefined capture: {}", var_name))
+                })?;
+                let var_val = self.builder.build_load(i64_type, *var_ptr, var_name).unwrap();
+
+                // Store in captures array
+                let index = self.context.i64_type().const_int(i as u64, false);
+                let elem_ptr = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        array_type,
+                        array_alloca,
+                        &[self.context.i64_type().const_zero(), index],
+                        &format!("cap_ptr_{}", i),
+                    ).unwrap()
+                };
+                self.builder.build_store(elem_ptr, var_val).unwrap();
+            }
+
+            // Cast to pointer
+            self.builder.build_pointer_cast(array_alloca, ptr_type, "captures_ptr").unwrap()
+        };
+
+        // Now restore self.variables
+        self.variables = saved_variables;
+
+        let captures_count_val = self.context.i64_type().const_int(captures_count as u64, false);
+
+        let rt_make_closure = self.get_or_declare_rt_make_closure();
+        let closure_result = self.builder.build_call(
+            rt_make_closure,
+            &[fn_ptr.into(), arity.into(), captures_ptr.into(), captures_count_val.into()],
+            "closure",
+        ).unwrap();
+
+        Ok(closure_result.try_as_basic_value().left().unwrap())
+    }
+
+    /// Find variables that need to be captured by a closure
+    fn find_captured_variables(&self, params: &[Param], body: &Expr) -> HashSet<String> {
+        let mut free_vars = HashSet::new();
+        let param_names: HashSet<String> = params.iter().map(|p| p.name.clone()).collect();
+
+        Self::collect_free_variables(body, &param_names, &mut free_vars);
+
+        // Filter to only variables that exist in the current scope
+        free_vars
+            .into_iter()
+            .filter(|name| self.variables.contains_key(name))
+            .collect()
+    }
+
+    /// Recursively collect free variables in an expression
+    fn collect_free_variables(
+        expr: &Expr,
+        bound: &HashSet<String>,
+        free: &mut HashSet<String>,
+    ) {
+        match expr {
+            Expr::Identifier(name) => {
+                if !bound.contains(name) {
+                    free.insert(name.clone());
+                }
+            }
+            Expr::Infix { left, right, .. } => {
+                Self::collect_free_variables(left, bound, free);
+                Self::collect_free_variables(right, bound, free);
+            }
+            Expr::Prefix { right, .. } => {
+                Self::collect_free_variables(right, bound, free);
+            }
+            Expr::If { condition, then_branch, else_branch } => {
+                Self::collect_free_variables(condition, bound, free);
+                Self::collect_free_variables(then_branch, bound, free);
+                if let Some(else_br) = else_branch {
+                    Self::collect_free_variables(else_br, bound, free);
+                }
+            }
+            Expr::Call { function, args } => {
+                Self::collect_free_variables(function, bound, free);
+                for arg in args {
+                    Self::collect_free_variables(arg, bound, free);
+                }
+            }
+            Expr::Function { params, body } => {
+                // Add params to bound set for nested function
+                let mut new_bound = bound.clone();
+                for param in params {
+                    new_bound.insert(param.name.clone());
+                }
+                Self::collect_free_variables(body, &new_bound, free);
+            }
+            Expr::Block(stmts) => {
+                let mut new_bound = bound.clone();
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Let { pattern, value, .. } => {
+                            // First collect from value (before adding binding)
+                            Self::collect_free_variables(value, &new_bound, free);
+                            // Then add binding
+                            if let Pattern::Identifier(name) = pattern {
+                                new_bound.insert(name.clone());
+                            }
+                        }
+                        Stmt::Expr(e) => {
+                            Self::collect_free_variables(e, &new_bound, free);
+                        }
+                        Stmt::Return(e) | Stmt::Break(e) => {
+                            Self::collect_free_variables(e, &new_bound, free);
+                        }
+                    }
+                }
+            }
+            Expr::List(elements) => {
+                for elem in elements {
+                    Self::collect_free_variables(elem, bound, free);
+                }
+            }
+            Expr::Set(elements) => {
+                for elem in elements {
+                    Self::collect_free_variables(elem, bound, free);
+                }
+            }
+            Expr::Dict(entries) => {
+                for (k, v) in entries {
+                    Self::collect_free_variables(k, bound, free);
+                    Self::collect_free_variables(v, bound, free);
+                }
+            }
+            Expr::Index { collection, index } => {
+                Self::collect_free_variables(collection, bound, free);
+                Self::collect_free_variables(index, bound, free);
+            }
+            Expr::Range { start, end, .. } => {
+                Self::collect_free_variables(start, bound, free);
+                if let Some(e) = end {
+                    Self::collect_free_variables(e, bound, free);
+                }
+            }
+            // Literals and constants have no free variables
+            Expr::Integer(_) | Expr::Decimal(_) | Expr::String(_) |
+            Expr::Boolean(_) | Expr::Nil | Expr::Placeholder => {}
+            // Other expressions - add as needed
+            _ => {}
+        }
+    }
+
+    /// Compile a function call
+    fn compile_call(
+        &mut self,
+        function: &Expr,
+        args: &[Expr],
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Compile the function expression
+        let fn_ty = self.infer_expr_type(function);
+        let fn_typed = TypedExpr {
+            expr: function.clone(),
+            ty: fn_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        let fn_val = self.compile_expr(&fn_typed)?;
+
+        // Compile arguments
+        let mut compiled_args = Vec::new();
+        for arg in args {
+            let arg_ty = self.infer_expr_type(arg);
+            let arg_typed = TypedExpr {
+                expr: arg.clone(),
+                ty: arg_ty,
+                span: crate::lexer::token::Span::new(
+                    crate::lexer::token::Position::new(0, 0),
+                    crate::lexer::token::Position::new(0, 0),
+                ),
+            };
+            let compiled = self.compile_expr(&arg_typed)?;
+            compiled_args.push(compiled);
+        }
+
+        // Allocate an array on the stack for arguments
+        let i64_type = self.context.i64_type();
+        let argc = args.len();
+
+        let argv_ptr = if argc == 0 {
+            // No arguments, use null pointer
+            self.context.ptr_type(inkwell::AddressSpace::from(0)).const_null()
+        } else {
+            // Allocate stack space for arguments
+            let array_type = i64_type.array_type(argc as u32);
+            let array_alloca = self.builder.build_alloca(array_type, "call_args").unwrap();
+
+            // Store each argument
+            for (i, arg) in compiled_args.iter().enumerate() {
+                let index = self.context.i64_type().const_int(i as u64, false);
+                let elem_ptr = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        array_type,
+                        array_alloca,
+                        &[self.context.i64_type().const_zero(), index],
+                        &format!("arg_ptr_{}", i),
+                    ).unwrap()
+                };
+                self.builder.build_store(elem_ptr, *arg).unwrap();
+            }
+
+            // Cast to pointer
+            let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+            self.builder.build_pointer_cast(array_alloca, ptr_type, "argv_ptr").unwrap()
+        };
+
+        // Call rt_call(callee, argc, argv)
+        let rt_call = self.get_or_declare_rt_call();
+        let argc_val = self.context.i32_type().const_int(argc as u64, false);
+
+        let call_result = self.builder.build_call(
+            rt_call,
+            &[fn_val.into(), argc_val.into(), argv_ptr.into()],
+            "call_result",
+        ).unwrap();
+
+        Ok(call_result.try_as_basic_value().left().unwrap())
+    }
+
+    /// Get or declare the rt_make_closure runtime function
+    fn get_or_declare_rt_make_closure(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_make_closure";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (fn_ptr: ptr, arity: i32, captures_ptr: ptr, captures_count: i64) -> i64
+        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+        let i32_type = self.context.i32_type();
+        let i64_type = self.context.i64_type();
+
+        let fn_type = i64_type.fn_type(
+            &[ptr_type.into(), i32_type.into(), ptr_type.into(), i64_type.into()],
+            false,
+        );
+
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_call runtime function
+    fn get_or_declare_rt_call(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_call";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (callee: i64, argc: i32, argv: ptr) -> i64
+        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+        let i32_type = self.context.i32_type();
+        let i64_type = self.context.i64_type();
+
+        let fn_type = i64_type.fn_type(
+            &[i64_type.into(), i32_type.into(), ptr_type.into()],
+            false,
+        );
+
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_get_capture runtime function
+    fn get_or_declare_rt_get_capture(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_get_capture";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (env_ptr: ptr, index: i64) -> i64
+        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+        let i64_type = self.context.i64_type();
+
+        let fn_type = i64_type.fn_type(
+            &[ptr_type.into(), i64_type.into()],
+            false,
+        );
+
+        self.module.add_function(fn_name, fn_type, None)
     }
 }

@@ -1,4 +1,4 @@
-use super::heap::{StringObject, ListObject, SetObject, DictObject, MutableCellObject};
+use super::heap::{StringObject, ListObject, SetObject, DictObject, MutableCellObject, ClosureObject};
 
 /// 64-bit NaN-boxed value representation
 ///
@@ -233,6 +233,25 @@ impl Value {
     pub fn as_cell(&self) -> Option<*mut MutableCellObject> {
         self.as_heap_ptr::<MutableCellObject>()
             .map(|ptr| ptr as *mut MutableCellObject)
+    }
+
+    // ===== Closure Operations =====
+
+    pub fn from_closure(closure: Box<ClosureObject>) -> Self {
+        let ptr = Box::into_raw(closure);
+        Value::from_heap_ptr(ptr)
+    }
+
+    pub fn as_closure(&self) -> Option<&ClosureObject> {
+        if let Some(ptr) = self.as_heap_ptr::<ClosureObject>() {
+            unsafe { Some(&*ptr) }
+        } else {
+            None
+        }
+    }
+
+    pub fn is_closure(&self) -> bool {
+        self.as_closure().is_some()
     }
 
     // ===== Truthiness (LANG.txt §14.1) =====

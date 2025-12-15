@@ -165,3 +165,40 @@ impl MutableCellObject {
         self.value = value;
     }
 }
+
+/// Closure heap object (LANG.txt §8.3)
+/// Closures store a function pointer and captured environment values.
+///
+/// The function signature for closure functions is:
+///   fn(env: *const ClosureObject, argc: u32, argv: *const Value) -> Value
+///
+/// Where `env` points to this closure object, allowing access to captured values.
+#[repr(C)]
+pub struct ClosureObject {
+    pub header: ObjectHeader,
+    /// Pointer to the compiled function code
+    pub function_ptr: *const (),
+    /// Number of parameters the function expects
+    pub arity: u32,
+    /// Captured environment values (flexible array)
+    pub captures: Vec<super::value::Value>,
+}
+
+impl ClosureObject {
+    pub fn new(
+        function_ptr: *const (),
+        arity: u32,
+        captures: Vec<super::value::Value>,
+    ) -> Box<Self> {
+        Box::new(ClosureObject {
+            header: ObjectHeader::new(TypeTag::Closure),
+            function_ptr,
+            arity,
+            captures,
+        })
+    }
+
+    pub fn get_capture(&self, index: usize) -> Option<super::value::Value> {
+        self.captures.get(index).copied()
+    }
+}
