@@ -5019,3 +5019,222 @@ fn builtin_get_range_descending() {
     let result = rt_get(Value::from_integer(1), range);
     assert_eq!(result.as_integer(), Some(4));
 }
+
+// ===== Non-Callable Error Tests =====
+
+use crate::operations::rt_call;
+
+#[test]
+#[should_panic(expected = "Integer is not callable")]
+fn runtime_call_integer_not_callable() {
+    // Calling an integer should produce RuntimeErr
+    let callee = Value::from_integer(42);
+    let args: Vec<Value> = vec![];
+    let _result = rt_call(callee, 0, args.as_ptr());
+}
+
+#[test]
+#[should_panic(expected = "String is not callable")]
+fn runtime_call_string_not_callable() {
+    // Calling a string should produce RuntimeErr
+    let callee = Value::from_string("hello".to_string());
+    let args: Vec<Value> = vec![];
+    let _result = rt_call(callee, 0, args.as_ptr());
+}
+
+#[test]
+#[should_panic(expected = "List is not callable")]
+fn runtime_call_list_not_callable() {
+    // Calling a list should produce RuntimeErr
+    let callee = Value::from_list(im::vector![Value::from_integer(1), Value::from_integer(2)]);
+    let args: Vec<Value> = vec![];
+    let _result = rt_call(callee, 0, args.as_ptr());
+}
+
+// ===== Collection String Representation Tests =====
+// Note: format_value is already imported from builtins at line 2
+
+#[test]
+fn format_list() {
+    // List should format as [elem1, elem2, ...]
+    let list = Value::from_list(im::vector![
+        Value::from_integer(1),
+        Value::from_integer(2),
+        Value::from_integer(3)
+    ]);
+    assert_eq!(format_value(&list), "[1, 2, 3]");
+}
+
+#[test]
+fn format_empty_list() {
+    let list = Value::from_list(im::Vector::new());
+    assert_eq!(format_value(&list), "[]");
+}
+
+#[test]
+fn format_set() {
+    // Set should format as {elem1, elem2, ...}
+    // Note: order may vary since sets are unordered
+    let set = Value::from_set(im::hashset![Value::from_integer(42)]);
+    assert_eq!(format_value(&set), "{42}");
+}
+
+#[test]
+fn format_empty_set() {
+    let set = Value::from_set(im::HashSet::new());
+    assert_eq!(format_value(&set), "{}");
+}
+
+#[test]
+fn format_dict() {
+    // Dict should format as #{key: value, ...}
+    // Note: existing format_value doesn't add quotes around string keys
+    let mut dict = im::HashMap::new();
+    dict.insert(Value::from_string("a".to_string()), Value::from_integer(1));
+    let dict_val = Value::from_dict(dict);
+    assert_eq!(format_value(&dict_val), "#{a: 1}");
+}
+
+#[test]
+fn format_empty_dict() {
+    let dict = Value::from_dict(im::HashMap::new());
+    assert_eq!(format_value(&dict), "#{}");
+}
+
+#[test]
+fn format_nested_list() {
+    // Nested collections should format recursively
+    let inner = Value::from_list(im::vector![Value::from_integer(1), Value::from_integer(2)]);
+    let outer = Value::from_list(im::vector![inner, Value::from_integer(3)]);
+    assert_eq!(format_value(&outer), "[[1, 2], 3]");
+}
+
+#[test]
+fn format_function() {
+    // Functions should format as <function>
+    use crate::heap::ClosureObject;
+    // Define an extern "C" function (cannot be a closure for extern "C" ABI)
+    extern "C" fn dummy_fn(_: *const ClosureObject, _: u32, _: *const Value) -> Value {
+        Value::nil()
+    }
+    let closure = ClosureObject::new(dummy_fn as *const (), 0, vec![]);
+    let closure_val = Value::from_closure(closure);
+    assert_eq!(format_value(&closure_val), "<function>");
+}
+
+// ===== Deep Equality Tests =====
+
+#[test]
+fn deep_equality_lists_equal() {
+    // [1, 2, 3] == [1, 2, 3] should be true
+    let list1 = Value::from_list(im::vector![
+        Value::from_integer(1),
+        Value::from_integer(2),
+        Value::from_integer(3)
+    ]);
+    let list2 = Value::from_list(im::vector![
+        Value::from_integer(1),
+        Value::from_integer(2),
+        Value::from_integer(3)
+    ]);
+    assert_eq!(list1, list2);
+}
+
+#[test]
+fn deep_equality_lists_not_equal() {
+    // [1, 2, 3] == [1, 2, 4] should be false
+    let list1 = Value::from_list(im::vector![
+        Value::from_integer(1),
+        Value::from_integer(2),
+        Value::from_integer(3)
+    ]);
+    let list2 = Value::from_list(im::vector![
+        Value::from_integer(1),
+        Value::from_integer(2),
+        Value::from_integer(4)
+    ]);
+    assert_ne!(list1, list2);
+}
+
+#[test]
+fn deep_equality_nested_lists() {
+    // [[1, 2], [3, 4]] == [[1, 2], [3, 4]] should be true
+    let inner1 = Value::from_list(im::vector![Value::from_integer(1), Value::from_integer(2)]);
+    let inner2 = Value::from_list(im::vector![Value::from_integer(3), Value::from_integer(4)]);
+    let outer1 = Value::from_list(im::vector![inner1.clone(), inner2.clone()]);
+
+    let inner3 = Value::from_list(im::vector![Value::from_integer(1), Value::from_integer(2)]);
+    let inner4 = Value::from_list(im::vector![Value::from_integer(3), Value::from_integer(4)]);
+    let outer2 = Value::from_list(im::vector![inner3, inner4]);
+
+    assert_eq!(outer1, outer2);
+}
+
+#[test]
+fn deep_equality_sets_equal() {
+    // {1, 2} == {1, 2} should be true
+    let set1 = Value::from_set(im::hashset![Value::from_integer(1), Value::from_integer(2)]);
+    let set2 = Value::from_set(im::hashset![Value::from_integer(2), Value::from_integer(1)]);
+    assert_eq!(set1, set2);
+}
+
+#[test]
+fn deep_equality_dicts_equal() {
+    // #{a: 1} == #{a: 1} should be true
+    let mut dict1 = im::HashMap::new();
+    dict1.insert(Value::from_string("a".to_string()), Value::from_integer(1));
+    let dict1_val = Value::from_dict(dict1);
+
+    let mut dict2 = im::HashMap::new();
+    dict2.insert(Value::from_string("a".to_string()), Value::from_integer(1));
+    let dict2_val = Value::from_dict(dict2);
+
+    assert_eq!(dict1_val, dict2_val);
+}
+
+// ===== Deep Hashing Tests =====
+
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+fn compute_hash(value: &Value) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[test]
+fn deep_hash_lists_equal_hash() {
+    // Equal lists should have equal hashes
+    let list1 = Value::from_list(im::vector![
+        Value::from_integer(1),
+        Value::from_integer(2),
+        Value::from_integer(3)
+    ]);
+    let list2 = Value::from_list(im::vector![
+        Value::from_integer(1),
+        Value::from_integer(2),
+        Value::from_integer(3)
+    ]);
+    assert_eq!(compute_hash(&list1), compute_hash(&list2));
+}
+
+#[test]
+fn deep_hash_lists_different_hash() {
+    // Different lists should (usually) have different hashes
+    let list1 = Value::from_list(im::vector![Value::from_integer(1), Value::from_integer(2)]);
+    let list2 = Value::from_list(im::vector![Value::from_integer(1), Value::from_integer(3)]);
+    assert_ne!(compute_hash(&list1), compute_hash(&list2));
+}
+
+#[test]
+fn deep_hash_nested_lists() {
+    // Equal nested lists should have equal hashes
+    let inner1 = Value::from_list(im::vector![Value::from_integer(1), Value::from_integer(2)]);
+    let outer1 = Value::from_list(im::vector![inner1.clone(), Value::from_integer(3)]);
+
+    let inner2 = Value::from_list(im::vector![Value::from_integer(1), Value::from_integer(2)]);
+    let outer2 = Value::from_list(im::vector![inner2, Value::from_integer(3)]);
+
+    assert_eq!(compute_hash(&outer1), compute_hash(&outer2));
+}

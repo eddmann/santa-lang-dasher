@@ -17,7 +17,7 @@ use super::heap::{StringObject, ListObject, SetObject, DictObject, MutableCellOb
 #[derive(Copy, Clone, Debug)]
 pub struct Value(u64);
 
-// Implement PartialEq for Value with proper deep equality for strings
+// Implement PartialEq for Value with proper deep equality for strings and collections
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         // Fast path: identical bits (including same heap pointer)
@@ -31,7 +31,47 @@ impl PartialEq for Value {
                 // Deep string comparison
                 self.as_string() == other.as_string()
             }
-            // TODO: Deep equality for collections (lists, sets, dicts)
+            (Some(TypeTag::List), Some(TypeTag::List)) => {
+                // Deep list comparison - element by element
+                match (self.as_list(), other.as_list()) {
+                    (Some(l1), Some(l2)) => {
+                        if l1.len() != l2.len() {
+                            return false;
+                        }
+                        l1.iter().zip(l2.iter()).all(|(a, b)| a == b)
+                    }
+                    _ => false,
+                }
+            }
+            (Some(TypeTag::Set), Some(TypeTag::Set)) => {
+                // Deep set comparison - all elements must be equal
+                // Since im::HashSet uses Value's Hash+Eq, this works
+                match (self.as_set(), other.as_set()) {
+                    (Some(s1), Some(s2)) => {
+                        if s1.len() != s2.len() {
+                            return false;
+                        }
+                        // Check all elements in s1 are in s2
+                        s1.iter().all(|v| s2.contains(v))
+                    }
+                    _ => false,
+                }
+            }
+            (Some(TypeTag::Dict), Some(TypeTag::Dict)) => {
+                // Deep dict comparison - all keys and values must be equal
+                match (self.as_dict(), other.as_dict()) {
+                    (Some(d1), Some(d2)) => {
+                        if d1.len() != d2.len() {
+                            return false;
+                        }
+                        // Check all key-value pairs in d1 match d2
+                        d1.iter().all(|(k, v1)| {
+                            d2.get(k).is_some_and(|v2| v1 == v2)
+                        })
+                    }
+                    _ => false,
+                }
+            }
             _ => false,
         }
     }
@@ -39,7 +79,7 @@ impl PartialEq for Value {
 
 impl Eq for Value {}
 
-// Implement Hash for Value with proper hashing for strings
+// Implement Hash for Value with proper hashing for strings and collections
 impl std::hash::Hash for Value {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         // Hash based on type to ensure consistency with PartialEq
@@ -47,9 +87,40 @@ impl std::hash::Hash for Value {
             // Hash the string content
             std::hash::Hash::hash(&TypeTag::String, state);
             std::hash::Hash::hash(s, state);
+        } else if let Some(list) = self.as_list() {
+            // Deep hash for lists - hash each element
+            std::hash::Hash::hash(&TypeTag::List, state);
+            std::hash::Hash::hash(&list.len(), state);
+            for elem in list.iter() {
+                elem.hash(state);
+            }
+        } else if let Some(set) = self.as_set() {
+            // Deep hash for sets - XOR all element hashes (order-independent)
+            std::hash::Hash::hash(&TypeTag::Set, state);
+            std::hash::Hash::hash(&set.len(), state);
+            // For sets, we need order-independent hashing
+            // Use XOR of individual hashes
+            let mut combined: u64 = 0;
+            for elem in set.iter() {
+                let mut inner_hasher = std::collections::hash_map::DefaultHasher::new();
+                elem.hash(&mut inner_hasher);
+                combined ^= std::hash::Hasher::finish(&inner_hasher);
+            }
+            std::hash::Hash::hash(&combined, state);
+        } else if let Some(dict) = self.as_dict() {
+            // Deep hash for dicts - XOR of key-value pair hashes (order-independent)
+            std::hash::Hash::hash(&TypeTag::Dict, state);
+            std::hash::Hash::hash(&dict.len(), state);
+            let mut combined: u64 = 0;
+            for (k, v) in dict.iter() {
+                let mut inner_hasher = std::collections::hash_map::DefaultHasher::new();
+                k.hash(&mut inner_hasher);
+                v.hash(&mut inner_hasher);
+                combined ^= std::hash::Hasher::finish(&inner_hasher);
+            }
+            std::hash::Hash::hash(&combined, state);
         } else {
-            // For non-strings, hash the raw bits
-            // TODO: Deep hashing for collections
+            // For primitives, hash the raw bits
             std::hash::Hash::hash(&self.0, state);
         }
     }

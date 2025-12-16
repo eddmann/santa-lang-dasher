@@ -455,21 +455,9 @@ pub extern "C-unwind" fn rt_ge(left: Value, right: Value) -> Value {
 }
 
 /// Convert a Value to its string representation
+/// Note: Uses the full format_value from builtins for collections
 fn value_to_string(value: &Value) -> String {
-    if let Some(i) = value.as_integer() {
-        i.to_string()
-    } else if let Some(d) = value.as_decimal() {
-        d.to_string()
-    } else if let Some(s) = value.as_string() {
-        s.to_string()
-    } else if let Some(b) = value.as_bool() {
-        b.to_string()
-    } else if value.is_nil() {
-        "nil".to_string()
-    } else {
-        // TODO: Handle collection string representations
-        "<?>".to_string()
-    }
+    crate::builtins::format_value(value)
 }
 
 // ===== Closure Operations =====
@@ -520,7 +508,7 @@ pub unsafe extern "C" fn rt_make_closure(
 /// The caller must ensure `argv` points to a valid array of `argc` Values.
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub extern "C" fn rt_call(callee: Value, argc: u32, argv: *const Value) -> Value {
+pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -> Value {
     // Try regular closure first
     if let Some(closure) = callee.as_closure() {
         // Cast the function pointer to the expected signature
@@ -561,8 +549,11 @@ pub extern "C" fn rt_call(callee: Value, argc: u32, argv: *const Value) -> Value
         return Value::nil();
     }
 
-    // TODO: Return RuntimeErr for calling non-callable value
-    Value::nil()
+    // Non-callable value - produce RuntimeErr
+    runtime_error(&format!(
+        "{} is not callable",
+        type_name(&callee)
+    ));
 }
 
 /// Get a captured value from a closure environment

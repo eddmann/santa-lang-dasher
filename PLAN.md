@@ -2288,8 +2288,8 @@ The following items are documented TODOs in the codebase. They are not required 
 ### Value System
 
 - [ ] Large integers (>51 bits) heap boxing (`runtime/src/value.rs`)
-- [ ] Deep equality for collections - lists, sets, dicts (`runtime/src/value.rs:34`)
-- [ ] Deep hashing for collections (`runtime/src/value.rs:52`)
+- [x] Deep equality for collections - lists, sets, dicts (`runtime/src/value.rs:34`)
+- [x] Deep hashing for collections (`runtime/src/value.rs:52`)
 
 ### Runtime Operations
 
@@ -2297,7 +2297,7 @@ The following items are documented TODOs in the codebase. They are not required 
 - [x] Set + Set union in `rt_add`
 - [x] Dict + Dict merge in `rt_add` (right precedence)
 - [x] Decimal modulo support - Not needed per LANG.txt (only Integer modulo specified)
-- [ ] Collection string representations for puts/debugging (`runtime/src/operations.rs:449`)
+- [x] Collection string representations for puts/debugging (already implemented in `runtime/src/builtins.rs:4470`)
 - [ ] Reference counting for Function, Closure, LazySequence types (`runtime/src/refcount.rs:92`)
 
 ### Built-in Functions - Range/LazySequence Support
@@ -2337,8 +2337,8 @@ Many built-in functions currently only support List, Set, Dict. The following ne
 - [x] `reduce` on empty collection throws RuntimeErr per LANG.txt §11.5
 - [x] `max` on empty collection returns `nil` per LANG.txt §11.8 (no change needed)
 - [x] `min` on empty collection returns `nil` per LANG.txt §11.8 (no change needed)
-- [ ] Calling non-callable value should return RuntimeErr (`runtime/src/operations.rs:543`)
-- [ ] Division by zero detailed error message (`runtime/src/builtins.rs:3015`)
+- [x] Calling non-callable value should return RuntimeErr (`runtime/src/operations.rs:564`)
+- [x] Division by zero detailed error message (already implemented in `runtime/src/operations.rs:195`)
 
 ### External Functions
 
