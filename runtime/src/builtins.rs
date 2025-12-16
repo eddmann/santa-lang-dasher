@@ -1026,6 +1026,7 @@ pub extern "C" fn rt_filter(predicate: Value, collection: Value) -> Value {
 /// Per LANG.txt §11.4:
 /// - flat_map(_ * 2, [[1, 2], [3, 4]]) → [2, 4, 6, 8]
 /// - flat_map(|x| [x, x * 2], [1, 2]) → [1, 2, 2, 4]
+/// - flat_map(|x| [x, x * 2], 1..4) → [1, 2, 2, 4, 3, 6]  (Range support)
 #[no_mangle]
 pub extern "C" fn rt_flat_map(mapper: Value, collection: Value) -> Value {
     // Get the closure - if not a closure, return empty list
@@ -1090,7 +1091,16 @@ pub extern "C" fn rt_flat_map(mapper: Value, collection: Value) -> Value {
         return Value::from_list(result);
     }
 
-    // TODO: Range, LazySequence support
+    // LazySequence (including Range)
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            let mapped = call_closure(closure, &[val]);
+            extend_result(mapped);
+            current = *next_seq;
+        }
+        return Value::from_list(result);
+    }
 
     // Unsupported type - return empty list
     Value::from_list(im::Vector::new())
@@ -1099,10 +1109,11 @@ pub extern "C" fn rt_flat_map(mapper: Value, collection: Value) -> Value {
 /// `filter_map(mapper, collection)` → Collection
 ///
 /// Map and filter in one pass - keeps only truthy mapped results.
-/// Returns same collection type (except String → List).
+/// Returns same collection type (except String → List, Range → List).
 ///
 /// Per LANG.txt §11.4:
 /// - [1, 2, 3, 4] |> filter_map(|v| if v % 2 { v * 2 }) → [2, 6]
+/// - 1..5 |> filter_map(|v| if v % 2 { v * 2 }) → [2, 6]  (Range support)
 #[no_mangle]
 pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
     // Get the closure - if not a closure, return empty collection
@@ -1182,7 +1193,19 @@ pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
         return Value::from_list(filtered);
     }
 
-    // TODO: Range, LazySequence support
+    // LazySequence (including Range) → List
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        let mut result: im::Vector<Value> = im::Vector::new();
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            let mapped = call_closure(closure, &[val]);
+            if mapped.is_truthy() {
+                result.push_back(mapped);
+            }
+            current = *next_seq;
+        }
+        return Value::from_list(result);
+    }
 
     // Unsupported type - return empty list
     Value::from_list(im::Vector::new())
@@ -1194,6 +1217,7 @@ pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
 ///
 /// Per LANG.txt §11.4:
 /// - [1, 2] |> find_map(|v| if v % 2 { v * 2 }) → 2
+/// - 1..5 |> find_map(|v| if v % 2 { v * 2 }) → 2  (Range support)
 #[no_mangle]
 pub extern "C" fn rt_find_map(mapper: Value, collection: Value) -> Value {
     // Get the closure - if not a closure, return nil
@@ -1253,7 +1277,18 @@ pub extern "C" fn rt_find_map(mapper: Value, collection: Value) -> Value {
         return Value::nil();
     }
 
-    // TODO: Range, LazySequence support
+    // LazySequence (including Range)
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            let mapped = call_closure(closure, &[val]);
+            if mapped.is_truthy() {
+                return mapped;
+            }
+            current = *next_seq;
+        }
+        return Value::nil();
+    }
 
     // Unsupported type - return nil
     Value::nil()
@@ -1651,6 +1686,7 @@ pub extern "C" fn rt_fold_s(initial: Value, folder: Value, collection: Value) ->
 /// - find(_ % 2, [1, 2]) → 1
 /// - find(_ % 2, {1, 2}) → 1
 /// - find(_ == "b", "ab") → "b"
+/// - find(_ > 5, 1..10) → 6  (Range support)
 #[no_mangle]
 pub extern "C" fn rt_find(predicate: Value, collection: Value) -> Value {
     // Get the closure - if not a closure, return nil
@@ -1707,7 +1743,17 @@ pub extern "C" fn rt_find(predicate: Value, collection: Value) -> Value {
         return Value::nil();
     }
 
-    // TODO: Range, LazySequence support
+    // LazySequence (including Range)
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            if call_closure(closure, &[val]).is_truthy() {
+                return val;
+            }
+            current = *next_seq;
+        }
+        return Value::nil();
+    }
 
     Value::nil()
 }
@@ -1720,6 +1766,7 @@ pub extern "C" fn rt_find(predicate: Value, collection: Value) -> Value {
 /// - count(_ % 2, [1, 2, 3, 4]) → 2
 /// - count(_ % 2, {1, 2, 3, 4}) → 2
 /// - count(_ == "a", "ab") → 1
+/// - count(_ % 2, 1..10) → 5  (Range support)
 #[no_mangle]
 pub extern "C" fn rt_count(predicate: Value, collection: Value) -> Value {
     // Get the closure - if not a closure, return 0
@@ -1778,7 +1825,17 @@ pub extern "C" fn rt_count(predicate: Value, collection: Value) -> Value {
         return Value::from_integer(count);
     }
 
-    // TODO: Range support
+    // LazySequence (including Range)
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            if call_closure(closure, &[val]).is_truthy() {
+                count += 1;
+            }
+            current = *next_seq;
+        }
+        return Value::from_integer(count);
+    }
 
     Value::from_integer(count)
 }
@@ -2223,6 +2280,7 @@ pub extern "C" fn rt_take(total: Value, collection: Value) -> Value {
 /// - sort(<, [3, 2, 1]) → [1, 2, 3]
 /// - sort(>, [3, 2, 1]) → [3, 2, 1]
 /// - sort(-, [3, 2, 1]) → [1, 2, 3]
+/// - sort(>, 1..5) → [4, 3, 2, 1]
 #[no_mangle]
 pub extern "C" fn rt_sort(comparator: Value, collection: Value) -> Value {
     // Get the closure - if not a closure, return the collection unchanged
@@ -2231,10 +2289,8 @@ pub extern "C" fn rt_sort(comparator: Value, collection: Value) -> Value {
         None => return collection,
     };
 
-    // List
-    if let Some(list) = collection.as_list() {
-        let mut items: Vec<Value> = list.iter().copied().collect();
-
+    // Helper to sort items
+    let sort_items = |items: &mut Vec<Value>| {
         items.sort_by(|a, b| {
             let result = call_closure(closure, &[*a, *b]);
 
@@ -2258,7 +2314,24 @@ pub extern "C" fn rt_sort(comparator: Value, collection: Value) -> Value {
                 std::cmp::Ordering::Equal
             }
         });
+    };
 
+    // List
+    if let Some(list) = collection.as_list() {
+        let mut items: Vec<Value> = list.iter().copied().collect();
+        sort_items(&mut items);
+        return Value::from_list(items.into_iter().collect());
+    }
+
+    // LazySequence (including Range) - collect and sort
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        let mut items: Vec<Value> = Vec::new();
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            items.push(val);
+            current = *next_seq;
+        }
+        sort_items(&mut items);
         return Value::from_list(items.into_iter().collect());
     }
 
@@ -2457,6 +2530,7 @@ pub extern "C" fn rt_intersection(collection1: Value, collection2: Value) -> Val
 /// - includes?({1, 2}, 1) → true
 /// - includes?(#{"a": 1}, "a") → true
 /// - includes?("ab", "a") → true
+/// - includes?(1..10, 5) → true  (Range support with O(1) optimization)
 #[no_mangle]
 pub extern "C" fn rt_includes(collection: Value, value: Value) -> Value {
     // List
@@ -2480,7 +2554,39 @@ pub extern "C" fn rt_includes(collection: Value, value: Value) -> Value {
         return Value::from_bool(haystack.contains(needle));
     }
 
-    // TODO: Range, LazySequence support
+    // LazySequence (including Range)
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        use crate::heap::LazySeqKind;
+        // O(1) for bounded Range: check if value is within bounds and matches step
+        if let LazySeqKind::Range { current, end: Some(end_val), inclusive, step } = &lazy.kind {
+            if let Some(val_int) = value.as_integer() {
+                // Check bounds
+                let in_bounds = if *inclusive {
+                    if *step > 0 {
+                        val_int >= *current && val_int <= *end_val
+                    } else {
+                        val_int <= *current && val_int >= *end_val
+                    }
+                } else if *step > 0 {
+                    val_int >= *current && val_int < *end_val
+                } else {
+                    val_int <= *current && val_int > *end_val
+                };
+                // Check that value aligns with step
+                let aligned = (val_int - current) % step == 0;
+                return Value::from_bool(in_bounds && aligned);
+            }
+        }
+        // For other lazy sequences, iterate
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            if val == value {
+                return Value::from_bool(true);
+            }
+            current = *next_seq;
+        }
+        return Value::from_bool(false);
+    }
 
     Value::from_bool(false)
 }
@@ -2508,6 +2614,7 @@ pub extern "C" fn rt_excludes(collection: Value, value: Value) -> Value {
 /// Per LANG.txt §11.11:
 /// - any?(_ == 1, [1, 2]) → true
 /// - any?(_ == 1, [2, 3]) → false
+/// - any?(_ % 2 == 0, 1..5) → true  (Range support)
 #[no_mangle]
 pub extern "C" fn rt_any(predicate: Value, collection: Value) -> Value {
     // Get the closure - if not a closure, return false
@@ -2548,7 +2655,17 @@ pub extern "C" fn rt_any(predicate: Value, collection: Value) -> Value {
         return Value::from_bool(false);
     }
 
-    // TODO: Range, LazySequence support
+    // LazySequence (including Range)
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            if call_closure(closure, &[val]).is_truthy() {
+                return Value::from_bool(true);
+            }
+            current = *next_seq;
+        }
+        return Value::from_bool(false);
+    }
 
     Value::from_bool(false)
 }
@@ -2561,6 +2678,7 @@ pub extern "C" fn rt_any(predicate: Value, collection: Value) -> Value {
 /// - all?(_ > 0, [1, 2]) → true
 /// - all?(_ > 0, [-1, 2]) → false
 /// - all?(_ > 0, []) → true (vacuous truth)
+/// - all?(_ > 0, 1..5) → true  (bounded Range support)
 #[no_mangle]
 pub extern "C" fn rt_all(predicate: Value, collection: Value) -> Value {
     // Get the closure - if not a closure, return true (vacuous)
@@ -2601,7 +2719,22 @@ pub extern "C" fn rt_all(predicate: Value, collection: Value) -> Value {
         return Value::from_bool(true);
     }
 
-    // TODO: Range support (NOT LazySequence or Unbounded per spec)
+    // Range (bounded only, per spec)
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        use crate::heap::LazySeqKind;
+        if let LazySeqKind::Range { end: Some(_), .. } = &lazy.kind {
+            // Bounded range - iterate and check
+            let mut current = lazy.clone();
+            while let Some((val, next_seq)) = current.next() {
+                if !call_closure(closure, &[val]).is_truthy() {
+                    return Value::from_bool(false);
+                }
+                current = *next_seq;
+            }
+            return Value::from_bool(true);
+        }
+        // Unbounded lazy sequences not supported per spec
+    }
 
     Value::from_bool(true)
 }

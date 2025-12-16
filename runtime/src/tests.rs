@@ -1592,6 +1592,24 @@ fn builtin_flat_map_empty() {
     assert!(flat.is_empty());
 }
 
+#[test]
+fn builtin_flat_map_range() {
+    // flat_map(|x| [x, x * 2], 1..4) → [1, 2, 2, 4, 3, 6]
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(4), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let mapper = make_test_closure(duplicate_closure, 1);
+    let result = rt_flat_map(mapper, v);
+    let flat = result.as_list().expect("should be a list");
+    assert_eq!(flat.len(), 6);
+    assert_eq!(flat[0].as_integer(), Some(1));
+    assert_eq!(flat[1].as_integer(), Some(2));
+    assert_eq!(flat[2].as_integer(), Some(2));
+    assert_eq!(flat[3].as_integer(), Some(4));
+    assert_eq!(flat[4].as_integer(), Some(3));
+    assert_eq!(flat[5].as_integer(), Some(6));
+}
+
 // ===== filter_map() tests per LANG.txt §11.4 =====
 
 use crate::builtins::rt_filter_map;
@@ -1657,6 +1675,20 @@ fn builtin_filter_map_empty() {
     assert!(new_list.is_empty());
 }
 
+#[test]
+fn builtin_filter_map_range() {
+    // 1..5 |> filter_map(|v| if v % 2 { v * 2 }) → [2, 6]
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let mapper = make_test_closure(double_if_odd_closure, 1);
+    let result = rt_filter_map(mapper, v);
+    let filtered = result.as_list().expect("should be a list");
+    assert_eq!(filtered.len(), 2);
+    assert_eq!(filtered[0].as_integer(), Some(2)); // 1 * 2
+    assert_eq!(filtered[1].as_integer(), Some(6)); // 3 * 2
+}
+
 // ===== find_map() tests per LANG.txt §11.4 =====
 
 use crate::builtins::rt_find_map;
@@ -1691,6 +1723,28 @@ fn builtin_find_map_empty() {
     let mapper = make_test_closure(double_if_odd_closure, 1);
     let result = rt_find_map(mapper, list);
     assert!(result.is_nil());
+}
+
+#[test]
+fn builtin_find_map_range() {
+    // 1..5 |> find_map(|v| if v % 2 { v * 2 }) → 2
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let mapper = make_test_closure(double_if_odd_closure, 1);
+    let result = rt_find_map(mapper, v);
+    assert_eq!(result.as_integer(), Some(2)); // 1 * 2
+}
+
+#[test]
+fn builtin_find_map_range_no_match() {
+    // 2..5 (step 2) |> find_map(|v| if v % 2 { v * 2 }) → nil (all even)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(2, Some(6), false, 2);
+    let v = Value::from_lazy_sequence(range);
+    let mapper = make_test_closure(double_if_odd_closure, 1);
+    let result = rt_find_map(mapper, v);
+    assert!(result.is_nil()); // 2, 4 are both even
 }
 
 // ===== Reduction Functions (§11.5) =====
@@ -2021,6 +2075,50 @@ fn builtin_find_empty_list() {
     assert!(result.is_nil());
 }
 
+#[test]
+fn builtin_find_range() {
+    // find(_ > 5, 1..10) → 6
+    use crate::heap::LazySequenceObject;
+    extern "C" fn greater_than_5(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+        if argc != 1 || argv.is_null() {
+            return Value::from_bool(false);
+        }
+        let arg = unsafe { *argv };
+        if let Some(i) = arg.as_integer() {
+            Value::from_bool(i > 5)
+        } else {
+            Value::from_bool(false)
+        }
+    }
+    let range = LazySequenceObject::range(1, Some(10), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let predicate = make_test_closure(greater_than_5, 1);
+    let result = rt_find(predicate, v);
+    assert_eq!(result.as_integer(), Some(6));
+}
+
+#[test]
+fn builtin_find_range_no_match() {
+    // find(_ > 100, 1..5) → nil
+    use crate::heap::LazySequenceObject;
+    extern "C" fn greater_than_100(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+        if argc != 1 || argv.is_null() {
+            return Value::from_bool(false);
+        }
+        let arg = unsafe { *argv };
+        if let Some(i) = arg.as_integer() {
+            Value::from_bool(i > 100)
+        } else {
+            Value::from_bool(false)
+        }
+    }
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let predicate = make_test_closure(greater_than_100, 1);
+    let result = rt_find(predicate, v);
+    assert!(result.is_nil());
+}
+
 // count() tests per LANG.txt §11.7
 use crate::builtins::rt_count;
 
@@ -2091,6 +2189,17 @@ fn builtin_count_none_match() {
     let predicate = make_test_closure(is_odd_closure, 1);
     let result = rt_count(predicate, list);
     assert_eq!(result.as_integer(), Some(0));
+}
+
+#[test]
+fn builtin_count_range() {
+    // count(_ % 2, 1..10) → 5 (counts: 1, 3, 5, 7, 9)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(10), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let predicate = make_test_closure(is_odd_closure, 1);
+    let result = rt_count(predicate, v);
+    assert_eq!(result.as_integer(), Some(5));
 }
 
 // ===== Aggregation Functions (§11.8) =====
@@ -2536,6 +2645,22 @@ fn builtin_sort_with_subtraction() {
     assert_eq!(sorted[2].as_integer(), Some(3));
 }
 
+#[test]
+fn builtin_sort_range() {
+    // sort(>, 1..5) → [4, 3, 2, 1] (descending)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let comparator = make_test_closure(greater_comparator, 2);
+    let result = rt_sort(comparator, v);
+    let sorted = result.as_list().expect("should be a list");
+    assert_eq!(sorted.len(), 4);
+    assert_eq!(sorted[0].as_integer(), Some(4));
+    assert_eq!(sorted[1].as_integer(), Some(3));
+    assert_eq!(sorted[2].as_integer(), Some(2));
+    assert_eq!(sorted[3].as_integer(), Some(1));
+}
+
 // reverse() tests per LANG.txt §11.9
 #[test]
 fn builtin_reverse_list() {
@@ -2821,6 +2946,26 @@ fn builtin_includes_string() {
     assert_eq!(result.as_bool(), Some(true));
 }
 
+#[test]
+fn builtin_includes_range() {
+    // includes?(1..10, 5) → true
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(10), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_includes(v, Value::from_integer(5));
+    assert_eq!(result.as_bool(), Some(true));
+}
+
+#[test]
+fn builtin_includes_range_false() {
+    // includes?(1..5, 10) → false
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_includes(v, Value::from_integer(10));
+    assert_eq!(result.as_bool(), Some(false));
+}
+
 // excludes?() tests per LANG.txt §11.11
 #[test]
 fn builtin_excludes_list() {
@@ -2878,6 +3023,50 @@ fn builtin_any_empty_list() {
     assert_eq!(result.as_bool(), Some(false));
 }
 
+#[test]
+fn builtin_any_range_true() {
+    // any?(_ % 2 == 0, 1..5) → true (2 and 4 are even)
+    use crate::heap::LazySequenceObject;
+    extern "C" fn is_even(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+        if argc != 1 || argv.is_null() {
+            return Value::from_bool(false);
+        }
+        let arg = unsafe { *argv };
+        if let Some(i) = arg.as_integer() {
+            Value::from_bool(i % 2 == 0)
+        } else {
+            Value::from_bool(false)
+        }
+    }
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let predicate = make_test_closure(is_even, 1);
+    let result = rt_any(predicate, v);
+    assert_eq!(result.as_bool(), Some(true));
+}
+
+#[test]
+fn builtin_any_range_false() {
+    // any?(_ > 10, 1..5) → false
+    use crate::heap::LazySequenceObject;
+    extern "C" fn greater_than_10(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+        if argc != 1 || argv.is_null() {
+            return Value::from_bool(false);
+        }
+        let arg = unsafe { *argv };
+        if let Some(i) = arg.as_integer() {
+            Value::from_bool(i > 10)
+        } else {
+            Value::from_bool(false)
+        }
+    }
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let predicate = make_test_closure(greater_than_10, 1);
+    let result = rt_any(predicate, v);
+    assert_eq!(result.as_bool(), Some(false));
+}
+
 // all?() tests per LANG.txt §11.11
 /// Test closure: returns true if value > 0
 extern "C" fn positive_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
@@ -2923,6 +3112,28 @@ fn builtin_all_empty_list() {
     let predicate = make_test_closure(positive_closure, 1);
     let result = rt_all(predicate, list);
     assert_eq!(result.as_bool(), Some(true));
+}
+
+#[test]
+fn builtin_all_range_true() {
+    // all?(_ > 0, 1..5) → true (1, 2, 3, 4 are all positive)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let predicate = make_test_closure(positive_closure, 1);
+    let result = rt_all(predicate, v);
+    assert_eq!(result.as_bool(), Some(true));
+}
+
+#[test]
+fn builtin_all_range_false() {
+    // all?(_ > 0, -2..3) → false (-2, -1, 0 are not positive)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(-2, Some(3), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let predicate = make_test_closure(positive_closure, 1);
+    let result = rt_all(predicate, v);
+    assert_eq!(result.as_bool(), Some(false));
 }
 
 // ===== Lazy Sequence Functions (§11.12-11.13) =====
