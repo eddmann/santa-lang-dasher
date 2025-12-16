@@ -103,7 +103,7 @@ pub extern "C" fn rt_ints(value: Value) -> Value {
 /// - Set: list({1, 2, 3}) → [1, 2, 3]
 /// - Dictionary: list(#{1: 2, 3: 4}) → [[1, 2], [3, 4]] (list of [key, value] tuples)
 /// - String: list("ab") → ["a", "b"] (each grapheme cluster)
-/// - Range/LazySequence: forces evaluation to list (TODO)
+/// - Range/LazySequence: forces evaluation to list (bounded sequences only)
 #[no_mangle]
 pub extern "C" fn rt_list(value: Value) -> Value {
     use unicode_segmentation::UnicodeSegmentation;
@@ -140,7 +140,20 @@ pub extern "C" fn rt_list(value: Value) -> Value {
         return Value::from_list(list);
     }
 
-    // TODO: Range and LazySequence support
+    // LazySequence (including Range) → Force evaluation to list
+    if let Some(lazy_seq) = value.as_lazy_sequence() {
+        let mut result: im::Vector<Value> = im::Vector::new();
+        let mut current = lazy_seq.clone();
+
+        // Iterate through the lazy sequence, collecting values
+        // Note: This will only work for bounded sequences (ranges with end, etc.)
+        // Unbounded sequences would need to be handled differently (with take)
+        while let Some((val, next_seq)) = current.next() {
+            result.push_back(val);
+            current = *next_seq;
+        }
+        return Value::from_list(result);
+    }
 
     // Other types return empty list
     Value::from_list(im::Vector::new())
@@ -153,7 +166,7 @@ pub extern "C" fn rt_list(value: Value) -> Value {
 /// - List: set([1, 2, 2, 3]) → {1, 2, 3}
 /// - Set (identity): set({1, 2, 3}) → {1, 2, 3}
 /// - String: set("aab") → {"a", "b"} (each grapheme cluster)
-/// - Range: set(1..5) → {1, 2, 3, 4} (TODO)
+/// - Range/LazySequence: set(1..5) → {1, 2, 3, 4} (bounded sequences only)
 #[no_mangle]
 pub extern "C" fn rt_set(value: Value) -> Value {
     use unicode_segmentation::UnicodeSegmentation;
@@ -178,7 +191,19 @@ pub extern "C" fn rt_set(value: Value) -> Value {
         return Value::from_set(set);
     }
 
-    // TODO: Range support
+    // LazySequence (including Range) → Force evaluation to set
+    if let Some(lazy_seq) = value.as_lazy_sequence() {
+        let mut result: im::HashSet<Value> = im::HashSet::new();
+        let mut current = lazy_seq.clone();
+
+        // Iterate through the lazy sequence, collecting values
+        // Note: Only works for bounded sequences
+        while let Some((val, next_seq)) = current.next() {
+            result.insert(val);
+            current = *next_seq;
+        }
+        return Value::from_set(result);
+    }
 
     // Other types return empty set
     Value::from_set(im::HashSet::new())
@@ -277,6 +302,7 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
 /// - Set: size({1, 2}) → 2
 /// - Dictionary: size(#{1: 2, 3: 4}) → 2
 /// - String: size("hello") → 5 (grapheme count)
+/// - Range (bounded): size(1..5) → 4
 #[no_mangle]
 pub extern "C" fn rt_size(collection: Value) -> Value {
     // List
@@ -300,7 +326,39 @@ pub extern "C" fn rt_size(collection: Value) -> Value {
         return Value::from_integer(s.graphemes(true).count() as i64);
     }
 
-    // TODO: Range (bounded only)
+    // Range (bounded only) - calculate size directly without iterating
+    if let Some(lazy_seq) = collection.as_lazy_sequence() {
+        use crate::heap::LazySeqKind;
+        if let LazySeqKind::Range { current, end: Some(end_val), inclusive, step } = &lazy_seq.kind {
+            // Calculate the number of elements in the range
+            let start = *current;
+            let end = *end_val;
+            let step = *step;
+
+            // Handle different range directions
+            let count = if step > 0 {
+                if start > end || (start == end && !*inclusive) {
+                    0
+                } else if *inclusive {
+                    ((end - start) / step) + 1
+                } else {
+                    ((end - start - 1) / step) + 1
+                }
+            } else {
+                // step < 0 (descending)
+                if start < end || (start == end && !*inclusive) {
+                    0
+                } else if *inclusive {
+                    ((start - end) / (-step)) + 1
+                } else {
+                    ((start - end - 1) / (-step)) + 1
+                }
+            };
+
+            return Value::from_integer(count.max(0));
+        }
+        // Unbounded ranges return 0 (undefined size)
+    }
 
     Value::from_integer(0)
 }
@@ -333,7 +391,7 @@ pub extern "C" fn rt_first(collection: Value) -> Value {
         return Value::nil();
     }
 
-    // LazySequence
+    // LazySequence (including Range)
     if let Some(lazy) = collection.as_lazy_sequence() {
         // Handle Iterate specially - get first value
         if let LazySeqKind::Iterate { current, .. } = &lazy.kind {
@@ -345,8 +403,6 @@ pub extern "C" fn rt_first(collection: Value) -> Value {
         }
         return Value::nil();
     }
-
-    // TODO: Range support
 
     Value::nil()
 }

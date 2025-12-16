@@ -2304,11 +2304,11 @@ The following items are documented TODOs in the codebase. They are not required 
 
 Many built-in functions currently only support List, Set, Dict. The following need Range and/or LazySequence input support:
 
-- [ ] `list()` - Range/LazySequence to List conversion (`runtime/src/builtins.rs:143`)
-- [ ] `set()` - Range to Set conversion (`runtime/src/builtins.rs:181`)
+- [x] `list()` - Range/LazySequence to List conversion (bounded sequences)
+- [x] `set()` - Range/LazySequence to Set conversion (bounded sequences)
 - [ ] `get()` - Range, LazySequence indexing (`runtime/src/builtins.rs:267`)
-- [ ] `size()` - Range (bounded only) (`runtime/src/builtins.rs:303`)
-- [ ] `first()` - Range support (`runtime/src/builtins.rs:349`)
+- [x] `size()` - Range (bounded only)
+- [x] `first()` - Range support (already worked via LazySequence)
 - [ ] `second()` - Range, LazySequence (`runtime/src/builtins.rs:382`)
 - [ ] `rest()` - Range (bounded only) (`runtime/src/builtins.rs:415`)
 - [ ] `last()` - Range, LazySequence (`runtime/src/builtins.rs:452`)

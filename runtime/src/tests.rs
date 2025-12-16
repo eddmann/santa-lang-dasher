@@ -708,6 +708,35 @@ fn builtin_list_from_dict() {
     assert_eq!(tuple.len(), 2);
 }
 
+#[test]
+fn builtin_list_from_range() {
+    // list(1..5) → [1, 2, 3, 4]
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_list(v);
+    let list = result.as_list().expect("should be a list");
+    assert_eq!(list.len(), 4);
+    assert_eq!(list[0].as_integer(), Some(1));
+    assert_eq!(list[1].as_integer(), Some(2));
+    assert_eq!(list[2].as_integer(), Some(3));
+    assert_eq!(list[3].as_integer(), Some(4));
+}
+
+#[test]
+fn builtin_list_from_inclusive_range() {
+    // list(1..=3) → [1, 2, 3]
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(3), true, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_list(v);
+    let list = result.as_list().expect("should be a list");
+    assert_eq!(list.len(), 3);
+    assert_eq!(list[0].as_integer(), Some(1));
+    assert_eq!(list[1].as_integer(), Some(2));
+    assert_eq!(list[2].as_integer(), Some(3));
+}
+
 // set() function tests per LANG.txt §11.1
 use crate::builtins::rt_set;
 
@@ -745,6 +774,21 @@ fn builtin_set_from_string() {
     let result = rt_set(v);
     let set = result.as_set().expect("should be a set");
     assert_eq!(set.len(), 2);
+}
+
+#[test]
+fn builtin_set_from_range() {
+    // set(1..5) → {1, 2, 3, 4}
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_set(v);
+    let set = result.as_set().expect("should be a set");
+    assert_eq!(set.len(), 4);
+    assert!(set.contains(&Value::from_integer(1)));
+    assert!(set.contains(&Value::from_integer(2)));
+    assert!(set.contains(&Value::from_integer(3)));
+    assert!(set.contains(&Value::from_integer(4)));
 }
 
 // dict() function tests per LANG.txt §11.1
@@ -887,6 +931,26 @@ fn builtin_size_string() {
     assert_eq!(result.as_integer(), Some(5));
 }
 
+#[test]
+fn builtin_size_range() {
+    // size(1..5) → 4 (bounded range)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_size(v);
+    assert_eq!(result.as_integer(), Some(4));
+}
+
+#[test]
+fn builtin_size_inclusive_range() {
+    // size(1..=5) → 5 (inclusive bounded range)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), true, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_size(v);
+    assert_eq!(result.as_integer(), Some(5));
+}
+
 // first() tests
 #[test]
 fn builtin_first_list() {
@@ -910,6 +974,16 @@ fn builtin_first_string() {
     let s = Value::from_string("ab");
     let result = rt_first(s);
     assert_eq!(result.as_string(), Some("a"));
+}
+
+#[test]
+fn builtin_first_range() {
+    // first(1..5) → 1
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_first(v);
+    assert_eq!(result.as_integer(), Some(1));
 }
 
 // second() tests
