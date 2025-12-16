@@ -2272,6 +2272,7 @@ pub extern "C" fn rt_sort(comparator: Value, collection: Value) -> Value {
 /// Per LANG.txt §11.9:
 /// - reverse([1, 2, 3]) → [3, 2, 1]
 /// - reverse("abc") → "cba"
+/// - reverse(1..5) → [4, 3, 2, 1]
 #[no_mangle]
 pub extern "C" fn rt_reverse(collection: Value) -> Value {
     // List
@@ -2287,7 +2288,17 @@ pub extern "C" fn rt_reverse(collection: Value) -> Value {
         return Value::from_string(reversed);
     }
 
-    // TODO: Range support
+    // LazySequence (including Range) - collect and reverse for bounded sequences
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        let mut elements: Vec<Value> = Vec::new();
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            elements.push(val);
+            current = *next_seq;
+        }
+        elements.reverse();
+        return Value::from_list(elements.into_iter().collect());
+    }
 
     collection
 }

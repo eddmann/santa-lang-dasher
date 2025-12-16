@@ -2570,6 +2570,22 @@ fn builtin_reverse_empty_list() {
     assert!(reversed.is_empty());
 }
 
+#[test]
+fn builtin_reverse_range() {
+    // reverse(1..5) → [4, 3, 2, 1]
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_reverse(v);
+    // reverse returns a list for bounded sequences
+    let reversed = result.as_list().expect("should be a list");
+    assert_eq!(reversed.len(), 4);
+    assert_eq!(reversed[0].as_integer(), Some(4));
+    assert_eq!(reversed[1].as_integer(), Some(3));
+    assert_eq!(reversed[2].as_integer(), Some(2));
+    assert_eq!(reversed[3].as_integer(), Some(1));
+}
+
 // rotate() tests per LANG.txt §11.9
 #[test]
 fn builtin_rotate_positive() {

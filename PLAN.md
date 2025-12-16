@@ -2330,7 +2330,7 @@ Many built-in functions currently only support List, Set, Dict. The following ne
 - [ ] `union()` - Range, LazySequence support (`runtime/src/builtins.rs:2196`)
 - [ ] `intersection()` - Range, LazySequence support (`runtime/src/builtins.rs:2264`)
 - [ ] `sort()` - Range support (NOT LazySequence/Unbounded per spec) (`runtime/src/builtins.rs:2317`)
-- [ ] `reverse()` - Range, LazySequence support (`runtime/src/builtins.rs:2379`)
+- [x] `reverse()` - Range/LazySequence support (collects and reverses)
 
 ### Error Handling
 
