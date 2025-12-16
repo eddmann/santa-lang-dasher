@@ -2311,7 +2311,7 @@ Many built-in functions currently only support List, Set, Dict. The following ne
 - [x] `first()` - Range support (already worked via LazySequence)
 - [x] `second()` - Range/LazySequence support
 - [x] `rest()` - Range/LazySequence support (returns new LazySequence)
-- [ ] `last()` - Range, LazySequence (`runtime/src/builtins.rs:452`)
+- [x] `last()` - Range support (O(1) calculation for bounded ranges)
 - [ ] `keys()` - Range support (`runtime/src/builtins.rs:807`)
 - [ ] `values()` - Range support (`runtime/src/builtins.rs:897`)
 - [ ] `push()` - Range, LazySequence support (`runtime/src/builtins.rs:974`)

@@ -1044,6 +1044,36 @@ fn builtin_last_empty_list() {
     assert!(result.is_nil());
 }
 
+#[test]
+fn builtin_last_range() {
+    // last(1..5) → 4 (exclusive range)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_last(v);
+    assert_eq!(result.as_integer(), Some(4));
+}
+
+#[test]
+fn builtin_last_inclusive_range() {
+    // last(1..=5) → 5 (inclusive range)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), true, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_last(v);
+    assert_eq!(result.as_integer(), Some(5));
+}
+
+#[test]
+fn builtin_last_descending_range() {
+    // last(5..1) → 2 (descending, exclusive)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(5, Some(1), false, -1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_last(v);
+    assert_eq!(result.as_integer(), Some(2));
+}
+
 // rest() tests
 #[test]
 fn builtin_rest_list() {

@@ -457,6 +457,7 @@ pub extern "C" fn rt_second(collection: Value) -> Value {
 /// - List: last([1, 2]) → 2; last([]) → nil
 /// - Set: last({1, 2}) → 2
 /// - String: last("ab") → "b"
+/// - Range (bounded): last(1..5) → 4, last(1..=5) → 5
 #[no_mangle]
 pub extern "C" fn rt_last(collection: Value) -> Value {
     // List
@@ -478,7 +479,50 @@ pub extern "C" fn rt_last(collection: Value) -> Value {
         return Value::nil();
     }
 
-    // TODO: Range (bounded only)
+    // LazySequence - for bounded sequences, iterate to find last
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        use crate::heap::LazySeqKind;
+        // For Range, calculate last directly (O(1))
+        if let LazySeqKind::Range { current, end: Some(end_val), inclusive, step } = &lazy.kind {
+            let start = *current;
+            let end = *end_val;
+            let step = *step;
+
+            // Calculate size first to check if range is non-empty
+            let is_empty = if step > 0 {
+                start > end || (start == end && !*inclusive)
+            } else {
+                start < end || (start == end && !*inclusive)
+            };
+
+            if is_empty {
+                return Value::nil();
+            }
+
+            // Calculate last element
+            let last = if *inclusive {
+                end
+            } else if step > 0 {
+                // For exclusive ascending: last = end - step (adjusted if needed)
+                let n = (end - start - 1) / step;
+                start + n * step
+            } else {
+                // For exclusive descending: last = end - step
+                let n = (start - end - 1) / (-step);
+                start + n * step
+            };
+
+            return Value::from_integer(last);
+        }
+        // For other lazy sequences, iterate (only works for bounded)
+        let mut last_val = None;
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            last_val = Some(val);
+            current = *next_seq;
+        }
+        return last_val.unwrap_or_else(Value::nil);
+    }
 
     Value::nil()
 }
