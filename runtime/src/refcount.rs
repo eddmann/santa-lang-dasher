@@ -86,10 +86,83 @@ unsafe fn rt_free(value: Value) {
                 rt_decref((*ptr).value);
                 drop(Box::from_raw(ptr));
             }
+            TypeTag::Closure => {
+                let ptr = header_ptr as *mut super::heap::ClosureObject;
+                // Decref all captured values before freeing
+                for capture in &(*ptr).captures {
+                    rt_decref(*capture);
+                }
+                drop(Box::from_raw(ptr));
+            }
+            TypeTag::MemoizedClosure => {
+                let ptr = header_ptr as *mut super::heap::MemoizedClosureObject;
+                // Decref the inner closure
+                rt_decref((*ptr).inner_closure);
+                // Decref all cached keys and values
+                let cache = (*ptr).cache.borrow();
+                for (args, result) in cache.iter() {
+                    for arg in args {
+                        rt_decref(*arg);
+                    }
+                    rt_decref(*result);
+                }
+                drop(cache);
+                drop(Box::from_raw(ptr));
+            }
+            TypeTag::LazySequence => {
+                let ptr = header_ptr as *mut super::heap::LazySequenceObject;
+                // Decref all Values contained in the lazy sequence
+                free_lazy_seq_values(&(*ptr).kind);
+                drop(Box::from_raw(ptr));
+            }
             _ => {
                 // Other types not implemented yet
                 // For now, just leak the memory
-                // TODO: Implement for Function, Closure, LazySequence, etc.
+                // TODO: Implement for Function, etc.
+            }
+        }
+    }
+}
+
+/// Helper to decref all Values contained in a LazySeqKind
+unsafe fn free_lazy_seq_values(kind: &super::heap::LazySeqKind) {
+    use super::heap::LazySeqKind;
+
+    match kind {
+        LazySeqKind::Repeat { value } => {
+            rt_decref(*value);
+        }
+        LazySeqKind::Cycle { source, .. } => {
+            for elem in source.iter() {
+                rt_decref(*elem);
+            }
+        }
+        LazySeqKind::Iterate { generator, current } => {
+            rt_decref(*generator);
+            rt_decref(*current);
+        }
+        LazySeqKind::Range { .. } => {
+            // No Values to decref
+        }
+        LazySeqKind::Map { source, mapper } => {
+            free_lazy_seq_values(&source.kind);
+            rt_decref(*mapper);
+        }
+        LazySeqKind::Filter { source, predicate } => {
+            free_lazy_seq_values(&source.kind);
+            rt_decref(*predicate);
+        }
+        LazySeqKind::Skip { source, .. } => {
+            free_lazy_seq_values(&source.kind);
+        }
+        LazySeqKind::Combinations { source, .. } => {
+            for elem in source.iter() {
+                rt_decref(*elem);
+            }
+        }
+        LazySeqKind::Zip { sources } => {
+            for seq in sources.iter() {
+                free_lazy_seq_values(&seq.kind);
             }
         }
     }

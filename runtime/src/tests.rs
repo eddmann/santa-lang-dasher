@@ -190,6 +190,86 @@ fn refcount_primitives_ignored() {
     // No assertion - just shouldn't crash
 }
 
+#[test]
+fn refcount_closure_decrefs_captures_on_free() {
+    use crate::heap::ClosureObject;
+
+    // Create a string value to be captured
+    let captured_str = Value::from_string("captured");
+    assert_eq!(rt_get_refcount(captured_str), 1);
+
+    // Increment the string's refcount (simulating it being used elsewhere)
+    rt_incref(captured_str);
+    assert_eq!(rt_get_refcount(captured_str), 2);
+
+    // Create a closure that captures this string
+    // The dummy function pointer is never called, we just test refcounting
+    extern "C" fn dummy_fn(_env: *const (), _argc: u32, _argv: *const Value) -> Value {
+        Value::nil()
+    }
+    let closure = ClosureObject::new(dummy_fn as *const (), 0, vec![captured_str]);
+    let closure_val = Value::from_closure(closure);
+    assert_eq!(rt_get_refcount(closure_val), 1);
+
+    // Decrement closure refcount to 0 - should free and decref captures
+    rt_decref(closure_val);
+
+    // The captured string should now have refcount 1 (decremented from 2)
+    assert_eq!(rt_get_refcount(captured_str), 1);
+}
+
+#[test]
+fn refcount_memoized_closure_decrefs_inner_closure_on_free() {
+    use crate::heap::{ClosureObject, MemoizedClosureObject};
+
+    // Create an inner closure
+    extern "C" fn dummy_fn(_env: *const (), _argc: u32, _argv: *const Value) -> Value {
+        Value::nil()
+    }
+    let inner = ClosureObject::new(dummy_fn as *const (), 0, vec![]);
+    let inner_val = Value::from_closure(inner);
+    assert_eq!(rt_get_refcount(inner_val), 1);
+
+    // Increment inner closure refcount (simulating it being used elsewhere)
+    rt_incref(inner_val);
+    assert_eq!(rt_get_refcount(inner_val), 2);
+
+    // Create a memoized closure wrapping the inner closure
+    let memoized = MemoizedClosureObject::new(inner_val, 0);
+    let memoized_val = Value::from_memoized_closure(memoized);
+    assert_eq!(rt_get_refcount(memoized_val), 1);
+
+    // Decrement memoized closure refcount to 0 - should free and decref inner
+    rt_decref(memoized_val);
+
+    // The inner closure should now have refcount 1 (decremented from 2)
+    assert_eq!(rt_get_refcount(inner_val), 1);
+}
+
+#[test]
+fn refcount_lazy_sequence_decrefs_value_on_free() {
+    use crate::heap::LazySequenceObject;
+
+    // Create a string value to be repeated
+    let repeated_str = Value::from_string("repeat me");
+    assert_eq!(rt_get_refcount(repeated_str), 1);
+
+    // Increment the string's refcount (simulating it being used elsewhere)
+    rt_incref(repeated_str);
+    assert_eq!(rt_get_refcount(repeated_str), 2);
+
+    // Create a repeat lazy sequence containing this string
+    let lazy_seq = LazySequenceObject::repeat(repeated_str);
+    let lazy_val = Value::from_lazy_sequence(lazy_seq);
+    assert_eq!(rt_get_refcount(lazy_val), 1);
+
+    // Decrement lazy sequence refcount to 0 - should free and decref the repeated value
+    rt_decref(lazy_val);
+
+    // The repeated string should now have refcount 1 (decremented from 2)
+    assert_eq!(rt_get_refcount(repeated_str), 1);
+}
+
 // ===== Runtime Operations Tests =====
 
 use crate::operations::{rt_add, rt_sub, rt_mul, rt_div, rt_mod};
