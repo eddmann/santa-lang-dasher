@@ -1389,6 +1389,7 @@ fn codegen_fallback_unknown() { ... }     // Verify runtime called for Unknown
 - [x] **Unknown type paths** correctly call runtime functions
 - [x] **Partial application** generates correct closure (placeholder `_` transforms to function during parsing)
 - [x] **Pipeline operator compiles correctly**
+- [x] **Function composition operator (`>>`) compiles correctly** - creates composed closure via `rt_compose`
 - [x] **Generated code links with runtime library** (runtime separated into santa-lang-runtime crate)
 - [x] All tests pass (478 tests)
 - [x] `cargo clippy` clean

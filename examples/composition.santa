@@ -1,0 +1,33 @@
+// Function composition tests
+// Tests >> operator for composing functions
+
+// Basic composition: inc >> double creates |x| double(inc(x))
+let inc = _ + 1;
+let double = _ * 2;
+let inc_then_double = inc >> double;
+
+// Composition with partial application
+let add_ten = _ + 10;
+let times_three = _ * 3;
+let add_ten_times_three = add_ten >> times_three;
+
+part_one: inc_then_double(input)
+part_two: add_ten_times_three(input)
+
+test: {
+  input: 5
+  part_one: 12
+  part_two: 45
+}
+
+test: {
+  input: 0
+  part_one: 2
+  part_two: 30
+}
+
+test: {
+  input: -3
+  part_one: -4
+  part_two: 21
+}

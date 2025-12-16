@@ -5355,3 +5355,83 @@ fn read_invalid_url_returns_nil() {
     // Should return nil for network errors
     assert!(result.is_nil(), "Invalid URL should return nil");
 }
+
+// ===== Function Composition Tests =====
+
+use crate::operations::rt_compose;
+
+/// Test closure for composition: adds 1 to its argument
+extern "C" fn compose_test_inc(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+    if argc != 1 || argv.is_null() {
+        return Value::nil();
+    }
+    let arg = unsafe { *argv };
+    if let Some(i) = arg.as_integer() {
+        Value::from_integer(i + 1)
+    } else {
+        Value::nil()
+    }
+}
+
+/// Test closure for composition: doubles its argument
+extern "C" fn compose_test_double(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+    if argc != 1 || argv.is_null() {
+        return Value::nil();
+    }
+    let arg = unsafe { *argv };
+    if let Some(i) = arg.as_integer() {
+        Value::from_integer(i * 2)
+    } else {
+        Value::nil()
+    }
+}
+
+#[test]
+fn compose_two_functions() {
+    // Test: inc >> double should apply inc first, then double
+    // (inc >> double)(5) = double(inc(5)) = double(6) = 12
+    let inc = ClosureObject::new(compose_test_inc as *const (), 1, vec![]);
+    let inc_val = Value::from_closure(inc);
+
+    let double = ClosureObject::new(compose_test_double as *const (), 1, vec![]);
+    let double_val = Value::from_closure(double);
+
+    let composed = rt_compose(inc_val, double_val);
+
+    // Call composed with 5
+    let args = [Value::from_integer(5)];
+    let result = rt_call(composed, 1, args.as_ptr());
+
+    // inc(5) = 6, double(6) = 12
+    assert_eq!(result.as_integer(), Some(12));
+}
+
+#[test]
+fn compose_three_functions() {
+    // Test: inc >> double >> inc should apply: inc first, double second, inc third
+    // (inc >> double >> inc)(5) = inc(double(inc(5))) = inc(double(6)) = inc(12) = 13
+    let inc1 = ClosureObject::new(compose_test_inc as *const (), 1, vec![]);
+    let inc1_val = Value::from_closure(inc1);
+
+    let double = ClosureObject::new(compose_test_double as *const (), 1, vec![]);
+    let double_val = Value::from_closure(double);
+
+    let inc2 = ClosureObject::new(compose_test_inc as *const (), 1, vec![]);
+    let inc2_val = Value::from_closure(inc2);
+
+    // Compose inc >> double first
+    let composed1 = rt_compose(inc1_val, double_val);
+    // Then compose (inc >> double) >> inc
+    let composed2 = rt_compose(composed1, inc2_val);
+
+    // Call composed with 5
+    let args = [Value::from_integer(5)];
+    let result = rt_call(composed2, 1, args.as_ptr());
+
+    // inc(5) = 6, double(6) = 12, inc(12) = 13
+    assert_eq!(result.as_integer(), Some(13));
+}
+
+// Note: Error case tests for rt_compose (non-callable arguments) are covered
+// by the examples/composition.santa integration test. Unit tests for panic
+// cases don't work well with the extern "C" function signatures.

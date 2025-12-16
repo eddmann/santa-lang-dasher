@@ -477,6 +477,7 @@ impl<'ctx> CodegenContext<'ctx> {
                     InfixOp::LessThanOrEqual => self.get_or_declare_rt_le(),
                     InfixOp::GreaterThan => self.get_or_declare_rt_gt(),
                     InfixOp::GreaterThanOrEqual => self.get_or_declare_rt_ge(),
+                    InfixOp::Composition => self.get_or_declare_rt_compose(),
                     _ => return Err(CompileError::UnsupportedExpression(
                         format!("Binary operation {:?} not yet supported in runtime fallback", op)
                     )),
@@ -557,6 +558,11 @@ impl<'ctx> CodegenContext<'ctx> {
     /// Get or declare the rt_ge runtime function
     fn get_or_declare_rt_ge(&self) -> inkwell::values::FunctionValue<'ctx> {
         self.get_or_declare_rt_binop("rt_ge")
+    }
+
+    /// Get or declare the rt_compose runtime function for function composition (>>)
+    fn get_or_declare_rt_compose(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.get_or_declare_rt_binop("rt_compose")
     }
 
     /// Helper to get or declare a binary operation runtime function

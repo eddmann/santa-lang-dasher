@@ -622,3 +622,75 @@ pub extern "C" fn rt_cell_set(cell: Value, value: Value) -> Value {
         runtime_error("rt_cell_set: expected a mutable cell")
     }
 }
+
+// ===== Function Composition =====
+//
+// The composition operator `f >> g` creates a new function that applies f first,
+// then g to the result: (f >> g)(x) = g(f(x))
+
+/// The actual implementation function for composed closures.
+/// This is the function_ptr stored in the composed closure.
+///
+/// It expects:
+/// - captures[0] = first function (f)
+/// - captures[1] = second function (g)
+///
+/// When called with argument x, it returns g(f(x)).
+extern "C" fn composed_closure_impl(
+    env: *const ClosureObject,
+    argc: u32,
+    argv: *const Value,
+) -> Value {
+    // Get the two captured functions from the closure environment
+    let (f, g) = if env.is_null() {
+        runtime_error("composed_closure_impl: null environment");
+    } else {
+        let closure = unsafe { &*env };
+        let f = closure.get_capture(0).unwrap_or_else(Value::nil);
+        let g = closure.get_capture(1).unwrap_or_else(Value::nil);
+        (f, g)
+    };
+
+    // Apply f to the argument(s)
+    let intermediate = rt_call(f, argc, argv);
+
+    // Apply g to the result
+    let args = [intermediate];
+    rt_call(g, 1, args.as_ptr())
+}
+
+/// Compose two functions: f >> g creates |x| g(f(x))
+///
+/// Per LANG.txt §4.8, the composition operator applies functions left-to-right:
+/// - `f >> g` means "apply f first, then g to the result"
+/// - `lines >> map(int) >> sum` means: apply lines, then map(int), then sum
+#[no_mangle]
+pub extern "C" fn rt_compose(f: Value, g: Value) -> Value {
+    // Verify both arguments are callable
+    let f_is_callable = f.as_closure().is_some() || f.as_memoized_closure().is_some();
+    let g_is_callable = g.as_closure().is_some() || g.as_memoized_closure().is_some();
+
+    if !f_is_callable {
+        runtime_error(&format!(
+            "composition: first argument is not callable (got {})",
+            type_name(&f)
+        ));
+    }
+    if !g_is_callable {
+        runtime_error(&format!(
+            "composition: second argument is not callable (got {})",
+            type_name(&g)
+        ));
+    }
+
+    // Create a new closure that captures f and g
+    // The composed function has arity 1 (takes a single argument)
+    let captures = vec![f, g];
+    let closure = ClosureObject::new(
+        composed_closure_impl as *const (),
+        1,  // arity = 1
+        captures,
+    );
+
+    Value::from_closure(closure)
+}
