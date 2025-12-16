@@ -2298,7 +2298,7 @@ The following items are documented TODOs in the codebase. They are not required 
 - [x] Dict + Dict merge in `rt_add` (right precedence)
 - [x] Decimal modulo support - Not needed per LANG.txt (only Integer modulo specified)
 - [x] Collection string representations for puts/debugging (already implemented in `runtime/src/builtins.rs:4470`)
-- [ ] Reference counting for Function, Closure, LazySequence types (`runtime/src/refcount.rs:92`)
+- [x] Reference counting for Closure, MemoizedClosure, LazySequence types (Function type not used - closures used instead)
 
 ### Built-in Functions - Range/LazySequence Support
 
