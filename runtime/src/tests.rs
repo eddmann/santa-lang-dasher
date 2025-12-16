@@ -2150,6 +2150,36 @@ fn builtin_sum_dict_values() {
     assert_eq!(result.as_integer(), Some(6));
 }
 
+#[test]
+fn builtin_sum_range() {
+    // sum(1..5) → 1+2+3+4 = 10
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_sum(v);
+    assert_eq!(result.as_integer(), Some(10));
+}
+
+#[test]
+fn builtin_sum_inclusive_range() {
+    // sum(1..=5) → 1+2+3+4+5 = 15
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), true, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_sum(v);
+    assert_eq!(result.as_integer(), Some(15));
+}
+
+#[test]
+fn builtin_sum_large_range() {
+    // sum(1..=100) → 5050 (Gauss sum)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(100), true, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_sum(v);
+    assert_eq!(result.as_integer(), Some(5050));
+}
+
 // max() tests per LANG.txt §11.8
 #[test]
 fn builtin_max_list() {
@@ -2192,6 +2222,26 @@ fn builtin_max_dict_values() {
     assert_eq!(result.as_integer(), Some(4));
 }
 
+#[test]
+fn builtin_max_range() {
+    // max(1..5) → 4 (ascending, exclusive)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_max(v);
+    assert_eq!(result.as_integer(), Some(4));
+}
+
+#[test]
+fn builtin_max_descending_range() {
+    // max(5..1) → 5 (descending, max is first)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(5, Some(1), false, -1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_max(v);
+    assert_eq!(result.as_integer(), Some(5));
+}
+
 // min() tests per LANG.txt §11.8
 #[test]
 fn builtin_min_list() {
@@ -2231,6 +2281,26 @@ fn builtin_min_dict_values() {
     entries.insert(Value::from_integer(3), Value::from_integer(4));
     let dict = Value::from_dict(entries);
     let result = rt_min(dict);
+    assert_eq!(result.as_integer(), Some(2));
+}
+
+#[test]
+fn builtin_min_range() {
+    // min(1..5) → 1 (ascending, min is first)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_min(v);
+    assert_eq!(result.as_integer(), Some(1));
+}
+
+#[test]
+fn builtin_min_descending_range() {
+    // min(5..1) → 2 (descending, exclusive, min is last)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(5, Some(1), false, -1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_min(v);
     assert_eq!(result.as_integer(), Some(2));
 }
 

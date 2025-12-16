@@ -1796,6 +1796,7 @@ pub extern "C" fn rt_count(predicate: Value, collection: Value) -> Value {
 /// - sum([1.5, 2.5]) → 4.0
 /// - sum([]) → 0
 /// - sum(#{1: 2, 3: 4}) → 6 (sums values)
+/// - sum(1..=100) → 5050 (O(1) using arithmetic sequence formula)
 #[no_mangle]
 pub extern "C" fn rt_sum(collection: Value) -> Value {
     let mut int_sum: i64 = 0;
@@ -1848,7 +1849,56 @@ pub extern "C" fn rt_sum(collection: Value) -> Value {
         };
     }
 
-    // TODO: Range, LazySequence support
+    // LazySequence (including Range)
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        use crate::heap::LazySeqKind;
+        // For Range, use arithmetic sequence sum formula: sum = n * (first + last) / 2
+        if let LazySeqKind::Range { current, end: Some(end_val), inclusive, step } = &lazy.kind {
+            let start = *current;
+            let end = *end_val;
+            let step = *step;
+
+            // Calculate size
+            let count = if step > 0 {
+                if start > end || (start == end && !*inclusive) {
+                    0
+                } else if *inclusive {
+                    ((end - start) / step) + 1
+                } else {
+                    ((end - start - 1) / step) + 1
+                }
+            } else if start < end || (start == end && !*inclusive) {
+                0
+            } else if *inclusive {
+                ((start - end) / (-step)) + 1
+            } else {
+                ((start - end - 1) / (-step)) + 1
+            };
+
+            if count <= 0 {
+                return Value::from_integer(0);
+            }
+
+            // Calculate last element
+            let last = start + (count - 1) * step;
+
+            // Sum using arithmetic sequence formula: sum = n * (first + last) / 2
+            let sum = count * (start + last) / 2;
+            return Value::from_integer(sum);
+        }
+
+        // For other lazy sequences, iterate
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            add_value(val);
+            current = *next_seq;
+        }
+        return if has_decimal {
+            Value::from_decimal(int_sum as f64 + dec_sum)
+        } else {
+            Value::from_integer(int_sum)
+        };
+    }
 
     Value::from_integer(0)
 }
@@ -1891,6 +1941,7 @@ fn compare_values(a: Value, b: Value) -> Option<std::cmp::Ordering> {
 /// - max([1, 2]) → 2
 /// - max([]) → nil
 /// - max(#{1: 2, 3: 4}) → 4 (max of values)
+/// - max(1..5) → 4 (O(1) for bounded ranges)
 #[no_mangle]
 pub extern "C" fn rt_max(collection: Value) -> Value {
     use std::cmp::Ordering;
@@ -1932,7 +1983,50 @@ pub extern "C" fn rt_max(collection: Value) -> Value {
         return max_val.unwrap_or_else(Value::nil);
     }
 
-    // TODO: Range, LazySequence support
+    // LazySequence (including Range)
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        use crate::heap::LazySeqKind;
+        // For Range, max is first (descending) or last (ascending)
+        if let LazySeqKind::Range { current, end: Some(end_val), inclusive, step } = &lazy.kind {
+            let start = *current;
+            let end = *end_val;
+            let step = *step;
+
+            // Check if empty
+            let is_empty = if step > 0 {
+                start > end || (start == end && !*inclusive)
+            } else {
+                start < end || (start == end && !*inclusive)
+            };
+
+            if is_empty {
+                return Value::nil();
+            }
+
+            // For ascending, max is last; for descending, max is first
+            if step > 0 {
+                // Calculate last element
+                let count = if *inclusive {
+                    ((end - start) / step) + 1
+                } else {
+                    ((end - start - 1) / step) + 1
+                };
+                let last = start + (count - 1) * step;
+                return Value::from_integer(last);
+            } else {
+                // Descending: max is first
+                return Value::from_integer(start);
+            }
+        }
+
+        // For other lazy sequences, iterate
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            update_max(val);
+            current = *next_seq;
+        }
+        return max_val.unwrap_or_else(Value::nil);
+    }
 
     Value::nil()
 }
@@ -1945,6 +2039,7 @@ pub extern "C" fn rt_max(collection: Value) -> Value {
 /// - min([1, 2]) → 1
 /// - min([]) → nil
 /// - min(#{1: 2, 3: 4}) → 2 (min of values)
+/// - min(1..5) → 1 (O(1) for bounded ranges)
 #[no_mangle]
 pub extern "C" fn rt_min(collection: Value) -> Value {
     use std::cmp::Ordering;
@@ -1986,7 +2081,50 @@ pub extern "C" fn rt_min(collection: Value) -> Value {
         return min_val.unwrap_or_else(Value::nil);
     }
 
-    // TODO: Range, LazySequence support
+    // LazySequence (including Range)
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        use crate::heap::LazySeqKind;
+        // For Range, min is first (ascending) or last (descending)
+        if let LazySeqKind::Range { current, end: Some(end_val), inclusive, step } = &lazy.kind {
+            let start = *current;
+            let end = *end_val;
+            let step = *step;
+
+            // Check if empty
+            let is_empty = if step > 0 {
+                start > end || (start == end && !*inclusive)
+            } else {
+                start < end || (start == end && !*inclusive)
+            };
+
+            if is_empty {
+                return Value::nil();
+            }
+
+            // For ascending, min is first; for descending, min is last
+            if step > 0 {
+                // Ascending: min is first
+                return Value::from_integer(start);
+            } else {
+                // Calculate last element
+                let count = if *inclusive {
+                    ((start - end) / (-step)) + 1
+                } else {
+                    ((start - end - 1) / (-step)) + 1
+                };
+                let last = start + (count - 1) * step;
+                return Value::from_integer(last);
+            }
+        }
+
+        // For other lazy sequences, iterate
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            update_min(val);
+            current = *next_seq;
+        }
+        return min_val.unwrap_or_else(Value::nil);
+    }
 
     Value::nil()
 }
