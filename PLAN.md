@@ -2309,8 +2309,8 @@ Many built-in functions currently only support List, Set, Dict. The following ne
 - [ ] `get()` - Range, LazySequence indexing (`runtime/src/builtins.rs:267`)
 - [x] `size()` - Range (bounded only)
 - [x] `first()` - Range support (already worked via LazySequence)
-- [ ] `second()` - Range, LazySequence (`runtime/src/builtins.rs:382`)
-- [ ] `rest()` - Range (bounded only) (`runtime/src/builtins.rs:415`)
+- [x] `second()` - Range/LazySequence support
+- [x] `rest()` - Range/LazySequence support (returns new LazySequence)
 - [ ] `last()` - Range, LazySequence (`runtime/src/builtins.rs:452`)
 - [ ] `keys()` - Range support (`runtime/src/builtins.rs:807`)
 - [ ] `values()` - Range support (`runtime/src/builtins.rs:897`)

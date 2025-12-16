@@ -1006,6 +1006,26 @@ fn builtin_second_list_too_short() {
     assert!(result.is_nil());
 }
 
+#[test]
+fn builtin_second_range() {
+    // second(1..5) → 2
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_second(v);
+    assert_eq!(result.as_integer(), Some(2));
+}
+
+#[test]
+fn builtin_second_range_too_short() {
+    // second(1..2) → nil (only has one element: 1)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(2), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_second(v);
+    assert!(result.is_nil());
+}
+
 // last() tests
 #[test]
 fn builtin_last_list() {
@@ -1052,6 +1072,34 @@ fn builtin_rest_string() {
     let s = Value::from_string("abc");
     let result = rt_rest(s);
     assert_eq!(result.as_string(), Some("bc"));
+}
+
+#[test]
+fn builtin_rest_range() {
+    // rest(1..5) → lazy sequence starting at 2
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_rest(v);
+    // rest returns a LazySequence, convert to list to check
+    let list = rt_list(result);
+    let elements = list.as_list().expect("should be a list");
+    assert_eq!(elements.len(), 3);
+    assert_eq!(elements[0].as_integer(), Some(2));
+    assert_eq!(elements[1].as_integer(), Some(3));
+    assert_eq!(elements[2].as_integer(), Some(4));
+}
+
+#[test]
+fn builtin_rest_range_single_element() {
+    // rest(1..2) → empty (only has one element: 1)
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(2), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_rest(v);
+    let list = rt_list(result);
+    let elements = list.as_list().expect("should be a list");
+    assert!(elements.is_empty());
 }
 
 // keys() and values() tests

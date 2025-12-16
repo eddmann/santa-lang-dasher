@@ -414,6 +414,7 @@ pub extern "C" fn rt_first(collection: Value) -> Value {
 /// - List: second([1, 2]) → 2; second([1]) → nil
 /// - Set: second({1, 2}) → 2
 /// - String: second("ab") → "b"
+/// - Range/LazySequence: second(1..5) → 2
 #[no_mangle]
 pub extern "C" fn rt_second(collection: Value) -> Value {
     // List
@@ -435,7 +436,16 @@ pub extern "C" fn rt_second(collection: Value) -> Value {
         return Value::nil();
     }
 
-    // TODO: Range, LazySequence
+    // LazySequence (including Range)
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        // Get first, then second
+        if let Some((_, next_seq)) = lazy.next() {
+            if let Some((second_val, _)) = next_seq.next() {
+                return second_val;
+            }
+        }
+        return Value::nil();
+    }
 
     Value::nil()
 }
@@ -480,6 +490,7 @@ pub extern "C" fn rt_last(collection: Value) -> Value {
 /// - List: rest([1, 2]) → [2]; rest([1]) → []
 /// - Set: rest({1, 2}) → {2}
 /// - String: rest("ab") → "b"
+/// - Range/LazySequence: rest(1..5) → LazySequence(2..5)
 #[no_mangle]
 pub extern "C" fn rt_rest(collection: Value) -> Value {
     // List
@@ -505,7 +516,15 @@ pub extern "C" fn rt_rest(collection: Value) -> Value {
         return Value::from_string(rest);
     }
 
-    // TODO: Range, LazySequence
+    // LazySequence (including Range) - return rest as a new LazySequence
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        // Get first element, return the "next" sequence
+        if let Some((_, next_seq)) = lazy.next() {
+            return Value::from_lazy_sequence(next_seq);
+        }
+        // Empty sequence - return empty list
+        return Value::from_list(im::Vector::new());
+    }
 
     Value::from_list(im::Vector::new())
 }
