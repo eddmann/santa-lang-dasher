@@ -2306,7 +2306,7 @@ Many built-in functions currently only support List, Set, Dict. The following ne
 
 - [x] `list()` - Range/LazySequence to List conversion (bounded sequences)
 - [x] `set()` - Range/LazySequence to Set conversion (bounded sequences)
-- [ ] `get()` - Range, LazySequence indexing (`runtime/src/builtins.rs:267`)
+- [x] `get()` - Range, LazySequence indexing (O(1) for Range, iterate for others)
 - [x] `size()` - Range (bounded only)
 - [x] `first()` - Range support (already worked via LazySequence)
 - [x] `second()` - Range/LazySequence support
@@ -2317,10 +2317,10 @@ Many built-in functions currently only support List, Set, Dict. The following ne
 - [ ] `push()` - Range, LazySequence support (`runtime/src/builtins.rs:974`)
 - [ ] `assoc()` - Range, LazySequence support (`runtime/src/builtins.rs:1066`)
 - [ ] `update()` - Range, LazySequence support (`runtime/src/builtins.rs:1137`)
-- [ ] `filter()` - Range, LazySequence support (`runtime/src/builtins.rs:1510`)
+- [x] `filter()` - Range, LazySequence support (lazy wrapper, collect_bounded_lazy for list conversion)
 - [ ] `flat_map()` - Range support (`runtime/src/builtins.rs:1591`)
-- [ ] `find()` - Range, LazySequence support (`runtime/src/builtins.rs:1662`)
-- [ ] `count()` - Range, LazySequence support (`runtime/src/builtins.rs:1732`)
+- [x] `find()` - Range, LazySequence support (find_in_lazy helper for all lazy kinds)
+- [x] `count()` - Range, LazySequence support (count_in_lazy helper for all lazy kinds)
 - [x] `sum()` - Range support (O(1) using arithmetic sequence formula)
 - [x] `max()` - Range support (O(1) for bounded ranges)
 - [x] `min()` - Range support (O(1) for bounded ranges)

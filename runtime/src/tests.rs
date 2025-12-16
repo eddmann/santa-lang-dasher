@@ -1499,6 +1499,71 @@ fn builtin_filter_none_match() {
     assert!(new_list.is_empty());
 }
 
+/// Test closure: returns truthy if value is odd (v % 2 != 0)
+extern "C" fn is_odd_predicate_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+    if argc != 1 || argv.is_null() {
+        return Value::from_bool(false);
+    }
+    let arg = unsafe { *argv };
+    if let Some(i) = arg.as_integer() {
+        Value::from_bool(i % 2 != 0)
+    } else {
+        Value::from_bool(false)
+    }
+}
+
+// ===== filter() Range/LazySequence Tests (§11.4) =====
+
+#[test]
+fn builtin_filter_range_exclusive() {
+    // filter(_ % 2, 1..5) |> list → [1, 3]
+    use crate::heap::LazySequenceObject;
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(5), false, 1));
+    let predicate = make_test_closure(is_odd_predicate_closure, 1);
+    let result = rt_filter(predicate, range);
+    // filter on LazySequence returns LazySequence
+    assert!(result.is_lazy_sequence(), "filter on range should return LazySequence");
+    // Convert to list to check values
+    let list_result = rt_list(result);
+    let list = list_result.as_list().expect("should convert to list");
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].as_integer(), Some(1));
+    assert_eq!(list[1].as_integer(), Some(3));
+}
+
+#[test]
+fn builtin_filter_range_inclusive() {
+    // filter(_ % 2, 1..=5) |> list → [1, 3, 5]
+    use crate::heap::LazySequenceObject;
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(5), true, 1));
+    let predicate = make_test_closure(is_odd_predicate_closure, 1);
+    let result = rt_filter(predicate, range);
+    assert!(result.is_lazy_sequence(), "filter on range should return LazySequence");
+    let list_result = rt_list(result);
+    let list = list_result.as_list().expect("should convert to list");
+    assert_eq!(list.len(), 3);
+    assert_eq!(list[0].as_integer(), Some(1));
+    assert_eq!(list[1].as_integer(), Some(3));
+    assert_eq!(list[2].as_integer(), Some(5));
+}
+
+#[test]
+fn builtin_filter_range_unbounded_take() {
+    // filter(_ % 2, 0..) |> take(3) → [1, 3, 5]
+    use crate::heap::LazySequenceObject;
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(0, None, false, 1));
+    let predicate = make_test_closure(is_odd_predicate_closure, 1);
+    let filtered = rt_filter(predicate, range);
+    assert!(filtered.is_lazy_sequence(), "filter on range should return LazySequence");
+    // Take first 3 odd numbers
+    let taken = rt_take(Value::from_integer(3), filtered);
+    let list = taken.as_list().expect("should be a list");
+    assert_eq!(list.len(), 3);
+    assert_eq!(list[0].as_integer(), Some(1));
+    assert_eq!(list[1].as_integer(), Some(3));
+    assert_eq!(list[2].as_integer(), Some(5));
+}
+
 // ===== flat_map() tests per LANG.txt §11.4 =====
 
 use crate::builtins::rt_flat_map;
@@ -2119,6 +2184,35 @@ fn builtin_find_range_no_match() {
     assert!(result.is_nil());
 }
 
+#[test]
+fn builtin_find_filtered_range() {
+    // find(_ > 2, filter(_ % 2, 1..10)) → 3
+    // First odd > 2 in range 1..10 is 3
+    use crate::heap::LazySequenceObject;
+
+    extern "C" fn greater_than_2(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+        if argc != 1 || argv.is_null() {
+            return Value::from_bool(false);
+        }
+        let arg = unsafe { *argv };
+        if let Some(i) = arg.as_integer() {
+            Value::from_bool(i > 2)
+        } else {
+            Value::from_bool(false)
+        }
+    }
+
+    // Create range 1..10
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(10), false, 1));
+    // Filter to odd numbers
+    let is_odd_pred = make_test_closure(is_odd_closure, 1);
+    let filtered = rt_filter(is_odd_pred, range);
+    // Find first > 2
+    let find_pred = make_test_closure(greater_than_2, 1);
+    let result = rt_find(find_pred, filtered);
+    assert_eq!(result.as_integer(), Some(3), "first odd > 2 should be 3");
+}
+
 // count() tests per LANG.txt §11.7
 use crate::builtins::rt_count;
 
@@ -2200,6 +2294,66 @@ fn builtin_count_range() {
     let predicate = make_test_closure(is_odd_closure, 1);
     let result = rt_count(predicate, v);
     assert_eq!(result.as_integer(), Some(5));
+}
+
+#[test]
+fn builtin_count_filtered_range() {
+    // Count even numbers in a filtered range of odd numbers → 0
+    // filter(_ % 2, 1..10) gives [1, 3, 5, 7, 9] - all odd
+    // count(_ % 2 == 0, [1, 3, 5, 7, 9]) → 0
+    use crate::heap::LazySequenceObject;
+
+    extern "C" fn is_even(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+        if argc != 1 || argv.is_null() {
+            return Value::from_bool(false);
+        }
+        let arg = unsafe { *argv };
+        if let Some(i) = arg.as_integer() {
+            Value::from_bool(i % 2 == 0)
+        } else {
+            Value::from_bool(false)
+        }
+    }
+
+    // Create range 1..10
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(10), false, 1));
+    // Filter to odd numbers only
+    let is_odd_pred = make_test_closure(is_odd_closure, 1);
+    let filtered = rt_filter(is_odd_pred, range);
+    // Count even numbers (should be 0 since all filtered values are odd)
+    let is_even_pred = make_test_closure(is_even, 1);
+    let result = rt_count(is_even_pred, filtered);
+    assert_eq!(result.as_integer(), Some(0), "no even numbers in filtered odd range");
+}
+
+#[test]
+fn builtin_count_filtered_range_with_matches() {
+    // Count numbers > 5 in a filtered range of odd numbers
+    // filter(_ % 2, 1..10) gives [1, 3, 5, 7, 9]
+    // count(_ > 5, [1, 3, 5, 7, 9]) → 2 (7 and 9)
+    use crate::heap::LazySequenceObject;
+
+    extern "C" fn greater_than_5(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+        if argc != 1 || argv.is_null() {
+            return Value::from_bool(false);
+        }
+        let arg = unsafe { *argv };
+        if let Some(i) = arg.as_integer() {
+            Value::from_bool(i > 5)
+        } else {
+            Value::from_bool(false)
+        }
+    }
+
+    // Create range 1..10
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(10), false, 1));
+    // Filter to odd numbers only
+    let is_odd_pred = make_test_closure(is_odd_closure, 1);
+    let filtered = rt_filter(is_odd_pred, range);
+    // Count numbers > 5
+    let gt5_pred = make_test_closure(greater_than_5, 1);
+    let result = rt_count(gt5_pred, filtered);
+    assert_eq!(result.as_integer(), Some(2), "7 and 9 are > 5");
 }
 
 // ===== Aggregation Functions (§11.8) =====
@@ -4670,4 +4824,78 @@ fn builtin_update_d_dict_existing_key() {
     assert_eq!(new_dict.len(), 2);
     assert_eq!(new_dict.get(&Value::from_integer(1)).map(|v| v.as_integer()), Some(Some(3)));
     assert_eq!(new_dict.get(&Value::from_integer(3)).map(|v| v.as_integer()), Some(Some(4)));
+}
+
+// ===== get() Range/LazySequence Tests (§11.2) =====
+
+#[test]
+fn builtin_get_range_exclusive() {
+    // get(1, 1..5) → 2
+    use crate::heap::LazySequenceObject;
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(5), false, 1));
+    let result = rt_get(Value::from_integer(1), range);
+    assert_eq!(result.as_integer(), Some(2));
+}
+
+#[test]
+fn builtin_get_range_inclusive() {
+    // get(1, 1..=5) → 2
+    use crate::heap::LazySequenceObject;
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(5), true, 1));
+    let result = rt_get(Value::from_integer(1), range);
+    assert_eq!(result.as_integer(), Some(2));
+}
+
+#[test]
+fn builtin_get_range_unbounded() {
+    // get(1, 0..) → 1
+    use crate::heap::LazySequenceObject;
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(0, None, false, 1));
+    let result = rt_get(Value::from_integer(1), range);
+    assert_eq!(result.as_integer(), Some(1));
+}
+
+#[test]
+fn builtin_get_range_out_of_bounds() {
+    // get(10, 1..5) → nil (out of bounds)
+    use crate::heap::LazySequenceObject;
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(5), false, 1));
+    let result = rt_get(Value::from_integer(10), range);
+    assert!(result.is_nil());
+}
+
+#[test]
+fn builtin_get_range_negative_index() {
+    // get(-1, 1..5) → nil (negative index not supported)
+    use crate::heap::LazySequenceObject;
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(5), false, 1));
+    let result = rt_get(Value::from_integer(-1), range);
+    assert!(result.is_nil());
+}
+
+#[test]
+fn builtin_get_range_first_element() {
+    // get(0, 1..5) → 1
+    use crate::heap::LazySequenceObject;
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(5), false, 1));
+    let result = rt_get(Value::from_integer(0), range);
+    assert_eq!(result.as_integer(), Some(1));
+}
+
+#[test]
+fn builtin_get_range_last_element_exclusive() {
+    // get(3, 1..5) → 4 (last element of [1,2,3,4])
+    use crate::heap::LazySequenceObject;
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(5), false, 1));
+    let result = rt_get(Value::from_integer(3), range);
+    assert_eq!(result.as_integer(), Some(4));
+}
+
+#[test]
+fn builtin_get_range_descending() {
+    // get(1, 5..1) → 4 (descending range: [5,4,3,2])
+    use crate::heap::LazySequenceObject;
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(5, Some(1), false, -1));
+    let result = rt_get(Value::from_integer(1), range);
+    assert_eq!(result.as_integer(), Some(4));
 }

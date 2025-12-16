@@ -142,17 +142,9 @@ pub extern "C" fn rt_list(value: Value) -> Value {
 
     // LazySequence (including Range) → Force evaluation to list
     if let Some(lazy_seq) = value.as_lazy_sequence() {
-        let mut result: im::Vector<Value> = im::Vector::new();
-        let mut current = lazy_seq.clone();
-
-        // Iterate through the lazy sequence, collecting values
-        // Note: This will only work for bounded sequences (ranges with end, etc.)
-        // Unbounded sequences would need to be handled differently (with take)
-        while let Some((val, next_seq)) = current.next() {
-            result.push_back(val);
-            current = *next_seq;
-        }
-        return Value::from_list(result);
+        // Use collect_bounded_lazy which handles Map, Filter, and other lazy kinds
+        // that require closure evaluation
+        return Value::from_list(collect_bounded_lazy(lazy_seq));
     }
 
     // Other types return empty list
@@ -289,7 +281,68 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
         return Value::nil();
     }
 
-    // TODO: Range, LazySequence support
+    // LazySequence (including Range) - index by integer
+    if let Some(lazy_seq) = collection.as_lazy_sequence() {
+        if let Some(i) = index.as_integer() {
+            if i < 0 {
+                return Value::nil();
+            }
+            let idx = i as usize;
+
+            use crate::heap::LazySeqKind;
+            match &lazy_seq.kind {
+                // Range - O(1) direct calculation
+                LazySeqKind::Range { current, end, inclusive, step } => {
+                    // Calculate the size of the range for bounds checking
+                    if let Some(end_val) = end {
+                        let size = if *step > 0 {
+                            if *inclusive {
+                                ((end_val - current) / step + 1) as usize
+                            } else {
+                                ((end_val - current + step - 1) / step).max(0) as usize
+                            }
+                        } else {
+                            // step < 0 (descending)
+                            let step_abs = step.abs();
+                            if *inclusive {
+                                ((current - end_val) / step_abs + 1) as usize
+                            } else {
+                                ((current - end_val + step_abs - 1) / step_abs).max(0) as usize
+                            }
+                        };
+
+                        if idx >= size {
+                            return Value::nil();
+                        }
+                    }
+                    // Unbounded range: always valid for non-negative index
+
+                    // Calculate value: start + index * step
+                    let value = current + (idx as i64) * step;
+                    return Value::from_integer(value);
+                }
+
+                // For other LazySequence types, iterate to the index
+                _ => {
+                    // Clone and iterate - less efficient but general
+                    let mut current_seq: Box<crate::heap::LazySequenceObject> = Box::new(lazy_seq.clone());
+                    for _ in 0..idx {
+                        match current_seq.next() {
+                            Some((_val, next_seq)) => {
+                                current_seq = next_seq;
+                            }
+                            None => return Value::nil(),
+                        }
+                    }
+                    if let Some((val, _next_seq)) = current_seq.next() {
+                        return val;
+                    }
+                    return Value::nil();
+                }
+            }
+        }
+        return Value::nil();
+    }
 
     Value::nil()
 }
@@ -1743,19 +1796,181 @@ pub extern "C" fn rt_find(predicate: Value, collection: Value) -> Value {
         return Value::nil();
     }
 
-    // LazySequence (including Range)
+    // LazySequence (including Range, Map, Filter, etc.)
     if let Some(lazy) = collection.as_lazy_sequence() {
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
-            if call_closure(closure, &[val]).is_truthy() {
-                return val;
-            }
-            current = *next_seq;
-        }
-        return Value::nil();
+        return find_in_lazy(lazy, closure);
     }
 
     Value::nil()
+}
+
+/// Helper to find first matching element in any lazy sequence
+/// Handles all lazy sequence variants including Map, Filter, and Iterate
+fn find_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> Value {
+    // Safety limit to prevent infinite loops
+    const MAX_ITERATIONS: usize = 10_000_000;
+
+    match &lazy.kind {
+        LazySeqKind::Repeat { value } => {
+            // Repeat is infinite - check the repeated value once
+            if call_closure(predicate, &[*value]).is_truthy() {
+                return *value;
+            }
+            // If not found in first iteration, will never be found - return nil
+            Value::nil()
+        }
+
+        LazySeqKind::Cycle { source, index } => {
+            if source.is_empty() {
+                return Value::nil();
+            }
+            // Check each element in the source once
+            for (i, _val) in source.iter().enumerate() {
+                let check_idx = (*index + i) % source.len();
+                if call_closure(predicate, &[source[check_idx]]).is_truthy() {
+                    return source[check_idx];
+                }
+            }
+            Value::nil()
+        }
+
+        LazySeqKind::Range { current, end, inclusive, step } => {
+            let mut cur = *current;
+            for _ in 0..MAX_ITERATIONS {
+                // Check if exhausted
+                if let Some(end_val) = end {
+                    let at_end = if *inclusive {
+                        if *step > 0 { cur > *end_val } else { cur < *end_val }
+                    } else if *step > 0 {
+                        cur >= *end_val
+                    } else {
+                        cur <= *end_val
+                    };
+                    if at_end {
+                        return Value::nil();
+                    }
+                }
+                let val = Value::from_integer(cur);
+                if call_closure(predicate, &[val]).is_truthy() {
+                    return val;
+                }
+                cur += step;
+            }
+            Value::nil()
+        }
+
+        LazySeqKind::Iterate { generator, current } => {
+            if let Some(gen_closure) = generator.as_closure() {
+                let mut cur = *current;
+                for _ in 0..MAX_ITERATIONS {
+                    if call_closure(predicate, &[cur]).is_truthy() {
+                        return cur;
+                    }
+                    cur = call_closure(gen_closure, &[cur]);
+                }
+            }
+            Value::nil()
+        }
+
+        LazySeqKind::Map { source, mapper } => {
+            if let Some(map_closure) = mapper.as_closure() {
+                // Iterate through source elements, map each, check predicate
+                let source_elements = collect_bounded_lazy(source);
+                for val in source_elements {
+                    let mapped = call_closure(map_closure, &[val]);
+                    if call_closure(predicate, &[mapped]).is_truthy() {
+                        return mapped;
+                    }
+                }
+            }
+            Value::nil()
+        }
+
+        LazySeqKind::Filter { source, predicate: filter_pred } => {
+            if let Some(filter_closure) = filter_pred.as_closure() {
+                // Iterate through source elements, filter, then check predicate
+                let source_elements = collect_bounded_lazy(source);
+                for val in source_elements {
+                    if call_closure(filter_closure, &[val]).is_truthy()
+                        && call_closure(predicate, &[val]).is_truthy() {
+                            return val;
+                        }
+                }
+            }
+            Value::nil()
+        }
+
+        LazySeqKind::Skip { source, remaining } => {
+            let source_elements = collect_bounded_lazy(source);
+            for (i, val) in source_elements.into_iter().enumerate() {
+                if i >= *remaining
+                    && call_closure(predicate, &[val]).is_truthy() {
+                        return val;
+                    }
+            }
+            Value::nil()
+        }
+
+        LazySeqKind::Combinations { source, size, indices, done } => {
+            if *done || source.is_empty() || *size == 0 || *size > source.len() {
+                return Value::nil();
+            }
+
+            let mut current_indices = indices.clone();
+            let n = source.len();
+
+            for _ in 0..MAX_ITERATIONS {
+                let combination: im::Vector<Value> = current_indices
+                    .iter()
+                    .map(|&i| source[i])
+                    .collect();
+                let val = Value::from_list(combination);
+
+                if call_closure(predicate, &[val]).is_truthy() {
+                    return val;
+                }
+
+                // Advance to next combination
+                let mut i = *size - 1;
+                while current_indices[i] == n - size + i {
+                    if i == 0 {
+                        return Value::nil(); // All combinations exhausted
+                    }
+                    i -= 1;
+                }
+                current_indices[i] += 1;
+                for j in (i + 1)..*size {
+                    current_indices[j] = current_indices[j - 1] + 1;
+                }
+            }
+            Value::nil()
+        }
+
+        LazySeqKind::Zip { sources } => {
+            if sources.is_empty() {
+                return Value::nil();
+            }
+
+            let source_vecs: Vec<im::Vector<Value>> = sources
+                .iter()
+                .map(collect_bounded_lazy)
+                .collect();
+
+            let min_len = source_vecs.iter().map(|v| v.len()).min().unwrap_or(0);
+
+            for i in 0..min_len {
+                let tuple: im::Vector<Value> = source_vecs
+                    .iter()
+                    .map(|v| v[i])
+                    .collect();
+                let val = Value::from_list(tuple);
+                if call_closure(predicate, &[val]).is_truthy() {
+                    return val;
+                }
+            }
+            Value::nil()
+        }
+    }
 }
 
 /// `count(predicate, collection)` → Integer
@@ -1825,19 +2040,174 @@ pub extern "C" fn rt_count(predicate: Value, collection: Value) -> Value {
         return Value::from_integer(count);
     }
 
-    // LazySequence (including Range)
+    // LazySequence (including Range, Map, Filter, etc.)
     if let Some(lazy) = collection.as_lazy_sequence() {
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
-            if call_closure(closure, &[val]).is_truthy() {
-                count += 1;
-            }
-            current = *next_seq;
-        }
-        return Value::from_integer(count);
+        return Value::from_integer(count_in_lazy(lazy, closure));
     }
 
     Value::from_integer(count)
+}
+
+/// Helper to count matching elements in any lazy sequence
+/// Handles all lazy sequence variants including Map, Filter, and Iterate
+fn count_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> i64 {
+    // Safety limit to prevent infinite loops
+    const MAX_ITERATIONS: usize = 10_000_000;
+    let mut count: i64 = 0;
+
+    match &lazy.kind {
+        LazySeqKind::Repeat { value } => {
+            // Repeat is infinite - count would be infinite if match
+            // Just return 0 since we can't reasonably count infinite elements
+            if call_closure(predicate, &[*value]).is_truthy() {
+                // Would be infinite, return 0 as placeholder
+            }
+            0
+        }
+
+        LazySeqKind::Cycle { source, .. } => {
+            if source.is_empty() {
+                return 0;
+            }
+            // Count matches in one full cycle
+            for val in source.iter() {
+                if call_closure(predicate, &[*val]).is_truthy() {
+                    count += 1;
+                }
+            }
+            count
+        }
+
+        LazySeqKind::Range { current, end, inclusive, step } => {
+            let mut cur = *current;
+            for _ in 0..MAX_ITERATIONS {
+                // Check if exhausted
+                if let Some(end_val) = end {
+                    let at_end = if *inclusive {
+                        if *step > 0 { cur > *end_val } else { cur < *end_val }
+                    } else if *step > 0 {
+                        cur >= *end_val
+                    } else {
+                        cur <= *end_val
+                    };
+                    if at_end {
+                        return count;
+                    }
+                } else {
+                    // Unbounded range - can't count all elements
+                    return count;
+                }
+                let val = Value::from_integer(cur);
+                if call_closure(predicate, &[val]).is_truthy() {
+                    count += 1;
+                }
+                cur += step;
+            }
+            count
+        }
+
+        LazySeqKind::Iterate { .. } => {
+            // Iterate is potentially infinite, return 0
+            0
+        }
+
+        LazySeqKind::Map { source, mapper } => {
+            if let Some(map_closure) = mapper.as_closure() {
+                let source_elements = collect_bounded_lazy(source);
+                for val in source_elements {
+                    let mapped = call_closure(map_closure, &[val]);
+                    if call_closure(predicate, &[mapped]).is_truthy() {
+                        count += 1;
+                    }
+                }
+            }
+            count
+        }
+
+        LazySeqKind::Filter { source, predicate: filter_pred } => {
+            if let Some(filter_closure) = filter_pred.as_closure() {
+                let source_elements = collect_bounded_lazy(source);
+                for val in source_elements {
+                    if call_closure(filter_closure, &[val]).is_truthy()
+                        && call_closure(predicate, &[val]).is_truthy() {
+                            count += 1;
+                        }
+                }
+            }
+            count
+        }
+
+        LazySeqKind::Skip { source, remaining } => {
+            let source_elements = collect_bounded_lazy(source);
+            for (i, val) in source_elements.into_iter().enumerate() {
+                if i >= *remaining
+                    && call_closure(predicate, &[val]).is_truthy() {
+                        count += 1;
+                    }
+            }
+            count
+        }
+
+        LazySeqKind::Combinations { source, size, indices, done } => {
+            if *done || source.is_empty() || *size == 0 || *size > source.len() {
+                return 0;
+            }
+
+            let mut current_indices = indices.clone();
+            let n = source.len();
+
+            for _ in 0..MAX_ITERATIONS {
+                let combination: im::Vector<Value> = current_indices
+                    .iter()
+                    .map(|&i| source[i])
+                    .collect();
+                let val = Value::from_list(combination);
+
+                if call_closure(predicate, &[val]).is_truthy() {
+                    count += 1;
+                }
+
+                // Advance to next combination
+                let mut i = *size - 1;
+                while current_indices[i] == n - size + i {
+                    if i == 0 {
+                        return count; // All combinations exhausted
+                    }
+                    i -= 1;
+                }
+                current_indices[i] += 1;
+                for j in (i + 1)..*size {
+                    current_indices[j] = current_indices[j - 1] + 1;
+                }
+            }
+            count
+        }
+
+        LazySeqKind::Zip { sources } => {
+            if sources.is_empty() {
+                return 0;
+            }
+
+            let source_vecs: Vec<im::Vector<Value>> = sources
+                .iter()
+                .map(collect_bounded_lazy)
+                .collect();
+
+            let min_len = source_vecs.iter().map(|v| v.len()).min().unwrap_or(0);
+
+            for i in 0..min_len {
+                let tuple: im::Vector<Value> = source_vecs
+                    .iter()
+                    .map(|v| v[i])
+                    .collect();
+                let val = Value::from_list(tuple);
+                if call_closure(predicate, &[val]).is_truthy() {
+                    count += 1;
+                }
+            }
+            count
+        }
+    }
 }
 
 // ============================================================================
@@ -3113,6 +3483,160 @@ fn collection_to_vector(v: Value, max_len: usize) -> im::Vector<Value> {
         take_from_lazy_full(max_len, lazy)
     } else {
         im::Vector::new()
+    }
+}
+
+/// Collect all elements from a bounded lazy sequence.
+/// For unbounded sequences, this will loop forever - caller must ensure sequence is bounded.
+/// Handles all lazy sequence variants including Map, Filter, and Iterate.
+fn collect_bounded_lazy(lazy: &LazySequenceObject) -> im::Vector<Value> {
+    let mut result: im::Vector<Value> = im::Vector::new();
+    collect_bounded_lazy_recursive(&mut result, lazy);
+    result
+}
+
+/// Recursively collect all elements from a bounded lazy sequence
+fn collect_bounded_lazy_recursive(
+    result: &mut im::Vector<Value>,
+    lazy: &LazySequenceObject,
+) {
+    // Safety limit to prevent infinite loops (for unbounded sequences called incorrectly)
+    const MAX_ELEMENTS: usize = 10_000_000;
+
+    match &lazy.kind {
+        LazySeqKind::Repeat { .. } | LazySeqKind::Cycle { .. } => {
+            // These are infinite - cannot collect all elements
+            // Return empty (caller should use take instead)
+        }
+
+        LazySeqKind::Iterate { generator, current } => {
+            // Iterate is potentially infinite, but we'll try to collect with a limit
+            // In practice, users should use take() for iterate sequences
+            if let Some(gen_closure) = generator.as_closure() {
+                let mut cur = *current;
+                for _ in 0..MAX_ELEMENTS {
+                    result.push_back(cur);
+                    cur = call_closure(gen_closure, &[cur]);
+                }
+            }
+        }
+
+        LazySeqKind::Range { current, end, inclusive, step } => {
+            if end.is_none() {
+                // Unbounded range - cannot collect all elements
+                return;
+            }
+            let mut cur = *current;
+            for _ in 0..MAX_ELEMENTS {
+                // Check if exhausted
+                if let Some(end_val) = end {
+                    let at_end = if *inclusive {
+                        if *step > 0 { cur > *end_val } else { cur < *end_val }
+                    } else if *step > 0 {
+                        cur >= *end_val
+                    } else {
+                        cur <= *end_val
+                    };
+                    if at_end {
+                        return;
+                    }
+                }
+                result.push_back(Value::from_integer(cur));
+                cur += step;
+            }
+        }
+
+        LazySeqKind::Map { source, mapper } => {
+            if let Some(map_closure) = mapper.as_closure() {
+                // First collect all source elements
+                let source_elements = collect_bounded_lazy(source);
+                for val in source_elements {
+                    let mapped = call_closure(map_closure, &[val]);
+                    result.push_back(mapped);
+                }
+            }
+        }
+
+        LazySeqKind::Filter { source, predicate } => {
+            if let Some(pred_closure) = predicate.as_closure() {
+                // First collect all source elements
+                let source_elements = collect_bounded_lazy(source);
+                for val in source_elements {
+                    if call_closure(pred_closure, &[val]).is_truthy() {
+                        result.push_back(val);
+                    }
+                }
+            }
+        }
+
+        LazySeqKind::Skip { source, remaining } => {
+            let source_elements = collect_bounded_lazy(source);
+            for (i, val) in source_elements.into_iter().enumerate() {
+                if i >= *remaining {
+                    result.push_back(val);
+                }
+            }
+        }
+
+        LazySeqKind::Combinations { source, size, indices, done } => {
+            if *done || source.is_empty() || *size == 0 || *size > source.len() {
+                return;
+            }
+
+            let mut current_indices = indices.clone();
+            let n = source.len();
+
+            for _ in 0..MAX_ELEMENTS {
+                // Get current combination
+                let combination: im::Vector<Value> = current_indices
+                    .iter()
+                    .map(|&i| source[i])
+                    .collect();
+                result.push_back(Value::from_list(combination));
+
+                // Advance to next combination
+                let mut i = *size - 1;
+
+                // Find the rightmost index that can be incremented
+                while current_indices[i] == n - size + i {
+                    if i == 0 {
+                        return; // All combinations exhausted
+                    }
+                    i -= 1;
+                }
+
+                // Increment this index and reset all subsequent indices
+                current_indices[i] += 1;
+                for j in (i + 1)..*size {
+                    current_indices[j] = current_indices[j - 1] + 1;
+                }
+            }
+        }
+
+        LazySeqKind::Zip { sources } => {
+            // For zip, we need to collect from all sources and zip them
+            // This is complex - for now, collect what we can
+            if sources.is_empty() {
+                return;
+            }
+
+            // Collect all sources
+            let source_vecs: Vec<im::Vector<Value>> = sources
+                .iter()
+                .map(collect_bounded_lazy)
+                .collect();
+
+            // Find minimum length
+            let min_len = source_vecs.iter().map(|v| v.len()).min().unwrap_or(0);
+
+            for i in 0..min_len {
+                let tuple: im::Vector<Value> = source_vecs
+                    .iter()
+                    .map(|v| v[i])
+                    .collect();
+                result.push_back(Value::from_list(tuple));
+            }
+        }
     }
 }
 
