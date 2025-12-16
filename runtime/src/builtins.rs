@@ -2140,6 +2140,7 @@ pub extern "C" fn rt_min(collection: Value) -> Value {
 /// Per LANG.txt §11.9:
 /// - skip(1, [1, 2, 3]) → [2, 3]
 /// - skip(1, {1, 2, 3}) → {2, 3}
+/// - skip(2, 1..5) → LazySequence(3..5)
 #[no_mangle]
 pub extern "C" fn rt_skip(total: Value, collection: Value) -> Value {
     let n = total.as_integer().unwrap_or(0) as usize;
@@ -2156,7 +2157,26 @@ pub extern "C" fn rt_skip(total: Value, collection: Value) -> Value {
         return Value::from_set(result);
     }
 
-    // TODO: Range, LazySequence support
+    // LazySequence (including Range)
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        use crate::heap::{LazySeqKind, LazySequenceObject};
+        // For Range, adjust the start position
+        if let LazySeqKind::Range { current, end, inclusive, step } = &lazy.kind {
+            let new_start = current + (n as i64) * step;
+            return Value::from_lazy_sequence(LazySequenceObject::range(
+                new_start,
+                *end,
+                *inclusive,
+                *step,
+            ));
+        }
+
+        // For other lazy sequences, use Skip wrapper
+        return Value::from_lazy_sequence(LazySequenceObject::new(LazySeqKind::Skip {
+            source: Box::new(lazy.clone()),
+            remaining: n,
+        }));
+    }
 
     collection
 }
@@ -2168,6 +2188,7 @@ pub extern "C" fn rt_skip(total: Value, collection: Value) -> Value {
 /// Per LANG.txt §11.9:
 /// - take(2, [1, 2, 3]) → [1, 2]
 /// - take(2, {1, 2, 3}) → [1, 2]
+/// - take(2, 1..5) → [1, 2]
 #[no_mangle]
 pub extern "C" fn rt_take(total: Value, collection: Value) -> Value {
     let n = total.as_integer().unwrap_or(0) as usize;
@@ -2184,13 +2205,11 @@ pub extern "C" fn rt_take(total: Value, collection: Value) -> Value {
         return Value::from_list(result);
     }
 
-    // LazySequence
+    // LazySequence (including Range)
     if let Some(lazy) = collection.as_lazy_sequence() {
         let result = take_from_lazy_full(n, lazy);
         return Value::from_list(result);
     }
-
-    // TODO: Range support
 
     Value::from_list(im::Vector::new())
 }

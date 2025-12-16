@@ -2350,6 +2350,33 @@ fn builtin_skip_set() {
     assert_eq!(skipped.len(), 2);
 }
 
+#[test]
+fn builtin_skip_range() {
+    // skip(2, 1..5) → LazySequence(3..5) → [3, 4]
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_skip(Value::from_integer(2), v);
+    // Result should be a LazySequence, convert to list to verify
+    let list = rt_list(result);
+    let elements = list.as_list().expect("should be a list");
+    assert_eq!(elements.len(), 2);
+    assert_eq!(elements[0].as_integer(), Some(3));
+    assert_eq!(elements[1].as_integer(), Some(4));
+}
+
+#[test]
+fn builtin_skip_range_all() {
+    // skip(10, 1..5) → empty
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_skip(Value::from_integer(10), v);
+    let list = rt_list(result);
+    let elements = list.as_list().expect("should be a list");
+    assert!(elements.is_empty());
+}
+
 // take() tests per LANG.txt §11.9
 #[test]
 fn builtin_take_list() {
@@ -2389,6 +2416,30 @@ fn builtin_take_set() {
     let result = rt_take(Value::from_integer(2), set);
     let taken = result.as_list().expect("should be a list");
     assert_eq!(taken.len(), 2);
+}
+
+#[test]
+fn builtin_take_range() {
+    // take(2, 1..5) → [1, 2]
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_take(Value::from_integer(2), v);
+    let taken = result.as_list().expect("should be a list");
+    assert_eq!(taken.len(), 2);
+    assert_eq!(taken[0].as_integer(), Some(1));
+    assert_eq!(taken[1].as_integer(), Some(2));
+}
+
+#[test]
+fn builtin_take_range_more_than_size() {
+    // take(10, 1..5) → [1, 2, 3, 4]
+    use crate::heap::LazySequenceObject;
+    let range = LazySequenceObject::range(1, Some(5), false, 1);
+    let v = Value::from_lazy_sequence(range);
+    let result = rt_take(Value::from_integer(10), v);
+    let taken = result.as_list().expect("should be a list");
+    assert_eq!(taken.len(), 4);
 }
 
 // sort() tests per LANG.txt §11.9
