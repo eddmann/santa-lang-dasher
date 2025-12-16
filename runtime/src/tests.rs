@@ -5238,3 +5238,40 @@ fn deep_hash_nested_lists() {
 
     assert_eq!(compute_hash(&outer1), compute_hash(&outer2));
 }
+
+// ===== HTTP Fetching Tests =====
+// Note: rt_read is already imported from builtins at line 4434
+
+#[test]
+fn read_https_url() {
+    // Test fetching from a public HTTPS endpoint
+    // example.com is a very stable test domain maintained by IANA
+    let url = Value::from_string("https://example.com/".to_string());
+    let result = rt_read(url);
+
+    // Should return a non-nil string containing HTML
+    assert!(!result.is_nil(), "HTTPS fetch should not return nil");
+    let content = result.as_string().expect("Result should be a string");
+    assert!(content.contains("Example Domain"), "Should contain example.com content");
+}
+
+#[test]
+fn read_http_url() {
+    // Test fetching from HTTP (example.com supports both HTTP and HTTPS)
+    let url = Value::from_string("http://example.com/".to_string());
+    let result = rt_read(url);
+
+    // Should return a non-nil string
+    assert!(!result.is_nil(), "HTTP fetch should not return nil");
+    assert!(result.as_string().is_some(), "Result should be a string");
+}
+
+#[test]
+fn read_invalid_url_returns_nil() {
+    // Test that invalid URLs return nil gracefully
+    let url = Value::from_string("https://this-domain-definitely-does-not-exist-12345.invalid/".to_string());
+    let result = rt_read(url);
+
+    // Should return nil for network errors
+    assert!(result.is_nil(), "Invalid URL should return nil");
+}

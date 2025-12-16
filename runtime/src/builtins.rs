@@ -4640,6 +4640,22 @@ fn fetch_aoc_input(year: u32, day: u32, session: &str) -> Option<String> {
     }
 }
 
+/// Fetch content from an HTTP or HTTPS URL.
+///
+/// Returns the response body as a String, or nil on error.
+fn read_http_url(url: &str) -> Value {
+    match ureq::get(url).call() {
+        Ok(response) => {
+            // Read the response body as a string
+            match response.into_string() {
+                Ok(body) => Value::from_string(&body),
+                Err(_) => Value::nil(), // Failed to read body
+            }
+        }
+        Err(_) => Value::nil(), // Network or HTTP error
+    }
+}
+
 /// Read AOC input, using cache if available.
 fn read_aoc_input(url: &str) -> Value {
     let (year, day) = match parse_aoc_url(url) {
@@ -4684,12 +4700,12 @@ fn read_aoc_input(url: &str) -> Value {
 ///
 /// Read file contents from a path. Supports multiple schemes:
 /// - Local files: `read("./input.txt")` or `read("/absolute/path.txt")`
-/// - HTTP(S): `read("https://example.com/data.txt")` (Phase 19)
-/// - AOC: `read("aoc://year/day")` - fetches puzzle input (Phase 19)
+/// - HTTP(S): `read("https://example.com/data.txt")`
+/// - AOC: `read("aoc://year/day")` - fetches puzzle input with caching
 ///
 /// Per LANG.txt §13:
 /// - Returns file contents as a String
-/// - Returns nil on error (file not found, permission denied, etc.)
+/// - Returns nil on error (file not found, permission denied, network error, etc.)
 #[no_mangle]
 pub extern "C" fn rt_read(path: Value) -> Value {
     let path_str = match path.as_string() {
@@ -4699,9 +4715,7 @@ pub extern "C" fn rt_read(path: Value) -> Value {
 
     // Check for URL schemes
     if path_str.starts_with("http://") || path_str.starts_with("https://") {
-        // TODO: HTTP fetching - not yet implemented
-        eprintln!("Error: HTTP fetching not yet implemented");
-        return Value::nil();
+        return read_http_url(path_str);
     }
 
     if path_str.starts_with("aoc://") {

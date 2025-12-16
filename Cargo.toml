@@ -16,4 +16,5 @@ regex = "1.10"
 md-5 = "0.10"  # Phase 14 (Built-ins) - MD5 hashing
 dirs = "5.0"  # Phase 19 (CLI) - Cross-platform directories
 clap = { version = "4.4", features = ["derive"] }  # Phase 19 (CLI) - Argument parsing
+ureq = "2.9"  # HTTP client for read() URL fetching
 expect-test = "1.5"

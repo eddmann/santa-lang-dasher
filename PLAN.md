@@ -2342,7 +2342,7 @@ Many built-in functions currently only support List, Set, Dict. The following ne
 
 ### External Functions
 
-- [ ] HTTP/HTTPS fetching for `read()` (`runtime/src/builtins.rs:3734`)
+- [x] HTTP/HTTPS fetching for `read()` (using ureq HTTP client)
 
 ---
 
