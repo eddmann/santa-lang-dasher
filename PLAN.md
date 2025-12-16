@@ -2293,10 +2293,10 @@ The following items are documented TODOs in the codebase. They are not required 
 
 ### Runtime Operations
 
-- [ ] List + List concatenation in `rt_add` (`runtime/src/operations.rs:98`)
-- [ ] Set + Set union in `rt_add`
-- [ ] Dict + Dict merge in `rt_add`
-- [ ] Decimal modulo support (`runtime/src/operations.rs:226`)
+- [x] List + List concatenation in `rt_add`
+- [x] Set + Set union in `rt_add`
+- [x] Dict + Dict merge in `rt_add` (right precedence)
+- [x] Decimal modulo support - Not needed per LANG.txt (only Integer modulo specified)
 - [ ] Collection string representations for puts/debugging (`runtime/src/operations.rs:449`)
 - [ ] Reference counting for Function, Closure, LazySequence types (`runtime/src/refcount.rs:92`)
 
@@ -2312,13 +2312,13 @@ Many built-in functions currently only support List, Set, Dict. The following ne
 - [x] `second()` - Range/LazySequence support
 - [x] `rest()` - Range/LazySequence support (returns new LazySequence)
 - [x] `last()` - Range support (O(1) calculation for bounded ranges)
-- [ ] `keys()` - Range support (`runtime/src/builtins.rs:807`)
-- [ ] `values()` - Range support (`runtime/src/builtins.rs:897`)
-- [ ] `push()` - Range, LazySequence support (`runtime/src/builtins.rs:974`)
-- [ ] `assoc()` - Range, LazySequence support (`runtime/src/builtins.rs:1066`)
-- [ ] `update()` - Range, LazySequence support (`runtime/src/builtins.rs:1137`)
+- [x] `keys()` - Dictionary only per LANG.txt §11.2 (no Range support needed)
+- [x] `values()` - Dictionary only per LANG.txt §11.2 (no Range support needed)
+- [x] `push()` - List, Set only per LANG.txt §11.3 (no Range support needed)
+- [x] `assoc()` - List, Dictionary only per LANG.txt §11.3 (no Range support needed)
+- [x] `update()` - List, Dictionary only per LANG.txt §11.3 (no Range support needed)
 - [x] `filter()` - Range, LazySequence support (lazy wrapper, collect_bounded_lazy for list conversion)
-- [ ] `flat_map()` - Range support (`runtime/src/builtins.rs:1591`)
+- [x] `flat_map()` - Range support (already works via LazySequence iteration)
 - [x] `find()` - Range, LazySequence support (find_in_lazy helper for all lazy kinds)
 - [x] `count()` - Range, LazySequence support (count_in_lazy helper for all lazy kinds)
 - [x] `sum()` - Range support (O(1) using arithmetic sequence formula)
@@ -2326,17 +2326,17 @@ Many built-in functions currently only support List, Set, Dict. The following ne
 - [x] `min()` - Range support (O(1) for bounded ranges)
 - [x] `skip()` - Range support (returns adjusted LazySequence)
 - [x] `take()` - Range support (already worked via LazySequence)
-- [ ] `chunk()` - Range, String support (`runtime/src/builtins.rs:2115`)
-- [ ] `union()` - Range, LazySequence support (`runtime/src/builtins.rs:2196`)
-- [ ] `intersection()` - Range, LazySequence support (`runtime/src/builtins.rs:2264`)
-- [ ] `sort()` - Range support (NOT LazySequence/Unbounded per spec) (`runtime/src/builtins.rs:2317`)
+- [x] `chunk()` - List only per LANG.txt §11.9 (no Range/String support needed)
+- [x] `union()` - Range, String support (bounded Range only, String as grapheme clusters)
+- [x] `intersection()` - Range support (bounded Range only)
+- [x] `sort()` - List only per LANG.txt §11.9 (no Range support needed)
 - [x] `reverse()` - Range/LazySequence support (collects and reverses)
 
 ### Error Handling
 
-- [ ] `reduce` on empty collection should return RuntimeErr (`runtime/src/builtins.rs:1171`)
-- [ ] `max` on empty collection should return RuntimeErr (`runtime/src/builtins.rs:1200`)
-- [ ] `min` on empty collection should return RuntimeErr (`runtime/src/builtins.rs:1221`)
+- [x] `reduce` on empty collection throws RuntimeErr per LANG.txt §11.5
+- [x] `max` on empty collection returns `nil` per LANG.txt §11.8 (no change needed)
+- [x] `min` on empty collection returns `nil` per LANG.txt §11.8 (no change needed)
 - [ ] Calling non-callable value should return RuntimeErr (`runtime/src/operations.rs:543`)
 - [ ] Division by zero detailed error message (`runtime/src/builtins.rs:3015`)
 

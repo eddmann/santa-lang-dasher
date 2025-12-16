@@ -1354,13 +1354,14 @@ pub extern "C" fn rt_find_map(mapper: Value, collection: Value) -> Value {
 /// `reduce(reducer, collection)` → Value
 ///
 /// Apply a pure reducer function, using first element as initial accumulator.
-/// **Returns nil if collection is empty (TODO: RuntimeErr in Phase 18).**
+/// **Throws RuntimeErr if collection is empty.**
 ///
 /// Per LANG.txt §11.5:
 /// - reduce(+, [1, 2]) → 3
 /// - reduce(+, {1, 2}) → 3
+/// - reduce(+, []) → RuntimeErr
 #[no_mangle]
-pub extern "C" fn rt_reduce(reducer: Value, collection: Value) -> Value {
+pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
     // Get the closure - if not a closure, return nil
     let closure = match reducer.as_closure() {
         Some(c) => c,
@@ -1368,32 +1369,36 @@ pub extern "C" fn rt_reduce(reducer: Value, collection: Value) -> Value {
     };
 
     // Helper for the common reduction logic
+    // Returns None if the collection is empty
     fn do_reduce(
         closure: &ClosureObject,
         mut iter: impl Iterator<Item = Value>,
-    ) -> Value {
+    ) -> Option<Value> {
         // Get first element as initial accumulator
-        let mut acc = match iter.next() {
-            Some(v) => v,
-            None => return Value::nil(), // TODO: RuntimeErr in Phase 18
-        };
+        let mut acc = iter.next()?;
 
         // Reduce over remaining elements
         for v in iter {
             acc = call_closure(closure, &[acc, v]);
         }
 
-        acc
+        Some(acc)
     }
 
     // List
     if let Some(list) = collection.as_list() {
-        return do_reduce(closure, list.iter().copied());
+        return match do_reduce(closure, list.iter().copied()) {
+            Some(v) => v,
+            None => runtime_error("reduce on empty collection"),
+        };
     }
 
     // Set
     if let Some(set) = collection.as_set() {
-        return do_reduce(closure, set.iter().copied());
+        return match do_reduce(closure, set.iter().copied()) {
+            Some(v) => v,
+            None => runtime_error("reduce on empty collection"),
+        };
     }
 
     // Dict (reducer receives acc, value, or acc, value, key for 3-arg)
@@ -1404,7 +1409,7 @@ pub extern "C" fn rt_reduce(reducer: Value, collection: Value) -> Value {
         // Get first element as initial accumulator
         let (_, first_v) = match iter.next() {
             Some(kv) => kv,
-            None => return Value::nil(), // TODO: RuntimeErr
+            None => runtime_error("reduce on empty collection"),
         };
         let mut acc = *first_v;
 
@@ -1425,7 +1430,7 @@ pub extern "C" fn rt_reduce(reducer: Value, collection: Value) -> Value {
         use unicode_segmentation::UnicodeSegmentation;
         let graphemes: Vec<_> = s.graphemes(true).collect();
         if graphemes.is_empty() {
-            return Value::nil(); // TODO: RuntimeErr
+            runtime_error("reduce on empty collection");
         }
 
         let mut acc = Value::from_string(graphemes[0].to_string());
@@ -1443,7 +1448,7 @@ pub extern "C" fn rt_reduce(reducer: Value, collection: Value) -> Value {
         // Get first element as initial accumulator
         let (first_val, mut current) = match lazy.next() {
             Some((v, next)) => (v, *next),
-            None => return Value::nil(), // Empty sequence
+            None => runtime_error("reduce on empty collection"),
         };
 
         let mut acc = first_val;
@@ -2835,6 +2840,7 @@ pub extern "C" fn rt_chunk(size: Value, collection: Value) -> Value {
 // ============================================================================
 
 /// Helper: extract elements from a collection as an iterator
+/// Per LANG.txt §11.10, supports List, Set, Range, String
 fn collect_elements(v: Value) -> Vec<Value> {
     if let Some(list) = v.as_list() {
         return list.iter().copied().collect();
@@ -2842,7 +2848,25 @@ fn collect_elements(v: Value) -> Vec<Value> {
     if let Some(set) = v.as_set() {
         return set.iter().copied().collect();
     }
-    // TODO: Range, String support
+    // Range (LazySequence) - iterate to collect bounded range elements
+    if let Some(lazy) = v.as_lazy_sequence() {
+        use crate::heap::LazySeqKind;
+        // Only collect bounded ranges (unbounded would be infinite)
+        if let LazySeqKind::Range { end: Some(_), .. } = &lazy.kind {
+            let mut result = Vec::new();
+            let mut current = lazy.clone();
+            while let Some((val, next_seq)) = current.next() {
+                result.push(val);
+                current = *next_seq;
+            }
+            return result;
+        }
+    }
+    // String - split into grapheme clusters
+    if let Some(s) = v.as_string() {
+        use unicode_segmentation::UnicodeSegmentation;
+        return s.graphemes(true).map(|g| Value::from_string(g.to_string())).collect();
+    }
     vec![]
 }
 

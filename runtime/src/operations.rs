@@ -95,8 +95,29 @@ pub extern "C" fn rt_add(left: Value, right: Value) -> Value {
         return Value::from_string(format!("{}{}", l, r_str));
     }
 
-    // TODO: Handle List + List, Set + Set, Dict + Dict
-    // For now, return nil for unsupported operations
+    // Handle List + List (concatenation) per LANG.txt §4
+    if let (Some(l), Some(r)) = (left.as_list(), right.as_list()) {
+        let mut result = l.clone();
+        result.append(r.clone());
+        return Value::from_list(result);
+    }
+
+    // Handle Set + Set (union) per LANG.txt §4
+    if let (Some(l), Some(r)) = (left.as_set(), right.as_set()) {
+        let result = l.clone().union(r.clone());
+        return Value::from_set(result);
+    }
+
+    // Handle Dict + Dict (merge, right precedence) per LANG.txt §4
+    if let (Some(l), Some(r)) = (left.as_dict(), right.as_dict()) {
+        // Union with right entries overwriting left entries when keys clash
+        // im::HashMap::union keeps left values on collision, so we need r.union(l)
+        // then the right values win when there are conflicts
+        let result = r.clone().union(l.clone());
+        return Value::from_dict(result);
+    }
+
+    // Unsupported operation - return nil
     Value::nil()
 }
 

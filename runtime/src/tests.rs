@@ -259,6 +259,72 @@ fn runtime_add_string_coerces_right() {
     assert_eq!(result.as_string(), Some("Answer: 42"));
 }
 
+// List + List concatenation per LANG.txt §4
+#[test]
+fn runtime_add_list_concatenation() {
+    // [1, 2] + [3, 4] → [1, 2, 3, 4]
+    let left = Value::from_list(vec![
+        Value::from_integer(1),
+        Value::from_integer(2),
+    ].into_iter().collect());
+    let right = Value::from_list(vec![
+        Value::from_integer(3),
+        Value::from_integer(4),
+    ].into_iter().collect());
+    let result = rt_add(left, right);
+
+    let list = result.as_list().expect("should be a list");
+    assert_eq!(list.len(), 4);
+    assert_eq!(list[0].as_integer(), Some(1));
+    assert_eq!(list[1].as_integer(), Some(2));
+    assert_eq!(list[2].as_integer(), Some(3));
+    assert_eq!(list[3].as_integer(), Some(4));
+}
+
+// Set + Set union per LANG.txt §4
+#[test]
+fn runtime_add_set_union() {
+    // {1, 2} + {2, 3} → {1, 2, 3}
+    let left = Value::from_set(vec![
+        Value::from_integer(1),
+        Value::from_integer(2),
+    ].into_iter().collect());
+    let right = Value::from_set(vec![
+        Value::from_integer(2),
+        Value::from_integer(3),
+    ].into_iter().collect());
+    let result = rt_add(left, right);
+
+    let set = result.as_set().expect("should be a set");
+    assert_eq!(set.len(), 3);
+    assert!(set.contains(&Value::from_integer(1)));
+    assert!(set.contains(&Value::from_integer(2)));
+    assert!(set.contains(&Value::from_integer(3)));
+}
+
+// Dict + Dict merge per LANG.txt §4
+#[test]
+fn runtime_add_dict_merge() {
+    // #{1: 2, 3: 4} + #{3: 5, 6: 7} → #{1: 2, 3: 5, 6: 7} (right precedence)
+    let mut left_entries = im::HashMap::new();
+    left_entries.insert(Value::from_integer(1), Value::from_integer(2));
+    left_entries.insert(Value::from_integer(3), Value::from_integer(4));
+    let left = Value::from_dict(left_entries);
+
+    let mut right_entries = im::HashMap::new();
+    right_entries.insert(Value::from_integer(3), Value::from_integer(5));
+    right_entries.insert(Value::from_integer(6), Value::from_integer(7));
+    let right = Value::from_dict(right_entries);
+
+    let result = rt_add(left, right);
+
+    let dict = result.as_dict().expect("should be a dict");
+    assert_eq!(dict.len(), 3);
+    assert_eq!(dict.get(&Value::from_integer(1)), Some(&Value::from_integer(2)));
+    assert_eq!(dict.get(&Value::from_integer(3)), Some(&Value::from_integer(5))); // Right wins
+    assert_eq!(dict.get(&Value::from_integer(6)), Some(&Value::from_integer(7)));
+}
+
 #[test]
 fn runtime_subtract_integers() {
     let left = Value::from_integer(50);
@@ -1881,13 +1947,12 @@ fn builtin_reduce_set() {
 }
 
 #[test]
-fn builtin_reduce_empty_returns_nil() {
-    // Per LANG.txt: reduce on empty collection throws RuntimeErr
-    // For now we return nil (TODO: proper error handling in Phase 18)
+#[should_panic(expected = "reduce on empty collection")]
+fn builtin_reduce_empty_panics() {
+    // Per LANG.txt §11.5: reduce on empty collection → RuntimeErr
     let list = Value::from_list(im::Vector::new());
     let reducer = make_test_closure(sum_closure, 2);
-    let result = rt_reduce(reducer, list);
-    assert!(result.is_nil());
+    let _result = rt_reduce(reducer, list);  // Should panic
 }
 
 // fold() tests
@@ -3042,6 +3107,61 @@ fn builtin_intersection_no_common() {
     let result = rt_intersection(set1, set2);
     let isect = result.as_set().expect("should be a set");
     assert!(isect.is_empty());
+}
+
+// union() with Range support per LANG.txt §11.10
+#[test]
+fn builtin_union_with_range() {
+    // union({1, 2}, 1..4) → {1, 2, 3}
+    // Per LANG.txt: union({1, 2}, [2, 3], 1..4, "abc") → {1, 2, 3, "a", "b", "c"}
+    use crate::heap::LazySequenceObject;
+    let set = Value::from_set(vec![
+        Value::from_integer(1),
+        Value::from_integer(2),
+    ].into_iter().collect());
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(4), false, 1));
+    let result = rt_union(set, range);
+    let union_set = result.as_set().expect("should be a set");
+    assert_eq!(union_set.len(), 3); // {1, 2, 3}
+    assert!(union_set.contains(&Value::from_integer(1)));
+    assert!(union_set.contains(&Value::from_integer(2)));
+    assert!(union_set.contains(&Value::from_integer(3)));
+}
+
+// union() with String support per LANG.txt §11.10
+#[test]
+fn builtin_union_with_string() {
+    // union({1, 2}, "ab") → {1, 2, "a", "b"}
+    let set = Value::from_set(vec![
+        Value::from_integer(1),
+        Value::from_integer(2),
+    ].into_iter().collect());
+    let string = Value::from_string("ab");
+    let result = rt_union(set, string);
+    let union_set = result.as_set().expect("should be a set");
+    assert_eq!(union_set.len(), 4); // {1, 2, "a", "b"}
+    assert!(union_set.contains(&Value::from_integer(1)));
+    assert!(union_set.contains(&Value::from_integer(2)));
+    assert!(union_set.contains(&Value::from_string("a")));
+    assert!(union_set.contains(&Value::from_string("b")));
+}
+
+// intersection() with Range support per LANG.txt §11.10
+#[test]
+fn builtin_intersection_with_range() {
+    // intersection({1, 2, 3}, 2..5) → {2, 3}
+    use crate::heap::LazySequenceObject;
+    let set = Value::from_set(vec![
+        Value::from_integer(1),
+        Value::from_integer(2),
+        Value::from_integer(3),
+    ].into_iter().collect());
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(2, Some(5), false, 1));
+    let result = rt_intersection(set, range);
+    let isect = result.as_set().expect("should be a set");
+    assert_eq!(isect.len(), 2); // {2, 3}
+    assert!(isect.contains(&Value::from_integer(2)));
+    assert!(isect.contains(&Value::from_integer(3)));
 }
 
 // ===== Predicates (§11.11) =====
@@ -4444,13 +4564,13 @@ fn builtin_reduce_lazy_range_single_element() {
 }
 
 #[test]
-fn builtin_reduce_lazy_range_empty() {
-    // reduce(+, 5..5) → nil (empty range)
+#[should_panic(expected = "reduce on empty collection")]
+fn builtin_reduce_lazy_range_empty_panics() {
+    // Per LANG.txt §11.5: reduce(+, 5..5) → RuntimeErr (empty range)
     let lazy = LazySequenceObject::range(5, Some(5), false, 1);
     let range_val = Value::from_lazy_sequence(lazy);
     let reducer = make_test_closure(sum_closure, 2);
-    let result = rt_reduce(reducer, range_val);
-    assert!(result.is_nil());
+    let _result = rt_reduce(reducer, range_val);  // Should panic
 }
 
 #[test]
