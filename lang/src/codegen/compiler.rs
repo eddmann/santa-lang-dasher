@@ -2228,7 +2228,7 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Compile a let binding
-    fn compile_let(&mut self, pattern: &Pattern, value: &Expr, mutable: bool) -> Result<(), CompileError> {
+    fn compile_let(&mut self, pattern: &Pattern, value: &Expr, _mutable: bool) -> Result<(), CompileError> {
         match pattern {
             Pattern::Identifier(name) => {
                 // Check if trying to shadow a protected built-in name
@@ -3114,7 +3114,7 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::If { condition, then_branch, else_branch } => {
                 Self::value_has_self_reference(name, condition, bound)
                     || Self::value_has_self_reference(name, then_branch, bound)
-                    || else_branch.as_ref().map_or(false, |e| Self::value_has_self_reference(name, e, bound))
+                    || else_branch.as_ref().is_some_and(|e| Self::value_has_self_reference(name, e, bound))
             }
             Expr::Call { function, args } => {
                 Self::value_has_self_reference(name, function, bound)
@@ -3156,7 +3156,7 @@ impl<'ctx> CodegenContext<'ctx> {
             }
             Expr::Range { start, end, .. } => {
                 Self::value_has_self_reference(name, start, bound)
-                    || end.as_ref().map_or(false, |e| Self::value_has_self_reference(name, e, bound))
+                    || end.as_ref().is_some_and(|e| Self::value_has_self_reference(name, e, bound))
             }
             Expr::Match { subject, arms } => {
                 if Self::value_has_self_reference(name, subject, bound) {

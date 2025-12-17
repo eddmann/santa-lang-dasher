@@ -177,6 +177,7 @@ impl Runner {
     }
 
     /// Execute a single test section
+    #[allow(clippy::too_many_arguments)]
     fn execute_single_test(
         &self,
         statements: &[crate::parser::ast::Stmt],

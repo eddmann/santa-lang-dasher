@@ -103,6 +103,7 @@ impl Parser {
     }
 
     /// Count the number of placeholders in an expression
+    #[allow(clippy::only_used_in_recursion)]
     fn count_placeholders(&self, expr: &Expr) -> usize {
         match expr {
             Expr::Placeholder => 1,
@@ -136,6 +137,7 @@ impl Parser {
     }
 
     /// Replace placeholders with identifiers
+    #[allow(clippy::only_used_in_recursion)]
     fn replace_placeholders(&self, expr: Expr, counter: &mut usize) -> Expr {
         match expr {
             Expr::Placeholder => {
