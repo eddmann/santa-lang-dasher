@@ -115,10 +115,14 @@ unsafe fn rt_free(value: Value) {
                 free_lazy_seq_values(&(*ptr).kind);
                 drop(Box::from_raw(ptr));
             }
-            _ => {
-                // Other types not implemented yet
-                // For now, just leak the memory
-                // TODO: Implement for Function, etc.
+            TypeTag::Decimal | TypeTag::BoxedInteger => {
+                // These types don't contain nested Values, just free directly
+                drop(Box::from_raw(header_ptr as *mut ObjectHeader));
+            }
+            TypeTag::Function => {
+                // Function type is not used - all functions are Closures
+                // Just free the allocation if it ever appears
+                drop(Box::from_raw(header_ptr as *mut ObjectHeader));
             }
         }
     }

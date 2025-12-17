@@ -967,7 +967,7 @@ pub extern "C" fn rt_map(mapper: Value, collection: Value) -> Value {
         return Value::from_list(mapped);
     }
 
-    // LazySequence → LazySequence (lazy map)
+    // LazySequence (including Ranges) → LazySequence (lazy map)
     if let Some(lazy) = collection.as_lazy_sequence() {
         let lazy_map = LazySequenceObject::new(LazySeqKind::Map {
             source: Box::new(lazy.clone()),
@@ -975,8 +975,6 @@ pub extern "C" fn rt_map(mapper: Value, collection: Value) -> Value {
         });
         return Value::from_lazy_sequence(lazy_map);
     }
-
-    // TODO: Range support
 
     // Unsupported type - return empty list
     Value::from_list(im::Vector::new())
@@ -1057,7 +1055,7 @@ pub extern "C" fn rt_filter(predicate: Value, collection: Value) -> Value {
         return Value::from_list(filtered);
     }
 
-    // LazySequence → LazySequence (lazy filter)
+    // LazySequence (including Ranges) → LazySequence (lazy filter)
     if let Some(lazy) = collection.as_lazy_sequence() {
         let lazy_filter = LazySequenceObject::new(LazySeqKind::Filter {
             source: Box::new(lazy.clone()),
@@ -1065,8 +1063,6 @@ pub extern "C" fn rt_filter(predicate: Value, collection: Value) -> Value {
         });
         return Value::from_lazy_sequence(lazy_filter);
     }
-
-    // TODO: Range support
 
     // Unsupported type - return empty list
     Value::from_list(im::Vector::new())
@@ -1719,7 +1715,19 @@ pub extern "C" fn rt_fold_s(initial: Value, folder: Value, collection: Value) ->
         return acc;
     }
 
-    // TODO: Range, LazySequence support
+    // LazySequence (including Ranges) - iterate through the sequence
+    // WARNING: Unbounded sequences will loop forever unless break is used
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        let mut current = lazy.clone();
+        while let Some((val, next_lazy)) = current.next() {
+            acc = call_closure(closure, &[acc, val]);
+            current = *next_lazy;
+        }
+        if let Some(state_list) = acc.as_list() {
+            return state_list.front().copied().unwrap_or_else(Value::nil);
+        }
+        return acc;
+    }
 
     // For empty collection, return first element of initial
     if let Some(state_list) = acc.as_list() {
@@ -3190,7 +3198,16 @@ pub extern "C" fn rt_each(side_effect: Value, collection: Value) -> Value {
         return Value::nil();
     }
 
-    // TODO: Range, LazySequence support
+    // LazySequence (including Ranges) - iterate through the sequence
+    // WARNING: Unbounded sequences will loop forever
+    if let Some(lazy) = collection.as_lazy_sequence() {
+        let mut current = lazy.clone();
+        while let Some((val, next_lazy)) = current.next() {
+            call_closure(closure, &[val]);
+            current = *next_lazy;
+        }
+        return Value::nil();
+    }
 
     Value::nil()
 }
@@ -3968,7 +3985,7 @@ pub extern "C" fn rt_split(separator: Value, string: Value) -> Value {
 /// - regex_match("\\d+", "abc123") → [] (no capture groups)
 /// - regex_match("(\\d+)", "no numbers") → [] (no match)
 #[no_mangle]
-pub extern "C" fn rt_regex_match(pattern: Value, string: Value) -> Value {
+pub extern "C-unwind" fn rt_regex_match(pattern: Value, string: Value) -> Value {
     // Both must be strings
     let pat = match pattern.as_string() {
         Some(s) => s,
@@ -3979,11 +3996,10 @@ pub extern "C" fn rt_regex_match(pattern: Value, string: Value) -> Value {
         None => return Value::from_list(im::Vector::new()),
     };
 
-    // Compile regex - return empty list on invalid pattern
-    // TODO: In Phase 18, this should return RuntimeErr
+    // Compile regex - RuntimeErr on invalid pattern per LANG.txt
     let re = match Regex::new(pat) {
         Ok(r) => r,
-        Err(_) => return Value::from_list(im::Vector::new()),
+        Err(e) => runtime_error(&format!("invalid regex pattern '{}': {}", pat, e)),
     };
 
     // Find first match and return capture groups only
@@ -4009,7 +4025,7 @@ pub extern "C" fn rt_regex_match(pattern: Value, string: Value) -> Value {
 /// - regex_match_all("\\d+", "a1b2c3") → ["1", "2", "3"]
 /// - regex_match_all("\\w+", "hello world") → ["hello", "world"]
 #[no_mangle]
-pub extern "C" fn rt_regex_match_all(pattern: Value, string: Value) -> Value {
+pub extern "C-unwind" fn rt_regex_match_all(pattern: Value, string: Value) -> Value {
     // Both must be strings
     let pat = match pattern.as_string() {
         Some(s) => s,
@@ -4020,10 +4036,10 @@ pub extern "C" fn rt_regex_match_all(pattern: Value, string: Value) -> Value {
         None => return Value::from_list(im::Vector::new()),
     };
 
-    // Compile regex - return empty list on invalid pattern
+    // Compile regex - RuntimeErr on invalid pattern per LANG.txt
     let re = match Regex::new(pat) {
         Ok(r) => r,
-        Err(_) => return Value::from_list(im::Vector::new()),
+        Err(e) => runtime_error(&format!("invalid regex pattern '{}': {}", pat, e)),
     };
 
     // Find all matches

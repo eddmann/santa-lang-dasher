@@ -81,7 +81,8 @@ fn value_truthiness() {
     assert!(!Value::nil().is_truthy());
     assert!(!Value::from_integer(0).is_truthy());
     assert!(!Value::from_decimal(0.0).is_truthy());
-    // TODO: empty string, empty list once we have those
+    assert!(!Value::from_string("").is_truthy());
+    assert!(!Value::from_list(im::Vector::new()).is_truthy());
 
     // Truthy values
     assert!(Value::from_bool(true).is_truthy());
@@ -2178,6 +2179,24 @@ fn builtin_fold_s_empty_returns_first_of_initial() {
     assert_eq!(result.as_integer(), Some(42));
 }
 
+#[test]
+fn builtin_fold_s_with_range() {
+    // fold_s([0, 1], |[a, b], _| [b, a + b], 1..10) → 34
+    // This computes fibonacci using range instead of list
+    use crate::heap::LazySequenceObject;
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(10), false, 1));
+    let folder = make_test_closure(fibonacci_folder, 2);
+    let initial = Value::from_list(vec![
+        Value::from_integer(0),
+        Value::from_integer(1),
+    ].into_iter().collect());
+    let result = rt_fold_s(initial, folder, range);
+    // After 9 iterations (1..10 has 9 elements) starting from [0, 1]:
+    // [0,1] -> [1,1] -> [1,2] -> [2,3] -> [3,5] -> [5,8] -> [8,13] -> [13,21] -> [21,34]
+    // First element is 34
+    assert_eq!(result.as_integer(), Some(34));
+}
+
 // each() tests
 #[test]
 fn builtin_each_returns_nil() {
@@ -2196,6 +2215,17 @@ fn builtin_each_empty_returns_nil() {
     let list = Value::from_list(im::Vector::new());
     let mapper = make_test_closure(add_one_closure, 1);
     let result = rt_each(mapper, list);
+    assert!(result.is_nil());
+}
+
+#[test]
+fn builtin_each_with_range() {
+    // each should iterate over bounded range and return nil
+    use crate::heap::LazySequenceObject;
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(4), false, 1));
+    let mapper = make_test_closure(add_one_closure, 1);
+    let result = rt_each(mapper, range);
+    // each always returns nil
     assert!(result.is_nil());
 }
 
@@ -4056,6 +4086,24 @@ fn builtin_regex_match_all_words() {
     assert_eq!(list.len(), 2);
     assert_eq!(list[0].as_string(), Some("hello"));
     assert_eq!(list[1].as_string(), Some("world"));
+}
+
+#[test]
+#[should_panic(expected = "RuntimeError")]
+fn builtin_regex_match_invalid_pattern_panics() {
+    // regex_match("(unclosed", "x") → RuntimeErr per LANG.txt
+    let pat = Value::from_string("(unclosed");
+    let s = Value::from_string("test");
+    rt_regex_match(pat, s);
+}
+
+#[test]
+#[should_panic(expected = "RuntimeError")]
+fn builtin_regex_match_all_invalid_pattern_panics() {
+    // regex_match_all("(unclosed", "x") → RuntimeErr per LANG.txt
+    let pat = Value::from_string("(unclosed");
+    let s = Value::from_string("test");
+    rt_regex_match_all(pat, s);
 }
 
 // ===== Phase 14: Math Functions (§11.15) =====
