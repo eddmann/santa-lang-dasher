@@ -2281,10 +2281,10 @@ The following items are documented TODOs in the codebase. They are not required 
 
 ### Type System & Inference
 
-- [ ] Full type inference implementation (`infer_program` in `lang/src/types/infer.rs`)
-- [ ] Built-in function signatures for all 65 functions (`lang/src/types/builtins.rs`)
+- [x] Full type inference implementation (`infer_program` in `lang/src/types/infer.rs`)
+- [x] Built-in function signatures for all 65 functions (`lang/src/types/builtins.rs`)
 - [ ] Closure parameter type inference from context
-- [ ] Pipeline/composition type propagation
+- [x] Pipeline/composition type propagation
 
 ### Value System
 

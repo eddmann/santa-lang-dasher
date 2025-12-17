@@ -8,4 +8,4 @@ mod tests;
 
 pub use ty::{Type, TypedExpr, TypedStmt, TypedProgram};
 pub use infer::TypeInference;
-pub use builtins::builtin_signatures;
+pub use builtins::{builtin_signatures, compute_return_type, BuiltinSignature, ParamType, ReturnType};
