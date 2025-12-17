@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-use crate::parser::ast::{Expr, Program, InfixOp, PrefixOp, Stmt, Param, Section};
+use std::collections::{HashMap, HashSet};
+use crate::parser::ast::{Expr, Program, InfixOp, PrefixOp, Stmt, Param, Section, Pattern, MatchArm};
 use crate::types::ty::{Type, TypedExpr, TypedProgram, TypedStmt, TypedSection};
 use crate::types::unify::Unifier;
-use crate::types::builtins::{builtin_signatures, compute_return_type, BuiltinSignature};
+use crate::types::builtins::{builtin_signatures, compute_return_type, compute_expected_lambda_type, BuiltinSignature};
 use crate::lexer::token::{Span, Position};
 
 #[derive(Debug)]
@@ -15,7 +15,8 @@ pub struct TypeInference {
     /// Type environment: variable name -> type
     env: HashMap<String, Type>,
 
-    /// Current type variable counter
+    /// Current type variable counter (for future polymorphic inference)
+    #[allow(dead_code)]
     next_type_var: u32,
 
     /// Unifier for type variables
@@ -23,6 +24,13 @@ pub struct TypeInference {
 
     /// Built-in function signatures
     builtins: HashMap<&'static str, BuiltinSignature>,
+
+    /// User-defined function definitions: name -> (params, body)
+    /// Used for call-site type inference - we re-infer the body with concrete arg types
+    function_defs: HashMap<String, (Vec<Param>, Box<Expr>)>,
+
+    /// Functions currently being inferred (to prevent infinite recursion for recursive functions)
+    inferring: HashSet<String>,
 }
 
 impl Default for TypeInference {
@@ -38,7 +46,20 @@ impl TypeInference {
             next_type_var: 0,
             unifier: Unifier::new(),
             builtins: builtin_signatures(),
+            function_defs: HashMap::new(),
+            inferring: HashSet::new(),
         }
+    }
+
+    /// Get the type environment after inference
+    /// This can be passed to codegen for subexpression type lookup
+    pub fn get_type_env(&self) -> &HashMap<String, Type> {
+        &self.env
+    }
+
+    /// Consume self and return the type environment
+    pub fn into_type_env(self) -> HashMap<String, Type> {
+        self.env
     }
 
     pub fn infer_program(&mut self, program: &Program) -> Result<TypedProgram, TypeError> {
@@ -51,7 +72,7 @@ impl TypeInference {
             typed_statements.push(TypedStmt {
                 stmt: stmt.clone(),
                 ty,
-                span: span.clone(),
+                span,
             });
         }
 
@@ -166,6 +187,39 @@ impl TypeInference {
                 self.infer_index(&collection_ty)
             }
 
+            // Match expressions
+            Expr::Match { subject, arms } => {
+                let subject_ty = self.infer_expr(subject)?.ty;
+                self.infer_match(&subject_ty, arms)?
+            }
+
+            // IfLet expressions
+            Expr::IfLet { pattern, value, then_branch, else_branch } => {
+                // Infer value type (used to bind pattern variables)
+                let value_ty = self.infer_expr(value)?.ty;
+
+                // Save environment
+                let old_env = self.env.clone();
+
+                // Bind pattern variables to value type
+                self.bind_pattern(pattern, &value_ty);
+
+                // Infer then_branch with pattern bindings in scope
+                let then_ty = self.infer_expr(then_branch)?.ty;
+
+                // Restore environment
+                self.env = old_env;
+
+                // Infer else_branch (if present)
+                let else_ty = match else_branch {
+                    Some(e) => self.infer_expr(e)?.ty,
+                    None => Type::Nil, // No else branch returns nil when pattern doesn't match
+                };
+
+                // Unify the two branches
+                self.unifier.unify(&then_ty, &else_ty).unwrap_or(Type::Unknown)
+            }
+
             // Everything else is Unknown for now
             _ => Type::Unknown,
         };
@@ -253,19 +307,32 @@ impl TypeInference {
     }
 
     /// Infer the type of a function call
+    ///
+    /// This implements bidirectional type inference:
+    /// - For builtin calls: infer lambda param types from collection element types
+    /// - For user-defined calls: re-infer the function body with concrete arg types
     fn infer_call(&mut self, function: &Expr, args: &[Expr]) -> Result<Type, TypeError> {
-        // Infer argument types
-        let arg_types: Vec<Type> = args
+        // Check if function is a direct identifier call
+        if let Expr::Identifier(name) = function {
+            // First check builtins
+            if let Some(sig) = self.builtins.get(name.as_str()).cloned() {
+                return self.infer_builtin_call(&sig, args);
+            }
+
+            // Check if it's a user-defined function we can re-infer
+            // Skip if we're already inferring this function (recursive call)
+            if !self.inferring.contains(name) {
+                if let Some((params, body)) = self.function_defs.get(name).cloned() {
+                    return self.infer_user_defined_call(name, &params, &body, args);
+                }
+            }
+        }
+
+        // For other calls (lambda expressions, etc.), just infer argument types normally
+        let _arg_types: Vec<Type> = args
             .iter()
             .map(|arg| self.infer_expr(arg).map(|t| t.ty))
             .collect::<Result<Vec<_>, _>>()?;
-
-        // Check if function is a direct identifier call to a builtin
-        if let Expr::Identifier(name) = function {
-            if let Some(sig) = self.builtins.get(name.as_str()) {
-                return Ok(compute_return_type(sig, &arg_types));
-            }
-        }
 
         // Infer the function type
         let func_ty = self.infer_expr(function)?.ty;
@@ -277,17 +344,191 @@ impl TypeInference {
         }
     }
 
-    /// Infer the type of a function expression (lambda)
+    /// Infer types for a user-defined function call by re-inferring the body
+    /// with concrete argument types.
+    ///
+    /// This is the key to making user-defined function calls type-aware:
+    /// - `let add = |a, b| a + b` stores add's definition
+    /// - `add(1, 2)` re-infers the body with a:Int, b:Int → returns Int
+    fn infer_user_defined_call(
+        &mut self,
+        name: &str,
+        params: &[Param],
+        body: &Expr,
+        args: &[Expr],
+    ) -> Result<Type, TypeError> {
+        // Infer argument types
+        let arg_types: Vec<Type> = args
+            .iter()
+            .map(|arg| self.infer_expr(arg).map(|t| t.ty))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Save current environment
+        let old_env = self.env.clone();
+
+        // Mark this function as being inferred to prevent infinite recursion
+        self.inferring.insert(name.to_string());
+
+        // Bind parameters to argument types
+        for (i, param) in params.iter().enumerate() {
+            let arg_ty = arg_types.get(i).cloned().unwrap_or(Type::Unknown);
+            self.env.insert(param.name.clone(), arg_ty);
+        }
+
+        // Re-infer the body with concrete parameter types
+        let body_ty = self.infer_expr(body)?.ty;
+
+        // Restore environment and inferring set
+        self.env = old_env;
+        self.inferring.remove(name);
+
+        Ok(body_ty)
+    }
+
+    /// Infer types for a builtin function call with bidirectional type inference
+    ///
+    /// The key insight is that for HOF calls like `filter(|x| x > 0, [1,2,3])`:
+    /// 1. First, infer the collection type: `[1,2,3]` is `List<Int>`
+    /// 2. Then, compute expected lambda type: `Int -> Bool`
+    /// 3. Finally, infer the lambda with that expected type to get proper param types
+    ///
+    /// This also handles user-defined functions passed to builtins:
+    /// `map(double, [1,2,3])` where `double = |x| x * 2` will re-infer double
+    /// with Int param type to get the correct return type.
+    fn infer_builtin_call(&mut self, sig: &BuiltinSignature, args: &[Expr]) -> Result<Type, TypeError> {
+        // Phase 1: Infer types for non-function arguments first
+        // This gives us the information we need to determine expected function types
+        let mut arg_types: Vec<Type> = vec![Type::Unknown; args.len()];
+
+        for (i, arg) in args.iter().enumerate() {
+            // Skip functions (lambdas and identifiers that are functions) in the first pass
+            let is_function_arg = matches!(arg, Expr::Function { .. })
+                || matches!(arg, Expr::Identifier(name) if self.function_defs.contains_key(name));
+
+            if !is_function_arg {
+                arg_types[i] = self.infer_expr(arg)?.ty;
+            }
+        }
+
+        // Phase 2: Now infer function arguments with expected types from context
+        for (i, arg) in args.iter().enumerate() {
+            match arg {
+                // Direct lambda: use bidirectional inference
+                Expr::Function { .. } => {
+                    let expected_ty = compute_expected_lambda_type(sig, i, &arg_types);
+                    arg_types[i] = self.infer_expr_with_expected(arg, expected_ty.as_ref())?.ty;
+                }
+                // User-defined function reference: re-infer with expected param types
+                Expr::Identifier(name) if self.function_defs.contains_key(name) => {
+                    let expected_ty = compute_expected_lambda_type(sig, i, &arg_types);
+                    arg_types[i] = self.infer_function_ref_with_expected(name, expected_ty.as_ref())?;
+                }
+                _ => {}
+            }
+        }
+
+        // Compute return type based on all argument types
+        Ok(compute_return_type(sig, &arg_types))
+    }
+
+    /// Infer the type of a user-defined function reference with an expected type
+    ///
+    /// When a user-defined function is passed to a HOF (e.g., `map(double, list)`),
+    /// we re-infer its body with the expected parameter types to get the correct return type.
+    fn infer_function_ref_with_expected(
+        &mut self,
+        name: &str,
+        expected: Option<&Type>,
+    ) -> Result<Type, TypeError> {
+        // Get the function definition
+        let (params, body) = match self.function_defs.get(name) {
+            Some((p, b)) => (p.clone(), b.clone()),
+            None => return Ok(Type::Unknown),
+        };
+
+        // Extract expected parameter types
+        let expected_params = match expected {
+            Some(Type::Function { params: expected_params, .. }) => expected_params.clone(),
+            _ => vec![Type::Unknown; params.len()],
+        };
+
+        // Save current environment
+        let old_env = self.env.clone();
+
+        // Bind parameters to expected types
+        for (i, param) in params.iter().enumerate() {
+            let param_ty = expected_params.get(i).cloned().unwrap_or(Type::Unknown);
+            self.env.insert(param.name.clone(), param_ty.clone());
+        }
+
+        // Re-infer the body with the expected parameter types
+        let ret_ty = self.infer_expr(&body)?.ty;
+
+        // Restore environment
+        self.env = old_env;
+
+        Ok(Type::Function {
+            params: expected_params,
+            ret: Box::new(ret_ty),
+        })
+    }
+
+    /// Infer expression type with an expected type hint for bidirectional inference
+    fn infer_expr_with_expected(&mut self, expr: &Expr, expected: Option<&Type>) -> Result<TypedExpr, TypeError> {
+        let span = Span::new(Position::new(1, 1), Position::new(1, 1));
+
+        match expr {
+            // For function expressions, use expected type to infer parameter types
+            Expr::Function { params, body } => {
+                let ty = self.infer_function_with_expected(params, body, expected)?;
+                Ok(TypedExpr {
+                    expr: expr.clone(),
+                    ty,
+                    span,
+                })
+            }
+            // For other expressions, fall back to regular inference
+            _ => self.infer_expr(expr),
+        }
+    }
+
+    /// Infer the type of a function expression (lambda) without expected type context
     fn infer_function(&mut self, params: &[Param], body: &Expr) -> Result<Type, TypeError> {
+        self.infer_function_with_expected(params, body, None)
+    }
+
+    /// Infer the type of a function expression with an optional expected type
+    ///
+    /// When an expected function type is provided (from bidirectional inference),
+    /// we use its parameter types instead of defaulting to Unknown.
+    fn infer_function_with_expected(
+        &mut self,
+        params: &[Param],
+        body: &Expr,
+        expected: Option<&Type>,
+    ) -> Result<Type, TypeError> {
         // Save the current environment
         let old_env = self.env.clone();
 
-        // Create type variables for each parameter (Unknown without context)
-        let param_types: Vec<Type> = params.iter().map(|param| {
-            let ty = Type::Unknown; // Without context, params are Unknown
-            self.env.insert(param.name.clone(), ty.clone());
-            ty
-        }).collect();
+        // Determine parameter types: use expected types if available, otherwise Unknown
+        let param_types: Vec<Type> = match expected {
+            Some(Type::Function { params: expected_params, .. }) => {
+                // Use expected parameter types from context
+                params.iter().enumerate().map(|(i, param)| {
+                    let ty = expected_params.get(i).cloned().unwrap_or(Type::Unknown);
+                    self.env.insert(param.name.clone(), ty.clone());
+                    ty
+                }).collect()
+            }
+            _ => {
+                // No expected type - params are Unknown
+                params.iter().map(|param| {
+                    let ty = Type::Unknown;
+                    self.env.insert(param.name.clone(), ty.clone());
+                    ty
+                }).collect()
+            }
+        };
 
         // Infer the body type with parameters in scope
         let body_ty = self.infer_expr(body)?.ty;
@@ -322,9 +563,26 @@ impl TypeInference {
             // Expression statement: type is the expression's type
             Stmt::Expr(expr) => Ok(self.infer_expr(expr)?.ty),
 
-            // Let bindings: type is Nil (side-effect only)
-            // TODO: track variable types in environment
-            Stmt::Let { .. } => Ok(Type::Nil),
+            // Let bindings: infer value type and track in environment
+            Stmt::Let { pattern, value, .. } => {
+                // Infer the type of the value being bound
+                let value_ty = self.infer_expr(value)?.ty;
+
+                // If this is a function binding with a simple identifier pattern,
+                // store the function definition for call-site type inference
+                if let (Pattern::Identifier(name), Expr::Function { params, body }) = (pattern, value) {
+                    self.function_defs.insert(
+                        name.clone(),
+                        (params.clone(), body.clone()),
+                    );
+                }
+
+                // Bind pattern variables to their types in the environment
+                self.bind_pattern(pattern, &value_ty);
+
+                // Let statement itself has type Nil (it's a side-effect)
+                Ok(Type::Nil)
+            }
 
             // Return/Break: type is Never (doesn't produce value at this point)
             Stmt::Return(expr) => {
@@ -336,6 +594,38 @@ impl TypeInference {
                 self.infer_expr(expr)?;
                 Ok(Type::Never)
             }
+        }
+    }
+
+    /// Bind pattern variables to their types in the environment
+    fn bind_pattern(&mut self, pattern: &Pattern, ty: &Type) {
+        match pattern {
+            // Simple identifier: bind name to type
+            Pattern::Identifier(name) => {
+                self.env.insert(name.clone(), ty.clone());
+            }
+            // Wildcard: doesn't bind anything
+            Pattern::Wildcard => {}
+            // Literal: doesn't bind anything (used for matching)
+            Pattern::Literal(_) => {}
+            // Rest identifier in list: binds to same type (remainder of list)
+            Pattern::RestIdentifier(name) => {
+                self.env.insert(name.clone(), ty.clone());
+            }
+            // List pattern: destructure and bind each element
+            Pattern::List(patterns) => {
+                // Get element type from list/sequence
+                let elem_ty = match ty {
+                    Type::List(elem) | Type::Set(elem) | Type::LazySequence(elem) => (**elem).clone(),
+                    _ => Type::Unknown,
+                };
+                // Bind each pattern to element type (simplified - doesn't handle rest properly)
+                for pat in patterns {
+                    self.bind_pattern(pat, &elem_ty);
+                }
+            }
+            // Range pattern: doesn't bind anything
+            Pattern::Range { .. } => {}
         }
     }
 
@@ -501,5 +791,44 @@ impl TypeInference {
             // Unknown collection type
             _ => Type::Unknown,
         }
+    }
+
+    /// Infer the type of a match expression
+    ///
+    /// Match type is the unified type of all arm bodies.
+    /// Pattern bindings are added to scope for each arm's body.
+    fn infer_match(&mut self, subject_ty: &Type, arms: &[MatchArm]) -> Result<Type, TypeError> {
+        if arms.is_empty() {
+            return Ok(Type::Never); // Empty match can't produce a value
+        }
+
+        let mut result_ty: Option<Type> = None;
+
+        for arm in arms {
+            // Save environment
+            let old_env = self.env.clone();
+
+            // Bind pattern variables to subject type
+            self.bind_pattern(&arm.pattern, subject_ty);
+
+            // Infer guard if present
+            if let Some(guard) = &arm.guard {
+                self.infer_expr(guard)?;
+            }
+
+            // Infer body type
+            let body_ty = self.infer_expr(&arm.body)?.ty;
+
+            // Restore environment
+            self.env = old_env;
+
+            // Unify with previous arm types
+            result_ty = Some(match &result_ty {
+                None => body_ty,
+                Some(prev_ty) => self.unifier.unify(prev_ty, &body_ty).unwrap_or(Type::Unknown),
+            });
+        }
+
+        Ok(result_ty.unwrap_or(Type::Never))
     }
 }

@@ -599,7 +599,10 @@ impl<'ctx> CodegenContext<'ctx> {
         self.module.add_function(name, fn_type, None)
     }
 
-    /// Simple type inference for expressions (temporary until full type inference integration)
+    /// Type inference for expressions using the type environment from the inference pass
+    ///
+    /// This looks up variable types from the type environment, enabling specialized
+    /// code generation for expressions involving variables with known types.
     fn infer_expr_type(&self, expr: &Expr) -> Type {
         match expr {
             Expr::Integer(_) => Type::Int,
@@ -607,6 +610,59 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::String(_) => Type::String,
             Expr::Boolean(_) => Type::Bool,
             Expr::Nil => Type::Nil,
+            // Look up variable types from the type environment
+            Expr::Identifier(name) => {
+                self.type_env.get(name).cloned().unwrap_or(Type::Unknown)
+            }
+            // For binary operations, infer from operands
+            Expr::Infix { left, op, right } => {
+                let left_ty = self.infer_expr_type(left);
+                let right_ty = self.infer_expr_type(right);
+                self.infer_binary_result_type(&left_ty, op, &right_ty)
+            }
+            // For prefix operations
+            Expr::Prefix { op, right } => {
+                let right_ty = self.infer_expr_type(right);
+                self.infer_prefix_result_type(op, &right_ty)
+            }
+            // Lists infer element type from first element
+            Expr::List(elements) => {
+                if elements.is_empty() {
+                    Type::List(Box::new(Type::Unknown))
+                } else {
+                    let elem_ty = self.infer_expr_type(&elements[0]);
+                    Type::List(Box::new(elem_ty))
+                }
+            }
+            _ => Type::Unknown,
+        }
+    }
+
+    /// Infer the result type of a binary operation
+    fn infer_binary_result_type(&self, left: &Type, op: &InfixOp, right: &Type) -> Type {
+        use InfixOp::*;
+        match (left, op, right) {
+            // Arithmetic with same types
+            (Type::Int, Add | Subtract | Multiply | Divide | Modulo, Type::Int) => Type::Int,
+            (Type::Decimal, Add | Subtract | Multiply | Divide, Type::Decimal) => Type::Decimal,
+            // Comparisons always return Bool
+            (_, LessThan | LessThanOrEqual | GreaterThan | GreaterThanOrEqual | Equal | NotEqual, _) => Type::Bool,
+            // Logical operations
+            (Type::Bool, And | Or, Type::Bool) => Type::Bool,
+            // String concatenation
+            (Type::String, Add, _) => Type::String,
+            // Ranges
+            (Type::Int, Range | RangeInclusive, Type::Int) => Type::LazySequence(Box::new(Type::Int)),
+            _ => Type::Unknown,
+        }
+    }
+
+    /// Infer the result type of a prefix operation
+    fn infer_prefix_result_type(&self, op: &PrefixOp, operand: &Type) -> Type {
+        match (op, operand) {
+            (PrefixOp::Negate, Type::Int) => Type::Int,
+            (PrefixOp::Negate, Type::Decimal) => Type::Decimal,
+            (PrefixOp::Not, Type::Bool) => Type::Bool,
             _ => Type::Unknown,
         }
     }
@@ -1187,6 +1243,11 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
             }
         }
+
+        // Also find self-referencing bindings (e.g., let fib = memoize |n| { fib(...) })
+        // These need cell indirection so the closure can access the final value
+        let self_refs = Self::find_self_referencing_bindings(stmts, &bound_vars);
+        self.cell_variables.extend(self_refs);
 
         let mut last_val = None;
 
@@ -2179,15 +2240,33 @@ impl<'ctx> CodegenContext<'ctx> {
                 // so the function body can reference itself
                 let is_function = matches!(value, Expr::Function { .. });
 
-                // Check if this mutable variable needs to be cell-wrapped
-                // (because it will be captured by a nested closure)
-                let needs_cell = mutable && self.cell_variables.contains(name);
+                // Check if this variable needs to be cell-wrapped
+                // This happens when:
+                // 1. It's mutable AND captured by a nested closure
+                // 2. It's a self-referencing binding (e.g., let fib = memoize |n| fib(...))
+                let needs_cell = self.cell_variables.contains(name);
 
                 // Pre-allocate space for the variable (enables self-reference for closures)
                 let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
 
-                if is_function {
-                    // Register the variable BEFORE compiling the function
+                // For self-referencing bindings (both functions and non-functions),
+                // we need to create the cell BEFORE compiling so the value expression
+                // can capture a reference to the cell
+                if needs_cell {
+                    // Create a cell with nil initially
+                    let rt_cell_new = self.get_or_declare_rt_cell_new();
+                    let nil_val = self.compile_nil();
+                    let cell = self.builder.build_call(
+                        rt_cell_new,
+                        &[nil_val.into()],
+                        &format!("{}_cell_init", name),
+                    ).unwrap();
+                    // Store the cell in the alloca
+                    self.builder.build_store(alloca, cell.try_as_basic_value().left().unwrap()).unwrap();
+                    // Register the variable so nested closures can capture the cell
+                    self.variables.insert(name.clone(), alloca);
+                } else if is_function {
+                    // Non-cell function: Register the variable BEFORE compiling
                     // This allows the function body to capture a reference to itself
                     self.variables.insert(name.clone(), alloca);
                 }
@@ -2209,24 +2288,28 @@ impl<'ctx> CodegenContext<'ctx> {
                     self.compile_expr(&value_typed)?
                 };
 
-                // If this is a cell variable, wrap the value in a cell
-                let final_value = if needs_cell {
-                    let rt_cell_new = self.get_or_declare_rt_cell_new();
-                    let cell = self.builder.build_call(
-                        rt_cell_new,
-                        &[value_compiled.into()],
-                        &format!("{}_cell", name),
+                // Handle the final value based on whether it's a cell variable
+                if needs_cell {
+                    // Cell was already created - now set its value
+                    let cell = self.builder.build_load(
+                        self.context.i64_type(),
+                        alloca,
+                        &format!("{}_cell_load", name),
                     ).unwrap();
-                    cell.try_as_basic_value().left().unwrap()
+                    let rt_cell_set = self.get_or_declare_rt_cell_set();
+                    self.builder.build_call(
+                        rt_cell_set,
+                        &[cell.into(), value_compiled.into()],
+                        &format!("{}_cell_set", name),
+                    ).unwrap();
                 } else {
-                    value_compiled
-                };
-
-                // Store the value (or cell)
-                self.builder.build_store(alloca, final_value).unwrap();
+                    // Regular variable - just store the value
+                    self.builder.build_store(alloca, value_compiled).unwrap();
+                }
 
                 // Register the variable (for non-functions, or update if already registered)
-                if !is_function {
+                if !is_function && !needs_cell {
+                    // Only register here if we didn't already register for cell handling
                     self.variables.insert(name.clone(), alloca);
                 }
 
@@ -2767,6 +2850,11 @@ impl<'ctx> CodegenContext<'ctx> {
             }
         }
 
+        // Also find self-referencing bindings (e.g., let fib = memoize |n| { fib(...) })
+        // These need cell indirection so the closure can access the final value
+        let self_refs = Self::find_self_referencing_bindings(stmts, &bound_vars);
+        self.cell_variables.extend(self_refs);
+
         let mut last_val = None;
 
         for (i, stmt) in stmts.iter().enumerate() {
@@ -2989,11 +3077,140 @@ impl<'ctx> CodegenContext<'ctx> {
         }
     }
 
+    /// Check if an expression contains a nested closure that references the given variable name.
+    /// This is used to detect self-referencing bindings like:
+    ///   let fib = memoize |n| { fib(n-1) + fib(n-2) }
+    /// where `fib` is referenced inside the closure before it's assigned.
+    fn value_has_self_reference(name: &str, expr: &Expr, bound: &HashSet<String>) -> bool {
+        match expr {
+            // When we hit a nested closure, check if it references `name`
+            Expr::Function { params, body } => {
+                // Variables bound by this closure's parameters
+                let mut inner_bound = bound.clone();
+                for param in params {
+                    inner_bound.insert(param.name.clone());
+                }
+
+                // Check if `name` is a free variable in this closure
+                let mut free_vars = HashSet::new();
+                Self::collect_free_variables(body, &inner_bound, &mut free_vars);
+
+                if free_vars.contains(name) && !bound.contains(name) {
+                    return true;
+                }
+
+                // Also check for nested closures in the body
+                Self::value_has_self_reference(name, body, &inner_bound)
+            }
+
+            // Recurse into subexpressions
+            Expr::Infix { left, right, .. } => {
+                Self::value_has_self_reference(name, left, bound)
+                    || Self::value_has_self_reference(name, right, bound)
+            }
+            Expr::Prefix { right, .. } => {
+                Self::value_has_self_reference(name, right, bound)
+            }
+            Expr::If { condition, then_branch, else_branch } => {
+                Self::value_has_self_reference(name, condition, bound)
+                    || Self::value_has_self_reference(name, then_branch, bound)
+                    || else_branch.as_ref().map_or(false, |e| Self::value_has_self_reference(name, e, bound))
+            }
+            Expr::Call { function, args } => {
+                Self::value_has_self_reference(name, function, bound)
+                    || args.iter().any(|arg| Self::value_has_self_reference(name, arg, bound))
+            }
+            Expr::Block(stmts) => {
+                let mut new_bound = bound.clone();
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Let { pattern, value, .. } => {
+                            if Self::value_has_self_reference(name, value, &new_bound) {
+                                return true;
+                            }
+                            if let Pattern::Identifier(n) = pattern {
+                                new_bound.insert(n.clone());
+                            }
+                        }
+                        Stmt::Expr(e) | Stmt::Return(e) | Stmt::Break(e) => {
+                            if Self::value_has_self_reference(name, e, &new_bound) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            Expr::List(elements) | Expr::Set(elements) => {
+                elements.iter().any(|e| Self::value_has_self_reference(name, e, bound))
+            }
+            Expr::Dict(entries) => {
+                entries.iter().any(|(k, v)| {
+                    Self::value_has_self_reference(name, k, bound)
+                        || Self::value_has_self_reference(name, v, bound)
+                })
+            }
+            Expr::Index { collection, index } => {
+                Self::value_has_self_reference(name, collection, bound)
+                    || Self::value_has_self_reference(name, index, bound)
+            }
+            Expr::Range { start, end, .. } => {
+                Self::value_has_self_reference(name, start, bound)
+                    || end.as_ref().map_or(false, |e| Self::value_has_self_reference(name, e, bound))
+            }
+            Expr::Match { subject, arms } => {
+                if Self::value_has_self_reference(name, subject, bound) {
+                    return true;
+                }
+                for arm in arms {
+                    let mut arm_bound = bound.clone();
+                    Self::collect_pattern_bindings(&arm.pattern, &mut arm_bound);
+                    if let Some(guard) = &arm.guard {
+                        if Self::value_has_self_reference(name, guard, &arm_bound) {
+                            return true;
+                        }
+                    }
+                    if Self::value_has_self_reference(name, &arm.body, &arm_bound) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Expr::Assignment { value, .. } => {
+                Self::value_has_self_reference(name, value, bound)
+            }
+            Expr::Spread(inner) => {
+                Self::value_has_self_reference(name, inner, bound)
+            }
+            // Terminals - no self-reference possible
+            _ => false,
+        }
+    }
+
+    /// Find let bindings in a block that have self-referencing closures.
+    /// These need cell indirection so the closure can access the final value.
+    pub fn find_self_referencing_bindings(stmts: &[Stmt], bound: &HashSet<String>) -> HashSet<String> {
+        let mut self_refs = HashSet::new();
+        let mut current_bound = bound.clone();
+
+        for stmt in stmts {
+            if let Stmt::Let { pattern: Pattern::Identifier(name), value, .. } = stmt {
+                // Check if the value expression has a nested closure that references `name`
+                if Self::value_has_self_reference(name, value, &current_bound) {
+                    self_refs.insert(name.clone());
+                }
+                current_bound.insert(name.clone());
+            }
+        }
+
+        self_refs
+    }
+
     /// Find mutable variables that are captured by nested closures.
     ///
     /// These variables need to be wrapped in cells so the inner closure
     /// can share mutable state with the outer scope.
-    fn find_mutable_captures_in_expr(
+    pub fn find_mutable_captures_in_expr(
         &self,
         expr: &Expr,
         mutable_vars: &HashSet<String>,

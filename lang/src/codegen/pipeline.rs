@@ -15,7 +15,7 @@ use inkwell::context::Context;
 use crate::lexer::lex;
 use crate::parser::Parser;
 use crate::parser::ast::{Program, Stmt, Expr};
-use crate::types::{TypedExpr, Type};
+use crate::types::{TypedExpr, TypedProgram, Type, TypeInference};
 use crate::lexer::token::{Span, Position};
 use super::context::CodegenContext;
 
@@ -144,21 +144,33 @@ impl Compiler {
         let program = parser.parse_program()
             .map_err(|e| CompileError::ParseError(format!("{:?}", e)))?;
 
-        // Step 3: Generate LLVM IR
+        // Step 3: Type inference
+        let mut inference = TypeInference::new();
+        let typed_program = inference.infer_program(&program)
+            .map_err(|e| CompileError::CodegenError(format!("Type error: {}", e.message)))?;
+
+        // Get the type environment for codegen to use
+        let type_env = inference.into_type_env();
+
+        // Step 4: Generate LLVM IR
         let context = Context::create();
         let mut codegen = CodegenContext::new(&context, "santa_program");
 
-        // Create main function
-        self.generate_main(&mut codegen, &program)?;
+        // Pass the type environment to codegen for optimized subexpression inference
+        codegen.set_type_env(type_env);
 
-        // Step 4: Emit object file
+        // Create main function with typed program
+        self.generate_main_typed(&mut codegen, &typed_program, &program)?;
+
+        // Step 5: Emit object file
         codegen.write_object_file(output_path)
             .map_err(CompileError::CodegenError)?;
 
         Ok(())
     }
 
-    /// Generate the main function from a program
+    /// Generate the main function from a program (legacy, uses simple type inference)
+    #[allow(dead_code)]
     fn generate_main<'ctx>(
         &self,
         codegen: &mut CodegenContext<'ctx>,
@@ -173,6 +185,9 @@ impl Compiler {
         let entry = context.append_basic_block(main_fn, "entry");
         codegen.builder.position_at_end(entry);
         codegen.current_block = Some(entry);
+
+        // Pre-analyze statements for self-referencing bindings and mutable captures
+        codegen.pre_analyze_statements(&program.statements);
 
         // Compile each statement using compile_stmt (handles self-referential functions)
         let mut last_value = None;
@@ -195,8 +210,88 @@ impl Compiler {
         }
 
         // Return the last value, or 0
+        // The value is NaN-boxed, so we need to unbox it to get the actual integer for exit code
         let return_val = match last_value {
-            Some(v) => v.into_int_value(),
+            Some(v) => {
+                // Unbox: (value >> 3) extracts the actual integer
+                let int_val = v.into_int_value();
+                codegen.builder.build_right_shift(
+                    int_val,
+                    i64_type.const_int(3, false),
+                    false,
+                    "unbox_return"
+                ).unwrap()
+            }
+            None => i64_type.const_int(0, false),
+        };
+        codegen.builder.build_return(Some(&return_val)).unwrap();
+
+        Ok(())
+    }
+
+    /// Generate the main function from a typed program (uses full type inference)
+    ///
+    /// This version uses pre-inferred types from the type inference pass,
+    /// enabling better code generation through type specialization.
+    fn generate_main_typed<'ctx>(
+        &self,
+        codegen: &mut CodegenContext<'ctx>,
+        typed_program: &TypedProgram,
+        program: &Program,
+    ) -> Result<(), CompileError> {
+        let context = codegen.context;
+        let i64_type = context.i64_type();
+
+        // Create main function: int main()
+        let fn_type = i64_type.fn_type(&[], false);
+        let main_fn = codegen.module.add_function("main", fn_type, None);
+        let entry = context.append_basic_block(main_fn, "entry");
+        codegen.builder.position_at_end(entry);
+        codegen.current_block = Some(entry);
+
+        // Pre-analyze statements for self-referencing bindings and mutable captures
+        // This must happen before compiling so closures can properly capture cell variables
+        codegen.pre_analyze_statements(&program.statements);
+
+        // Compile each statement using the typed information
+        let mut last_value = None;
+        for (i, typed_stmt) in typed_program.statements.iter().enumerate() {
+            match &typed_stmt.stmt {
+                Stmt::Expr(expr) => {
+                    // Create TypedExpr with the inferred type
+                    let typed_expr = TypedExpr {
+                        expr: expr.clone(),
+                        ty: typed_stmt.ty.clone(),
+                        span: typed_stmt.span,
+                    };
+                    last_value = Some(codegen.compile_expr(&typed_expr)
+                        .map_err(|e| CompileError::CodegenError(format!("{:?}", e)))?);
+                }
+                Stmt::Let { .. } => {
+                    // Use compile_stmt which properly handles self-referential functions
+                    // Pass the original statement from program for compile_stmt
+                    codegen.compile_stmt(&program.statements[i])
+                        .map_err(|e| CompileError::CodegenError(format!("{:?}", e)))?;
+                }
+                _ => {
+                    // Skip other statements for now
+                }
+            }
+        }
+
+        // Return the last value, or 0
+        // The value is NaN-boxed, so we need to unbox it to get the actual integer for exit code
+        let return_val = match last_value {
+            Some(v) => {
+                // Unbox: (value >> 3) extracts the actual integer
+                let int_val = v.into_int_value();
+                codegen.builder.build_right_shift(
+                    int_val,
+                    i64_type.const_int(3, false),
+                    false,
+                    "unbox_return"
+                ).unwrap()
+            }
             None => i64_type.const_int(0, false),
         };
         codegen.builder.build_return(Some(&return_val)).unwrap();
@@ -337,11 +432,8 @@ mod tests {
             .output()
             .expect("Failed to execute compiled program");
 
-        // The return value is the NaN-boxed integer 42
-        // Tagged: (42 << 3) | 1 = 337
-        // We return this as the exit code (truncated to 8 bits)
-        // 337 % 256 = 81
-        assert_eq!(output.status.code(), Some(81));
+        // The return value is unboxed to the actual integer 42
+        assert_eq!(output.status.code(), Some(42));
 
         // Clean up
         std::fs::remove_file(&exe_path).ok();

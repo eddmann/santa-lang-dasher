@@ -9,6 +9,7 @@ use inkwell::targets::{
 use inkwell::OptimizationLevel;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use crate::types::Type;
 
 /// Tracks state for tail-call optimization within a function
 #[derive(Clone)]
@@ -35,6 +36,9 @@ pub struct CodegenContext<'ctx> {
     /// Variables that are stored in mutable cells (for closure capture of mutable vars)
     /// When a variable is in this set, reads go through rt_cell_get and writes through rt_cell_set
     pub cell_variables: HashSet<String>,
+    /// Type environment from type inference pass
+    /// Maps variable names to their inferred types for optimized code generation
+    pub type_env: HashMap<String, Type>,
 }
 
 impl<'ctx> CodegenContext<'ctx> {
@@ -58,7 +62,50 @@ impl<'ctx> CodegenContext<'ctx> {
             tco_state: None,
             opt_level,
             cell_variables: HashSet::new(),
+            type_env: HashMap::new(),
         }
+    }
+
+    /// Set the type environment from the type inference pass
+    pub fn set_type_env(&mut self, type_env: HashMap<String, Type>) {
+        self.type_env = type_env;
+    }
+
+    /// Pre-analyze top-level statements for self-referencing bindings
+    ///
+    /// This must be called before compiling statements at the top level
+    /// (outside of a block) to properly handle patterns like:
+    ///   let fib = memoize |n| { fib(n-1) + fib(n-2) }
+    pub fn pre_analyze_statements(&mut self, stmts: &[crate::parser::ast::Stmt]) {
+        use crate::parser::ast::{Stmt, Pattern};
+        use std::collections::HashSet;
+
+        // Collect all mutable variables
+        let mut mutable_vars: HashSet<String> = HashSet::new();
+        for stmt in stmts {
+            if let Stmt::Let { mutable: true, pattern: Pattern::Identifier(name), .. } = stmt {
+                mutable_vars.insert(name.clone());
+            }
+        }
+
+        // Find mutable variables that are captured by nested closures
+        let bound_vars: HashSet<String> = self.variables.keys().cloned().collect();
+        for stmt in stmts {
+            match stmt {
+                Stmt::Let { value, .. } => {
+                    let captures = self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
+                    self.cell_variables.extend(captures);
+                }
+                Stmt::Expr(expr) | Stmt::Return(expr) | Stmt::Break(expr) => {
+                    let captures = self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
+                    self.cell_variables.extend(captures);
+                }
+            }
+        }
+
+        // Find self-referencing bindings (e.g., let fib = memoize |n| { fib(...) })
+        let self_refs = Self::find_self_referencing_bindings(stmts, &bound_vars);
+        self.cell_variables.extend(self_refs);
     }
 
     /// Get the configured optimization level

@@ -37,6 +37,8 @@ pub enum ReturnType {
     SameAs(usize),
     /// List of element type from collection argument
     ListOf(usize),
+    /// List of the return type of a function argument (for map-like operations)
+    ListOfFunctionReturn(usize),
     /// The result depends on runtime values (Unknown)
     Dynamic,
 }
@@ -85,7 +87,7 @@ pub fn builtin_signatures() -> HashMap<&'static str, BuiltinSignature> {
     sig!("update_d", vec![ParamType::Any, ParamType::Any, ParamType::Function(1), ParamType::Collection], ReturnType::SameAs(3));
 
     // ===== 11.4 Transformation =====
-    sig!("map", vec![ParamType::Function(1), ParamType::Collection], ReturnType::Dynamic); // Return type depends on mapper
+    sig!("map", vec![ParamType::Function(1), ParamType::Collection], ReturnType::ListOfFunctionReturn(0)); // List of mapper's return type
     sig!("filter", vec![ParamType::Function(1), ParamType::Collection], ReturnType::SameAs(1));
     sig!("flat_map", vec![ParamType::Function(1), ParamType::Collection], ReturnType::Dynamic);
     sig!("filter_map", vec![ParamType::Function(1), ParamType::Collection], ReturnType::Dynamic);
@@ -183,22 +185,170 @@ pub fn compute_return_type(sig: &BuiltinSignature, arg_types: &[Type]) -> Type {
             arg_types.get(*idx).cloned().unwrap_or(Type::Unknown)
         }
         ReturnType::ElementOf(idx) => {
-            arg_types.get(*idx).map(|t| element_type_of(t)).unwrap_or(Type::Unknown)
+            arg_types.get(*idx).map(element_type_of).unwrap_or(Type::Unknown)
         }
         ReturnType::ListOf(idx) => {
-            let elem_ty = arg_types.get(*idx).map(|t| element_type_of(t)).unwrap_or(Type::Unknown);
+            let elem_ty = arg_types.get(*idx).map(element_type_of).unwrap_or(Type::Unknown);
             Type::List(Box::new(elem_ty))
+        }
+        ReturnType::ListOfFunctionReturn(idx) => {
+            // Get the function argument at the specified index and extract its return type
+            let ret_ty = arg_types.get(*idx)
+                .and_then(|ty| {
+                    if let Type::Function { ret, .. } = ty {
+                        Some((**ret).clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(Type::Unknown);
+            Type::List(Box::new(ret_ty))
         }
         ReturnType::Dynamic => Type::Unknown,
     }
 }
 
 /// Extract the element type from a collection type
-fn element_type_of(ty: &Type) -> Type {
+pub fn element_type_of(ty: &Type) -> Type {
     match ty {
         Type::List(elem) | Type::Set(elem) | Type::LazySequence(elem) => (**elem).clone(),
         Type::Dict(_, val) => (**val).clone(), // For dicts, element is the value type
         Type::String => Type::String, // String elements are strings
+        _ => Type::Unknown,
+    }
+}
+
+/// Compute expected parameter types for a lambda argument at the given position
+/// in a builtin call. Returns None if the parameter at that position is not a function,
+/// or if expected types cannot be determined.
+///
+/// This enables bidirectional type inference: we flow type information "backward"
+/// from how a lambda is used to determine its parameter types.
+pub fn compute_expected_lambda_type(
+    sig: &BuiltinSignature,
+    arg_idx: usize,
+    arg_types: &[Type],
+) -> Option<Type> {
+    // Check if this parameter position expects a function
+    let param = sig.params.get(arg_idx)?;
+
+    match param {
+        ParamType::Function(arity) => {
+            // Compute expected parameter types based on the function and other arguments
+            let expected_params = compute_lambda_param_types(sig.name, *arity, arg_types);
+            let expected_ret = compute_lambda_return_type(sig.name, arg_types);
+
+            Some(Type::Function {
+                params: expected_params,
+                ret: Box::new(expected_ret),
+            })
+        }
+        _ => None, // Not a function parameter
+    }
+}
+
+/// Compute expected parameter types for a lambda based on the builtin it's passed to
+fn compute_lambda_param_types(builtin_name: &str, arity: usize, arg_types: &[Type]) -> Vec<Type> {
+    match builtin_name {
+        // filter(pred, collection) - pred takes element, returns Bool
+        // map(mapper, collection) - mapper takes element
+        // flat_map(mapper, collection) - mapper takes element
+        // filter_map(mapper, collection) - mapper takes element
+        // find_map(mapper, collection) - mapper takes element
+        // each(fn, collection) - fn takes element
+        // find(pred, collection) - pred takes element
+        // any?(pred, collection) - pred takes element
+        // all?(pred, collection) - pred takes element
+        "filter" | "map" | "flat_map" | "filter_map" | "find_map" | "each" | "find" | "any?" | "all?" => {
+            // Lambda is first arg (idx 0), collection is second arg (idx 1)
+            if let Some(collection_ty) = arg_types.get(1) {
+                let elem_ty = element_type_of(collection_ty);
+                vec![elem_ty]
+            } else {
+                vec![Type::Unknown; arity]
+            }
+        }
+
+        // reduce(fn, collection) - fn takes (elem, elem) -> elem
+        "reduce" => {
+            if let Some(collection_ty) = arg_types.get(1) {
+                let elem_ty = element_type_of(collection_ty);
+                vec![elem_ty.clone(), elem_ty]
+            } else {
+                vec![Type::Unknown; arity]
+            }
+        }
+
+        // fold(init, fn, collection) - fn takes (acc, elem) -> acc
+        // fold_s(init, fn, collection) - fn takes (acc, elem) -> acc
+        // scan(init, fn, collection) - fn takes (acc, elem) -> acc
+        "fold" | "fold_s" | "scan" => {
+            // init is idx 0, fn is idx 1, collection is idx 2
+            let acc_ty = arg_types.first().cloned().unwrap_or(Type::Unknown);
+            let elem_ty = arg_types.get(2).map(element_type_of).unwrap_or(Type::Unknown);
+            vec![acc_ty, elem_ty]
+        }
+
+        // update(key, fn, collection) - fn takes old_value -> new_value
+        // update_d(key, default, fn, collection) - fn takes old_value -> new_value
+        "update" => {
+            // fn is at idx 1, collection is at idx 2
+            if let Some(collection_ty) = arg_types.get(2) {
+                let elem_ty = element_type_of(collection_ty);
+                vec![elem_ty]
+            } else {
+                vec![Type::Unknown]
+            }
+        }
+        "update_d" => {
+            // default is at idx 1, fn is at idx 2, collection is at idx 3
+            if let Some(collection_ty) = arg_types.get(3) {
+                let elem_ty = element_type_of(collection_ty);
+                vec![elem_ty]
+            } else {
+                vec![Type::Unknown]
+            }
+        }
+
+        // iterate(fn, initial) - fn takes current -> next (same type)
+        "iterate" => {
+            // fn is idx 0, initial is idx 1
+            let init_ty = arg_types.get(1).cloned().unwrap_or(Type::Unknown);
+            vec![init_ty]
+        }
+
+        // memoize(fn) - can't determine params without more info
+        "memoize" => {
+            vec![Type::Unknown; arity]
+        }
+
+        _ => vec![Type::Unknown; arity],
+    }
+}
+
+/// Compute expected return type for a lambda based on the builtin it's passed to
+fn compute_lambda_return_type(builtin_name: &str, arg_types: &[Type]) -> Type {
+    match builtin_name {
+        // Predicates always return Bool
+        "filter" | "find" | "any?" | "all?" => Type::Bool,
+
+        // fold/scan return same type as accumulator
+        "fold" | "fold_s" | "scan" | "reduce" => {
+            // For fold, return type should match initial value type
+            // For reduce, return type matches element type
+            if builtin_name == "reduce" {
+                arg_types.get(1).map(element_type_of).unwrap_or(Type::Unknown)
+            } else {
+                arg_types.first().cloned().unwrap_or(Type::Unknown)
+            }
+        }
+
+        // iterate returns same type as input
+        "iterate" => {
+            arg_types.get(1).cloned().unwrap_or(Type::Unknown)
+        }
+
+        // For map, flat_map, etc., we can't know the return type without analyzing the lambda body
         _ => Type::Unknown,
     }
 }

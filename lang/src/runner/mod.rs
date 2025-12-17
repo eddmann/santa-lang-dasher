@@ -281,6 +281,18 @@ impl Runner {
         source
     }
 
+    /// Public wrapper for generate_test_source for debugging
+    #[allow(dead_code)]
+    pub fn generate_test_source_for_debugging(
+        &self,
+        statements: &[crate::parser::ast::Stmt],
+        test_input: &Expr,
+        part_one_expr: Option<&Expr>,
+        part_two_expr: Option<&Expr>,
+    ) -> String {
+        self.generate_test_source(statements, test_input, part_one_expr, part_two_expr)
+    }
+
     /// Evaluate an expected value expression to a Value
     ///
     /// For simple literals, we can evaluate them directly.
@@ -494,13 +506,26 @@ impl Runner {
                 )
             }
             Expr::Block(stmts) => {
-                let mut s = String::from("{\n");
-                for stmt in stmts {
-                    s.push_str(&self.stmt_to_source(stmt));
-                    s.push_str(";\n");
+                if stmts.is_empty() {
+                    "{ }".to_string()
+                } else if stmts.len() == 1 {
+                    // Single statement block - no semicolon needed (returns value)
+                    format!("{{ {} }}", self.stmt_to_source(&stmts[0]))
+                } else {
+                    // Multiple statements - semicolons between, but NOT after last
+                    // The last statement returns its value
+                    let mut s = String::from("{\n");
+                    for (i, stmt) in stmts.iter().enumerate() {
+                        s.push_str(&self.stmt_to_source(stmt));
+                        if i < stmts.len() - 1 {
+                            s.push_str(";\n");
+                        } else {
+                            s.push('\n');
+                        }
+                    }
+                    s.push('}');
+                    s
                 }
-                s.push('}');
-                s
             }
             Expr::List(elements) => {
                 let elems: Vec<String> = elements.iter().map(|e| self.expr_to_source(e)).collect();

@@ -981,14 +981,14 @@ fn type_error_incompatible() {
 - [x] Type enum represents all santa-lang types
 - [x] Literals infer correct concrete types
 - [x] Binary operators follow LANG.txt §4.1 type rules
-- [ ] Built-in function signatures are defined for all 65 functions (deferred to later phases)
+- [x] Built-in function signatures are defined for all 65 functions
 - [x] Collection literals infer element types
-- [ ] Closures infer parameter types from context (deferred to Phase 9)
-- [ ] Pipeline/composition propagates types correctly (deferred to Phase 6)
+- [x] Closures infer parameter types from context (bidirectional inference)
+- [x] Pipeline/composition propagates types correctly
 - [x] Unknown falls back gracefully (no false errors)
 - [x] Type errors caught for known-incompatible operations (via unification)
-- [x] All tests pass (79 tests)
-- [x] `cargo clippy` clean (one minor unused method warning)
+- [x] All tests pass (250+ tests)
+- [x] `cargo clippy` clean
 
 ---
 
@@ -2269,10 +2269,6 @@ Run all .santa files from examples directory using run-tests.sh.
 
 1. **No `evaluate()` support**: Dynamic evaluation is fundamentally incompatible with AOT compilation. This is by design.
 
-2. **Memoized recursion**: Memoized self-recursive functions (e.g., `let fib = memoize(|n| fib(n-1))`) have variable scoping issues. TCO-style recursion works correctly.
-
-3. **Operator function references**: Passing operators as function references (e.g., `fold(0, +, list)`) is not yet supported. Use lambdas instead: `fold(0, |a,b| a+b, list)`
-
 ---
 
 ## Future Enhancements
@@ -2283,8 +2279,14 @@ The following items are documented TODOs in the codebase. They are not required 
 
 - [x] Full type inference implementation (`infer_program` in `lang/src/types/infer.rs`)
 - [x] Built-in function signatures for all 65 functions (`lang/src/types/builtins.rs`)
-- [ ] Closure parameter type inference from context
+- [x] Closure parameter type inference from context (bidirectional inference for HOF calls)
 - [x] Pipeline/composition type propagation
+- [x] Let binding type tracking in environment
+- [x] Type inference integrated with codegen pipeline (`lang/src/codegen/pipeline.rs`)
+- [x] Type environment passed to codegen for subexpression type lookup
+- [x] Enhanced `infer_expr_type` in codegen to use type environment for variables
+- [x] User-defined function call-site type inference (re-infer body with concrete arg types)
+- [x] User-defined functions passed to HOFs (e.g., `map(double, list)`) infer correctly
 
 ### Value System
 

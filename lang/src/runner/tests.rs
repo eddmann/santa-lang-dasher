@@ -415,6 +415,46 @@ test: {
     assert_eq!(results[0].part_one_actual, Some(Value::from_integer(6)));
 }
 
+#[test]
+fn execute_test_fold_with_operator_reference() {
+    // Test fold(0, +, [1, 2, 3]) = 6
+    // The + is an operator reference that becomes |a, b| a + b
+    let program = parse_program(r#"
+part_one: fold(0, +, [1, 2, 3])
+
+test: {
+  input: nil
+  part_one: 6
+}
+"#);
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(6)));
+}
+
+#[test]
+fn execute_test_reduce_with_operator_reference() {
+    // Test reduce(*, [1, 2, 3, 4]) = 24
+    // The * is an operator reference that becomes |a, b| a * b
+    let program = parse_program(r#"
+part_one: reduce(*, [1, 2, 3, 4])
+
+test: {
+  input: nil
+  part_one: 24
+}
+"#);
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(24)));
+}
+
 // Phase 13: break in reduce/fold/each for infinite sequences
 
 #[test]
@@ -462,6 +502,327 @@ test: {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].part_one_passed, Some(true));
     assert_eq!(results[0].part_one_actual, Some(Value::from_integer(42)));
+}
+
+#[test]
+fn execute_test_memoize_self_recursion() {
+    // Test memoized self-recursive function (fibonacci)
+    // This is the pattern from LANG.txt §8.10:
+    //   let fib = memoize |n| { if n > 1 { fib(n-1) + fib(n-2) } else { n } }
+    // The closure references `fib` before it's assigned, so we need cell indirection.
+    let program = parse_program(r#"
+let fib = memoize |n| {
+  if n > 1 { fib(n - 1) + fib(n - 2) } else { n }
+};
+part_one: fib(10)
+
+test: {
+  input: nil
+  part_one: 55
+}
+"#);
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(55)));
+}
+
+#[test]
+fn execute_test_non_tail_recursive_closure() {
+    // Test non-tail recursive closure (factorial)
+    // The recursive call is NOT in tail position: n * fact(n-1)
+    // This should work correctly, not return nil
+    let program = parse_program(r#"
+let fact = |n| {
+  if n <= 1 { 1 }
+  else { n * fact(n - 1) }
+};
+part_one: fact(5)
+
+test: {
+  input: nil
+  part_one: 120
+}
+"#);
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(120)));
+}
+
+#[test]
+fn test_self_referencing_detection() {
+    // Verify that find_self_referencing_bindings detects direct self-recursive closures
+    use crate::codegen::context::CodegenContext;
+    use std::collections::HashSet;
+
+    let source = r#"let fact = |n| { if n <= 1 { 1 } else { n * fact(n - 1) } };"#;
+    let tokens = lex(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+
+    // Check detection
+    let bound: HashSet<String> = HashSet::new();
+    let self_refs = CodegenContext::find_self_referencing_bindings(&program.statements, &bound);
+
+    // fact should be detected as self-referencing
+    assert!(self_refs.contains("fact"), "fact should be detected as self-referencing, got: {:?}", self_refs);
+}
+
+#[test]
+fn test_generated_source_for_self_recursive() {
+    // Check what source is generated for the test
+    let program = parse_program(r#"
+let fact = |n| {
+  if n <= 1 { 1 }
+  else { n * fact(n - 1) }
+};
+part_one: fact(5)
+
+test: {
+  input: nil
+  part_one: 120
+}
+"#);
+    let runner = Runner::new();
+
+    // Generate the source that would be compiled
+    let generated = runner.generate_test_source_for_debugging(
+        &program.statements,
+        &Expr::Nil,
+        Some(&Expr::Call {
+            function: Box::new(Expr::Identifier("fact".to_string())),
+            args: vec![Expr::Integer(5)],
+        }),
+        None,
+    );
+
+    println!("Generated source:\n{}", generated);
+
+    // Now check if the regenerated source still has fact as self-referencing
+    use crate::codegen::context::CodegenContext;
+    use std::collections::HashSet;
+
+    let tokens = lex(&generated).unwrap();
+    let mut parser = Parser::new(tokens);
+    let reparsed = parser.parse_program().unwrap();
+
+    let bound: HashSet<String> = HashSet::new();
+    let self_refs = CodegenContext::find_self_referencing_bindings(&reparsed.statements, &bound);
+
+    println!("Self-referencing bindings in generated source: {:?}", self_refs);
+    assert!(self_refs.contains("fact"), "fact should still be detected as self-referencing in generated source");
+}
+
+#[test]
+fn test_direct_compilation_non_recursive() {
+    // First test: simple non-recursive closure
+    use crate::codegen::pipeline::Compiler;
+    use std::process::Command;
+
+    let source = r#"
+let double = |n| { n * 2 };
+puts("RESULT:", double(5));
+0
+"#;
+
+    let temp_dir = std::env::temp_dir();
+    let exe_path = temp_dir.join("test_direct_non_recursive");
+
+    println!("Starting compilation of non-recursive closure...");
+    let compiler = Compiler::new();
+    let result = compiler.compile_to_executable(source, &exe_path);
+    println!("Compilation result: {:?}", result.is_ok());
+    result.expect("Compilation failed");
+
+    let output = Command::new(&exe_path)
+        .output()
+        .expect("Execution failed");
+
+    std::fs::remove_file(&exe_path).ok();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    println!("Output: {}", stdout);
+    assert!(stdout.contains("RESULT: 10"), "Should output 10, got: {}", stdout);
+}
+
+#[test]
+fn test_direct_compilation_simple_closure() {
+    // Test simplest possible self-recursive closure
+    use crate::codegen::pipeline::Compiler;
+    use std::process::Command;
+
+    // Simpler: identity function that references itself but doesn't call itself
+    let source = r#"
+let f = |n| n;
+puts("RESULT:", f(5));
+0
+"#;
+
+    let temp_dir = std::env::temp_dir();
+    let exe_path = temp_dir.join("test_direct_simple_closure");
+
+    println!("Starting compilation of simple closure...");
+    let compiler = Compiler::new();
+    let result = compiler.compile_to_executable(source, &exe_path);
+    println!("Compilation result: {:?}", result.is_ok());
+    result.expect("Compilation failed");
+
+    let output = Command::new(&exe_path)
+        .output()
+        .expect("Execution failed");
+
+    std::fs::remove_file(&exe_path).ok();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    println!("Output: {}", stdout);
+    assert!(stdout.contains("RESULT: 5"), "Should output 5, got: {}", stdout);
+}
+
+#[test]
+fn test_direct_compilation_self_ref_no_call() {
+    // Closure that references itself but doesn't call itself
+    use crate::codegen::pipeline::Compiler;
+    use std::process::Command;
+
+    // This should trigger detection but just return 42
+    let source = r#"
+let f = |n| { let ignored = f; 42 };
+puts("RESULT:", f(5));
+0
+"#;
+
+    let temp_dir = std::env::temp_dir();
+    let exe_path = temp_dir.join("test_direct_self_ref_no_call");
+
+    println!("Starting compilation of self-ref-no-call closure...");
+    let compiler = Compiler::new();
+    let result = compiler.compile_to_executable(source, &exe_path);
+    println!("Compilation result: {:?}", result.is_ok());
+    result.expect("Compilation failed");
+
+    let output = Command::new(&exe_path)
+        .output()
+        .expect("Execution failed");
+
+    std::fs::remove_file(&exe_path).ok();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    println!("Output: {}", stdout);
+    assert!(stdout.contains("RESULT: 42"), "Should output 42, got: {}", stdout);
+}
+
+#[test]
+fn test_direct_compilation_if_no_self_ref() {
+    // Closure with if/else but no self-reference
+    use crate::codegen::pipeline::Compiler;
+    use std::process::Command;
+
+    let source = r#"
+let my_abs = |n| { if n < 0 { 0 - n } else { n } };
+puts("RESULT:", my_abs(-5));
+0
+"#;
+
+    let temp_dir = std::env::temp_dir();
+    let exe_path = temp_dir.join("test_direct_if_no_self_ref");
+
+    println!("Starting compilation of if-no-self-ref closure...");
+    let compiler = Compiler::new();
+    let result = compiler.compile_to_executable(source, &exe_path);
+    println!("Compilation result: {:?}", result.is_ok());
+    result.expect("Compilation failed");
+
+    let output = Command::new(&exe_path)
+        .output()
+        .expect("Execution failed");
+
+    std::fs::remove_file(&exe_path).ok();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    println!("Output: {}", stdout);
+    assert!(stdout.contains("RESULT: 5"), "Should output 5, got: {}", stdout);
+}
+
+#[test]
+fn test_direct_compilation_tail_recursive() {
+    // Test tail-recursive function (should use TCO)
+    use crate::codegen::pipeline::Compiler;
+    use std::process::Command;
+
+    let source = r#"
+let sum_helper = |n, acc| { if n <= 0 { acc } else { sum_helper(n - 1, acc + n) } };
+puts("RESULT:", sum_helper(5, 0));
+0
+"#;
+
+    let temp_dir = std::env::temp_dir();
+    let exe_path = temp_dir.join("test_direct_tail_recursive");
+
+    println!("Starting compilation of tail-recursive closure...");
+    let compiler = Compiler::new();
+    let result = compiler.compile_to_executable(source, &exe_path);
+    println!("Compilation result: {:?}", result.is_ok());
+    result.expect("Compilation failed");
+
+    let output = Command::new(&exe_path)
+        .output()
+        .expect("Execution failed");
+
+    std::fs::remove_file(&exe_path).ok();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    println!("Output: {}", stdout);
+    assert!(stdout.contains("RESULT: 15"), "Should output 15, got: {}", stdout);
+}
+
+#[test]
+fn test_direct_compilation_self_recursive() {
+    // Test compiling directly without going through runner transform
+    use crate::codegen::pipeline::Compiler;
+    use std::process::Command;
+
+    let source = r#"
+let fact = |n| { if n <= 1 { 1 } else { n * fact(n - 1) } };
+puts("RESULT:", fact(5));
+0
+"#;
+
+    // Compile
+    let temp_dir = std::env::temp_dir();
+    let exe_path = temp_dir.join("test_direct_self_recursive");
+
+    println!("Starting compilation...");
+    let compiler = Compiler::new();
+    let result = compiler.compile_to_executable(source, &exe_path);
+    println!("Compilation result: {:?}", result.is_ok());
+
+    if let Err(ref e) = result {
+        println!("Compilation error: {:?}", e);
+    }
+    result.expect("Compilation failed");
+
+    println!("Compilation succeeded, running executable...");
+
+    // Execute
+    let output = Command::new(&exe_path)
+        .output()
+        .expect("Execution failed");
+
+    std::fs::remove_file(&exe_path).ok();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    println!("Stdout: {}", stdout);
+    println!("Stderr: {}", stderr);
+    println!("Status: {:?}", output.status);
+
+    assert!(output.status.success(), "Program should succeed");
+    assert!(stdout.contains("RESULT: 120"), "Should output 120, got: {}", stdout);
 }
 
 // Phase 9: Basic mutable assignment test

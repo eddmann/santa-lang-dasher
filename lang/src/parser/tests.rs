@@ -378,6 +378,74 @@ fn parse_partial_application_right_operand() {
     .assert_debug_eq(&expr);
 }
 
+// Operator function reference tests
+#[test]
+fn parse_operator_reference_add() {
+    // Bare + should become |__op_0, __op_1| __op_0 + __op_1
+    let expr = parse_expr("fold(0, +, [1, 2, 3])").unwrap();
+    // The second argument should be a Function with two params
+    if let Expr::Call { args, .. } = &expr {
+        assert_eq!(args.len(), 3);
+        match &args[1] {
+            Expr::Function { params, body } => {
+                assert_eq!(params.len(), 2);
+                assert_eq!(params[0].name, "__op_0");
+                assert_eq!(params[1].name, "__op_1");
+                match body.as_ref() {
+                    Expr::Infix { op, .. } => {
+                        assert_eq!(*op, InfixOp::Add);
+                    }
+                    _ => panic!("Expected Infix body"),
+                }
+            }
+            _ => panic!("Expected Function for operator reference, got {:?}", args[1]),
+        }
+    } else {
+        panic!("Expected Call expression");
+    }
+}
+
+#[test]
+fn parse_operator_reference_multiply() {
+    // Bare * should become |__op_0, __op_1| __op_0 * __op_1
+    let expr = parse_expr("reduce(*, [1, 2, 3])").unwrap();
+    if let Expr::Call { args, .. } = &expr {
+        assert_eq!(args.len(), 2);
+        match &args[0] {
+            Expr::Function { params, body } => {
+                assert_eq!(params.len(), 2);
+                match body.as_ref() {
+                    Expr::Infix { op, .. } => {
+                        assert_eq!(*op, InfixOp::Multiply);
+                    }
+                    _ => panic!("Expected Infix body"),
+                }
+            }
+            _ => panic!("Expected Function for operator reference"),
+        }
+    } else {
+        panic!("Expected Call expression");
+    }
+}
+
+#[test]
+fn parse_operator_reference_subtract() {
+    // Bare - should become |__op_0, __op_1| __op_0 - __op_1
+    let expr = parse_expr("-").unwrap();
+    match &expr {
+        Expr::Function { params, body } => {
+            assert_eq!(params.len(), 2);
+            match body.as_ref() {
+                Expr::Infix { op, .. } => {
+                    assert_eq!(*op, InfixOp::Subtract);
+                }
+                _ => panic!("Expected Infix body"),
+            }
+        }
+        _ => panic!("Expected Function for operator reference"),
+    }
+}
+
 #[test]
 fn parse_call_expression() {
     // Test function call f(1, 2)

@@ -27,6 +27,50 @@ impl Parser {
         Self { tokens: filtered_tokens, current: 0 }
     }
 
+    /// Create a binary operator lambda: |__op_0, __op_1| __op_0 OP __op_1
+    /// Used when operators like + are passed as function references: fold(0, +, list)
+    fn make_operator_lambda(op: InfixOp) -> Expr {
+        Expr::Function {
+            params: vec![
+                Param { name: "__op_0".to_string() },
+                Param { name: "__op_1".to_string() },
+            ],
+            body: Box::new(Expr::Infix {
+                left: Box::new(Expr::Identifier("__op_0".to_string())),
+                op,
+                right: Box::new(Expr::Identifier("__op_1".to_string())),
+            }),
+        }
+    }
+
+    /// Check if current token could start an expression (for operator reference detection)
+    fn is_expression_start(&self) -> bool {
+        if let Some(token) = self.tokens.get(self.current) {
+            matches!(
+                token.kind,
+                TokenKind::Integer(_)
+                    | TokenKind::Decimal(_)
+                    | TokenKind::String(_)
+                    | TokenKind::True
+                    | TokenKind::False
+                    | TokenKind::Nil
+                    | TokenKind::Identifier(_)
+                    | TokenKind::Underscore
+                    | TokenKind::LeftParen
+                    | TokenKind::LeftBracket
+                    | TokenKind::LeftBrace
+                    | TokenKind::HashBrace
+                    | TokenKind::VerticalBar
+                    | TokenKind::OrOr
+                    | TokenKind::If
+                    | TokenKind::Match
+                    | TokenKind::Bang
+            )
+        } else {
+            false
+        }
+    }
+
     pub fn parse_expression(&mut self) -> Result<Expr, ParseError> {
         let expr = self.parse_pratt_expr(0)?;
         // Transform expressions containing placeholders into functions
@@ -292,11 +336,18 @@ impl Parser {
             }
             TokenKind::Minus => {
                 self.advance();
-                let right = self.parse_pratt_expr(7)?; // Prefix has high precedence (7)
-                Ok(Expr::Prefix {
-                    op: PrefixOp::Negate,
-                    right: Box::new(right),
-                })
+                // Check if this is an operator reference (no following operand)
+                // or a prefix negation (followed by an expression)
+                if self.is_expression_start() {
+                    let right = self.parse_pratt_expr(7)?; // Prefix has high precedence (7)
+                    Ok(Expr::Prefix {
+                        op: PrefixOp::Negate,
+                        right: Box::new(right),
+                    })
+                } else {
+                    // Bare - is an operator reference: |a, b| a - b
+                    Ok(Self::make_operator_lambda(InfixOp::Subtract))
+                }
             }
             TokenKind::VerticalBar => {
                 self.parse_function()
@@ -328,6 +379,55 @@ impl Parser {
                 // Non-empty or function body → Block
                 self.parse_block()
             }
+
+            // Operator function references: +, *, /, %, ==, !=, <, >, <=, >=, &&
+            // These transform to lambdas: + becomes |__op_0, __op_1| __op_0 + __op_1
+            // Per LANG.txt: fold(0, +, [1, 2, 3]) is valid
+            TokenKind::Plus => {
+                self.advance();
+                Ok(Self::make_operator_lambda(InfixOp::Add))
+            }
+            TokenKind::Star => {
+                self.advance();
+                Ok(Self::make_operator_lambda(InfixOp::Multiply))
+            }
+            TokenKind::Slash => {
+                self.advance();
+                Ok(Self::make_operator_lambda(InfixOp::Divide))
+            }
+            TokenKind::Percent => {
+                self.advance();
+                Ok(Self::make_operator_lambda(InfixOp::Modulo))
+            }
+            TokenKind::EqualEqual => {
+                self.advance();
+                Ok(Self::make_operator_lambda(InfixOp::Equal))
+            }
+            TokenKind::NotEqual => {
+                self.advance();
+                Ok(Self::make_operator_lambda(InfixOp::NotEqual))
+            }
+            TokenKind::Less => {
+                self.advance();
+                Ok(Self::make_operator_lambda(InfixOp::LessThan))
+            }
+            TokenKind::LessEqual => {
+                self.advance();
+                Ok(Self::make_operator_lambda(InfixOp::LessThanOrEqual))
+            }
+            TokenKind::Greater => {
+                self.advance();
+                Ok(Self::make_operator_lambda(InfixOp::GreaterThan))
+            }
+            TokenKind::GreaterEqual => {
+                self.advance();
+                Ok(Self::make_operator_lambda(InfixOp::GreaterThanOrEqual))
+            }
+            TokenKind::AndAnd => {
+                self.advance();
+                Ok(Self::make_operator_lambda(InfixOp::And))
+            }
+
             _ => Err(ParseError {
                 message: format!("Unexpected token: {:?}", token.kind),
                 line: token.span.start.line as usize,

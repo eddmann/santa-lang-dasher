@@ -1,5 +1,6 @@
 use crate::lexer::lex;
 use crate::parser::{parse, Parser};
+use crate::parser::ast::{Expr, Pattern};
 use crate::types::ty::{Type, TypedProgram};
 use crate::types::infer::TypeInference;
 
@@ -467,8 +468,196 @@ x + 2
 "#);
     // 3 statements: let x, let y, expression x + 2
     assert_eq!(program.statements.len(), 3);
-    // The last expression x+2 would be Unknown (x is unknown without env tracking)
-    // This is expected behavior for now
+    // With proper let binding tracking, x should be Int, so x + 2 should be Int
+    assert_eq!(program.statements[2].ty, Type::Int, "x + 2 should be Int since x is bound to Int");
+}
+
+#[test]
+fn infer_let_binding_tracks_type() {
+    // let x = 1 should track x as Int in the environment
+    // Then x + 2 should infer as Int (not Unknown)
+    let program = infer_program("let x = 1\nx + 2");
+    assert_eq!(program.statements.len(), 2);
+    // Second statement (x + 2) should be Int because x is tracked as Int
+    assert_eq!(program.statements[1].ty, Type::Int);
+}
+
+#[test]
+fn infer_let_binding_string() {
+    // let s = "hello" should track s as String
+    let program = infer_program("let s = \"hello\"\ns + \" world\"");
+    assert_eq!(program.statements.len(), 2);
+    // String + String should be String
+    assert_eq!(program.statements[1].ty, Type::String);
+}
+
+#[test]
+fn infer_let_binding_list() {
+    // let xs = [1, 2, 3] should track xs as List<Int>
+    // Then first(xs) should return Int
+    let program = infer_program("let xs = [1, 2, 3]\nfirst(xs)");
+    assert_eq!(program.statements.len(), 2);
+    assert_eq!(program.statements[1].ty, Type::Int);
+}
+
+#[test]
+fn infer_let_binding_used_in_builtin() {
+    // let xs = [1, 2, 3]
+    // map(|x| x * 2, xs)
+    // Lambda param should be inferred from xs's element type
+    let program = infer_program("let xs = [1, 2, 3]\nmap(|x| x * 2, xs)");
+    assert_eq!(program.statements.len(), 2);
+    // map returns List<T> where T is the lambda return type
+    // x * 2 where x: Int returns Int, so result is List<Int>
+    assert_eq!(program.statements[1].ty, Type::List(Box::new(Type::Int)));
+}
+
+// ===== User-Defined Function Call Inference Tests =====
+// These tests verify that calling user-defined functions infers proper return types
+
+#[test]
+fn infer_user_defined_function_call_int() {
+    // let add = |a, b| a + b
+    // add(1, 2)  → should infer as Int because 1 and 2 are Int
+    let program = infer_program("let add = |a, b| a + b\nadd(1, 2)");
+    assert_eq!(program.statements.len(), 2);
+    // The call add(1, 2) should return Int
+    assert_eq!(program.statements[1].ty, Type::Int, "add(1, 2) should be Int");
+}
+
+#[test]
+fn infer_user_defined_function_call_string() {
+    // let greet = |name| "Hello, " + name
+    // greet("World")  → should infer as String
+    let program = infer_program("let greet = |name| \"Hello, \" + name\ngreet(\"World\")");
+    assert_eq!(program.statements.len(), 2);
+    assert_eq!(program.statements[1].ty, Type::String, "greet(\"World\") should be String");
+}
+
+#[test]
+fn infer_user_defined_function_call_with_comparison() {
+    // let is_positive = |x| x > 0
+    // is_positive(5)  → should infer as Bool
+    let program = infer_program("let is_positive = |x| x > 0\nis_positive(5)");
+    assert_eq!(program.statements.len(), 2);
+    assert_eq!(program.statements[1].ty, Type::Bool, "is_positive(5) should be Bool");
+}
+
+#[test]
+fn infer_user_defined_function_nested_call() {
+    // let double = |x| x * 2
+    // let quad = |x| double(double(x))
+    // quad(3)  → should infer as Int
+    let program = infer_program("let double = |x| x * 2\nlet quad = |x| double(double(x))\nquad(3)");
+    assert_eq!(program.statements.len(), 3);
+    assert_eq!(program.statements[2].ty, Type::Int, "quad(3) should be Int");
+}
+
+#[test]
+fn infer_user_defined_function_used_in_map() {
+    // let double = |x| x * 2
+    // map(double, [1, 2, 3])  → should infer as List<Int>
+    let program = infer_program("let double = |x| x * 2\nmap(double, [1, 2, 3])");
+    assert_eq!(program.statements.len(), 2);
+    assert_eq!(program.statements[1].ty, Type::List(Box::new(Type::Int)), "map(double, [1,2,3]) should be List<Int>");
+}
+
+// ===== Match Expression Type Inference Tests =====
+
+#[test]
+fn infer_match_all_int_arms() {
+    // match 1 { 1 { 10 } 2 { 20 } _ { 0 } }
+    // All arms return Int → result is Int
+    let ty = infer_type("match 1 { 1 { 10 } 2 { 20 } _ { 0 } }");
+    assert_eq!(ty, Type::Int);
+}
+
+#[test]
+fn infer_match_all_string_arms() {
+    // match 1 { 1 { "one" } _ { "other" } }
+    // All arms return String → result is String
+    let ty = infer_type("match 1 { 1 { \"one\" } _ { \"other\" } }");
+    assert_eq!(ty, Type::String);
+}
+
+#[test]
+fn infer_match_with_variable_binding() {
+    // match [1, 2, 3] { [x, ..rest] { x * 2 } _ { 0 } }
+    // x is bound to first element (Int), x * 2 is Int
+    let ty = infer_type("match [1, 2, 3] { [x, ..rest] { x * 2 } _ { 0 } }");
+    assert_eq!(ty, Type::Int);
+}
+
+#[test]
+fn infer_match_with_guard() {
+    // match 5 { x if x > 0 { x + 1 } _ { 0 } }
+    // x is bound to subject (Int), x + 1 is Int
+    let ty = infer_type("match 5 { x if x > 0 { x + 1 } _ { 0 } }");
+    assert_eq!(ty, Type::Int);
+}
+
+// IfLet expression type inference
+// Note: Parser doesn't support "if let" syntax yet, so we construct AST manually
+
+fn infer_ast_type(expr: &Expr) -> Type {
+    let mut inference = TypeInference::new();
+    inference.infer_expr(expr).unwrap().ty
+}
+
+#[test]
+fn infer_if_let_simple() {
+    // if let x = 42 { x * 2 } else { 0 }
+    // x is bound to Int, x * 2 is Int, else is Int, result is Int
+    use crate::parser::ast::InfixOp;
+    let expr = Expr::IfLet {
+        pattern: Pattern::Identifier("x".to_string()),
+        value: Box::new(Expr::Integer(42)),
+        then_branch: Box::new(Expr::Infix {
+            left: Box::new(Expr::Identifier("x".to_string())),
+            op: InfixOp::Multiply,
+            right: Box::new(Expr::Integer(2)),
+        }),
+        else_branch: Some(Box::new(Expr::Integer(0))),
+    };
+    let ty = infer_ast_type(&expr);
+    assert_eq!(ty, Type::Int);
+}
+
+#[test]
+fn infer_if_let_no_else() {
+    // if let x = "hello" { x }
+    // No else branch returns Nil when pattern doesn't match
+    // Both branches should unify to String or Unknown
+    let expr = Expr::IfLet {
+        pattern: Pattern::Identifier("x".to_string()),
+        value: Box::new(Expr::String("hello".to_string())),
+        then_branch: Box::new(Expr::Identifier("x".to_string())),
+        else_branch: None,
+    };
+    let ty = infer_ast_type(&expr);
+    // With no else, result type is Unknown (can't unify String and Nil)
+    assert_eq!(ty, Type::Unknown);
+}
+
+#[test]
+fn infer_if_let_list_destructure() {
+    // if let [a, ..rest] = [1, 2, 3] { a } else { 0 }
+    // a is bound to Int (element type), result is Int
+    let expr = Expr::IfLet {
+        pattern: Pattern::List(vec![
+            Pattern::Identifier("a".to_string()),
+            Pattern::RestIdentifier("rest".to_string()),
+        ]),
+        value: Box::new(Expr::List(vec![
+            Expr::Integer(1),
+            Expr::Integer(2),
+            Expr::Integer(3),
+        ])),
+        then_branch: Box::new(Expr::Identifier("a".to_string())),
+        else_branch: Some(Box::new(Expr::Integer(0))),
+    };
+    let ty = infer_ast_type(&expr);
+    assert_eq!(ty, Type::Int);
 }
 
 #[test]
@@ -492,4 +681,97 @@ part_one: input * 2
     // input: 42 → Int
     assert_eq!(program.sections[0].ty, Type::Int);
     // part_one: input * 2 → Unknown (input not tracked in simple implementation)
+}
+
+// ===== Closure Parameter Type Inference Tests =====
+// These tests verify that lambda parameters get their types inferred from context
+// by checking that the body operations are correctly typed (which proves the params were typed)
+
+#[test]
+fn infer_lambda_param_from_filter_context() {
+    // filter(|x| x > 0, [1, 2, 3])
+    //   - [1, 2, 3] is List<Int>
+    //   - filter's signature: (T -> Bool, List<T>) -> List<T>
+    //   - Result: List<Int>
+    //
+    // The return type proves the inference worked: if the collection type wasn't
+    // propagated through, we'd get Unknown instead of List<Int>
+    let ty = infer_type("filter(|x| x > 0, [1, 2, 3])");
+    assert_eq!(ty, Type::List(Box::new(Type::Int)));
+}
+
+#[test]
+fn infer_lambda_param_from_map_context() {
+    // map(|x| x * 2, [1, 2, 3])
+    //   - [1, 2, 3] is List<Int>
+    //   - map's signature: (T -> U, List<T>) -> List<U>
+    //   - x: Int (inferred from List<Int>), so x * 2: Int
+    //   - Result: List<Int>
+    //
+    // The return type List<Int> proves that:
+    // 1. The lambda was correctly typed as (Int) -> Int
+    // 2. x was inferred as Int (otherwise x * 2 would be Unknown)
+    // 3. The map result type used the lambda's return type
+    let ty = infer_type("map(|x| x * 2, [1, 2, 3])");
+    assert_eq!(ty, Type::List(Box::new(Type::Int)));
+}
+
+#[test]
+fn infer_lambda_param_from_map_unknown_without_context() {
+    // Without collection type information, x * 2 would be Unknown
+    // This test verifies that bidirectional inference is actually doing something:
+    // |x| x * 2 alone has Unknown parameter type, giving Unknown result
+    let ty = infer_type("|x| x * 2");
+    match ty {
+        Type::Function { params, ret } => {
+            assert_eq!(params[0], Type::Unknown, "Without context, param should be Unknown");
+            assert_eq!(*ret, Type::Unknown, "Without context, Unknown * Int = Unknown");
+        }
+        _ => panic!("Expected Function type"),
+    }
+}
+
+#[test]
+fn infer_lambda_param_from_fold_context() {
+    // fold(0, |acc, x| acc + x, [1, 2, 3])
+    //   - initial = 0: Int
+    //   - [1, 2, 3] is List<Int>
+    //   - fold's signature: (T, (T, U) -> T, List<U>) -> T
+    //   - acc: Int (from initial), x: Int (from list element)
+    //   - Result: Int
+    let ty = infer_type("fold(0, |acc, x| acc + x, [1, 2, 3])");
+    assert_eq!(ty, Type::Int);
+}
+
+#[test]
+fn infer_lambda_param_from_reduce_context() {
+    // reduce(|a, b| a + b, [1, 2, 3])
+    //   - [1, 2, 3] is List<Int>
+    //   - reduce's signature: ((T, T) -> T, List<T>) -> T
+    //   - a: Int, b: Int (from element type)
+    //   - Result: Int
+    let ty = infer_type("reduce(|a, b| a + b, [1, 2, 3])");
+    assert_eq!(ty, Type::Int);
+}
+
+#[test]
+fn infer_lambda_param_decimal_list() {
+    // Test with Decimal list to ensure type propagation works for different types
+    // map(|x| x * 2.0, [1.0, 2.0, 3.0])
+    //   - [1.0, 2.0, 3.0] is List<Decimal>
+    //   - x: Decimal, x * 2.0: Decimal
+    //   - Result: List<Decimal>
+    let ty = infer_type("map(|x| x * 2.0, [1.0, 2.0, 3.0])");
+    assert_eq!(ty, Type::List(Box::new(Type::Decimal)));
+}
+
+#[test]
+fn infer_lambda_param_string_list() {
+    // Test with String list
+    // map(|s| s + \"!\", [\"a\", \"b\"])
+    //   - List<String>
+    //   - s: String, s + "!": String
+    //   - Result: List<String>
+    let ty = infer_type("map(|s| s + \"!\", [\"a\", \"b\"])");
+    assert_eq!(ty, Type::List(Box::new(Type::String)));
 }
