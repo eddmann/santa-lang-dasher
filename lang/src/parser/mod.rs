@@ -254,6 +254,18 @@ impl Parser {
                 }
             }
 
+            // Check for trailing lambda after a call: call(...) |params| body
+            // e.g., fold(init) |acc, x| acc + x  ->  fold(init, |acc, x| acc + x)
+            if matches!(token.kind, TokenKind::VerticalBar | TokenKind::OrOr) {
+                if let Expr::Call { function, mut args } = left {
+                    // Parse the lambda and add it as an additional argument
+                    let lambda = self.parse_expression()?;
+                    args.push(lambda);
+                    left = Expr::Call { function, args };
+                    continue;
+                }
+            }
+
             // Check for infix operators
             let precedence = self.get_infix_precedence();
             // Stop if precedence is 0 (not an infix op) or less than minimum
@@ -954,6 +966,51 @@ impl Parser {
                 start: Box::new(left),
                 end,
                 inclusive,
+            });
+        }
+
+        // Handle backtick infix call: a `f` b -> f(a, b)
+        if matches!(token.kind, TokenKind::Backtick) {
+            self.advance(); // consume first backtick
+
+            // Expect an identifier (function name)
+            let fn_token = self.current_token()?.clone();
+            let function = match &fn_token.kind {
+                TokenKind::Identifier(name) => name.clone(),
+                _ => {
+                    return Err(ParseError {
+                        message: format!(
+                            "Expected function name in backtick expression, got {:?}",
+                            fn_token.kind
+                        ),
+                        line: fn_token.span.start.line as usize,
+                        column: fn_token.span.start.column as usize,
+                    });
+                }
+            };
+            self.advance(); // consume function name
+
+            // Expect closing backtick
+            let close_token = self.current_token()?.clone();
+            if !matches!(close_token.kind, TokenKind::Backtick) {
+                return Err(ParseError {
+                    message: format!(
+                        "Expected closing backtick, got {:?}",
+                        close_token.kind
+                    ),
+                    line: close_token.span.start.line as usize,
+                    column: close_token.span.start.column as usize,
+                });
+            }
+            self.advance(); // consume closing backtick
+
+            // Parse right operand
+            let right = self.parse_pratt_expr(precedence + 1)?;
+
+            return Ok(Expr::InfixCall {
+                function,
+                left: Box::new(left),
+                right: Box::new(right),
             });
         }
 

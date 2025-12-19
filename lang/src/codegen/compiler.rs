@@ -44,7 +44,7 @@ const PROTECTED_BUILTINS: &[&str] = &[
     "lines", "split", "regex_match", "regex_match_all", "md5",
     "upper", "lower", "replace", "join",
     // Math functions (§11.15)
-    "abs", "signum", "vec_add",
+    "abs",
     // Bitwise functions (§4.5)
     "bit_and", "bit_or", "bit_xor", "bit_not", "bit_shift_left", "bit_shift_right",
     // Utility functions (§11.16)
@@ -131,6 +131,12 @@ impl<'ctx> CodegenContext<'ctx> {
             },
             Expr::Call { function, args } => {
                 self.compile_call(function, args)
+            },
+            Expr::InfixCall { function, left, right } => {
+                // a `f` b transforms to f(a, b)
+                let fn_expr = Expr::Identifier(function.clone());
+                let args = vec![(**left).clone(), (**right).clone()];
+                self.compile_call(&fn_expr, &args)
             },
             Expr::Match { subject, arms } => {
                 self.compile_match(subject, arms)
@@ -1410,19 +1416,20 @@ impl<'ctx> CodegenContext<'ctx> {
         };
         let cond_val = self.compile_expr(&cond_typed)?;
 
-        // For now, assume condition is a boolean (will need runtime support for truthy values later)
-        // Extract the boolean value from the NaN-boxed representation
-        let cond_int = cond_val.into_int_value();
-        let shifted = self.builder.build_right_shift(
-            cond_int,
-            self.context.i64_type().const_int(3, false),
-            false,
-            "shift"
-        ).unwrap();
-        let cond_bool = self.builder.build_int_truncate(
-            shifted,
-            self.context.bool_type(),
-            "to_bool"
+        // Call rt_is_truthy to handle all value types (not just booleans)
+        let rt_is_truthy = self.get_or_declare_rt_is_truthy();
+        let is_truthy = self.builder.build_call(
+            rt_is_truthy,
+            &[cond_val.into()],
+            "is_truthy",
+        ).unwrap().try_as_basic_value().left().unwrap();
+
+        // Convert i64 result to i1 for conditional branch
+        let cond_bool = self.builder.build_int_compare(
+            inkwell::IntPredicate::NE,
+            is_truthy.into_int_value(),
+            self.context.i64_type().const_zero(),
+            "truthy_bool",
         ).unwrap();
 
         // Create basic blocks for then, else, and merge
@@ -2967,18 +2974,20 @@ impl<'ctx> CodegenContext<'ctx> {
         };
         let cond_val = self.compile_expr(&cond_typed)?;
 
-        // Extract boolean from NaN-boxed value
-        let cond_int = cond_val.into_int_value();
-        let shifted = self.builder.build_right_shift(
-            cond_int,
-            self.context.i64_type().const_int(3, false),
-            false,
-            "shift"
-        ).unwrap();
-        let cond_bool = self.builder.build_int_truncate(
-            shifted,
-            self.context.bool_type(),
-            "to_bool"
+        // Call rt_is_truthy to handle all value types (not just booleans)
+        let rt_is_truthy = self.get_or_declare_rt_is_truthy();
+        let is_truthy = self.builder.build_call(
+            rt_is_truthy,
+            &[cond_val.into()],
+            "is_truthy",
+        ).unwrap().try_as_basic_value().left().unwrap();
+
+        // Convert i64 result to i1 for conditional branch
+        let cond_bool = self.builder.build_int_compare(
+            inkwell::IntPredicate::NE,
+            is_truthy.into_int_value(),
+            self.context.i64_type().const_zero(),
+            "truthy_bool",
         ).unwrap();
 
         // Create basic blocks
@@ -3391,6 +3400,14 @@ impl<'ctx> CodegenContext<'ctx> {
                     free.insert(name.clone());
                 }
                 Self::collect_free_variables(value, bound, free);
+            }
+            Expr::InfixCall { left, right, .. } => {
+                // a `f` b - collect from both operands
+                Self::collect_free_variables(left, bound, free);
+                Self::collect_free_variables(right, bound, free);
+            }
+            Expr::Spread(inner) => {
+                Self::collect_free_variables(inner, bound, free);
             }
             // Literals and constants have no free variables
             Expr::Integer(_) | Expr::Decimal(_) | Expr::String(_) |
@@ -3814,16 +3831,20 @@ impl<'ctx> CodegenContext<'ctx> {
             "size" | "int" | "ints" | "list" | "set" | "dict" | "type" | "str" | "sum"
             | "max" | "min" | "reverse" | "keys" | "values" | "abs" | "floor" | "ceil"
             | "sqrt" | "sin" | "cos" | "tan" | "first" | "second" | "last" | "rest"
-            | "lines" | "dec" | "ord" | "chr" | "upper" | "lower" | "trim" | "id" => Some(1),
+            | "lines" | "dec" | "ord" | "chr" | "upper" | "lower" | "trim" | "id"
+            | "repeat" | "cycle" => Some(1),
             // 2-arg builtins
             "split" | "join" | "map" | "filter" | "reduce" | "find" | "count" | "any"
             | "all" | "take" | "skip" | "sort" | "rotate" | "chunk" | "includes" | "excludes"
             | "get" | "assoc" | "update" | "push" | "union" | "flat_map"
-            | "filter_map" | "find_map" | "each" | "repeat" | "cycle" | "combinations" => Some(2),
+            | "filter_map" | "find_map" | "each" | "combinations"
+            | "includes?" | "excludes?" | "any?" | "all?" => Some(2),
             // 2-arg builtins (additional)
-            "regex_match" | "regex_match_all" => Some(2),
+            "regex_match" | "regex_match_all" | "iterate" => Some(2),
             // 3-arg builtins
-            "fold" | "scan" | "range" | "slice" | "iterate" => Some(3),
+            "fold" | "scan" | "slice" => Some(3),
+            // range supports 2 or 3 args, handled specially
+            "range" => None,
             // Variadic or special
             "puts" | "zip" | "read" | "hash" | "memoize" | "regex" => None,
             // intersection is variadic but defaults to arity 1 for partial application
@@ -5182,22 +5203,36 @@ impl<'ctx> CodegenContext<'ctx> {
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "range" => {
-                // range(from, to, step) - generate range with step
-                if args.len() != 3 {
+                // range(from, to) - generate range with step 1 (exclusive end)
+                // range(from, to, step) - generate range with custom step
+                if args.len() == 2 {
+                    // 2-arg: range(from, to) - equivalent to from..to
+                    let from = self.compile_arg(&args[0])?;
+                    let to = self.compile_arg(&args[1])?;
+                    let rt_range = self.get_or_declare_rt_range_exclusive();
+                    let result = self.builder.build_call(
+                        rt_range,
+                        &[from.into(), to.into()],
+                        "range_result",
+                    ).unwrap();
+                    Ok(Some(result.try_as_basic_value().left().unwrap()))
+                } else if args.len() == 3 {
+                    // 3-arg: range(from, to, step)
+                    let from = self.compile_arg(&args[0])?;
+                    let to = self.compile_arg(&args[1])?;
+                    let step = self.compile_arg(&args[2])?;
+                    let rt_range = self.get_or_declare_rt_range();
+                    let result = self.builder.build_call(
+                        rt_range,
+                        &[from.into(), to.into(), step.into()],
+                        "range_result",
+                    ).unwrap();
+                    Ok(Some(result.try_as_basic_value().left().unwrap()))
+                } else {
                     return Err(CompileError::UnsupportedExpression(
-                        format!("range expects 3 arguments, got {}", args.len())
+                        format!("range expects 2 or 3 arguments, got {}", args.len())
                     ));
                 }
-                let from = self.compile_arg(&args[0])?;
-                let to = self.compile_arg(&args[1])?;
-                let step = self.compile_arg(&args[2])?;
-                let rt_range = self.get_or_declare_rt_range();
-                let result = self.builder.build_call(
-                    rt_range,
-                    &[from.into(), to.into(), step.into()],
-                    "range_result",
-                ).unwrap();
-                Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "zip" => {
                 // zip(collection, ..collections) - zip multiple collections
