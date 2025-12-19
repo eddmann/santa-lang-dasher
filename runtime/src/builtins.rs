@@ -2387,11 +2387,11 @@ pub extern "C" fn rt_sum(collection: Value) -> Value {
             return Value::from_integer(sum);
         }
 
-        // For other lazy sequences, iterate
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
-            add_value(val);
-            current = *next_seq;
+        // For other lazy sequences (including Map, Filter, Zip which need closure evaluation),
+        // use collect_bounded_lazy which handles all variants properly
+        let elements = collect_bounded_lazy(lazy);
+        for v in elements.iter() {
+            add_value(*v);
         }
         return if has_decimal {
             Value::from_decimal(int_sum as f64 + dec_sum)
@@ -3478,15 +3478,15 @@ pub extern "C" fn rt_combinations(size: Value, collection: Value) -> Value {
 /// Generate a range sequence with custom step.
 /// Unlike `..` and `..=` syntax, this always returns a LazySequence.
 ///
-/// Per LANG.txt §11.12:
-/// - range(0, 10, 2) |> take(3) → [0, 2, 4]
+/// Per LANG.txt §11.13:
+/// - range(0, 10, 2) |> list → [0, 2, 4, 6, 8, 10] (inclusive)
 #[no_mangle]
 pub extern "C" fn rt_range_fn(from: Value, to: Value, step: Value) -> Value {
     let start = from.as_integer().unwrap_or(0);
     let end = to.as_integer();
     let step_val = step.as_integer().unwrap_or(1);
 
-    let lazy = LazySequenceObject::range(start, end, false, step_val);
+    let lazy = LazySequenceObject::range(start, end, true, step_val);
     Value::from_lazy_sequence(lazy)
 }
 

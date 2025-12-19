@@ -621,6 +621,14 @@ impl Runner {
             Expr::Spread(inner) => {
                 format!("..{}", self.expr_to_source(inner))
             }
+            Expr::InfixCall { function, left, right } => {
+                format!(
+                    "{} `{}` {}",
+                    self.expr_to_source(left),
+                    function,
+                    self.expr_to_source(right)
+                )
+            }
             _ => format!("/* unsupported expr: {:?} */", expr),
         }
     }
