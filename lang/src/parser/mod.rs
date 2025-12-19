@@ -94,6 +94,18 @@ impl Parser {
             };
         }
 
+        // Special handling for Composition: transform both sides independently
+        // This makes `f >> 6 - _` correctly become `f >> (|x| 6 - x)`, not `|x| f >> (6 - x)`
+        if let Expr::Infix { left, op: InfixOp::Composition, right } = &expr {
+            let transformed_left = self.transform_partial_application((**left).clone());
+            let transformed_right = self.transform_partial_application((**right).clone());
+            return Expr::Infix {
+                left: Box::new(transformed_left),
+                op: InfixOp::Composition,
+                right: Box::new(transformed_right),
+            };
+        }
+
         // Count placeholders to see if we need to transform
         let placeholder_count = self.count_placeholders(&expr);
         if placeholder_count == 0 {
@@ -446,19 +458,13 @@ impl Parser {
                 Ok(expr)
             }
             TokenKind::LeftBrace => {
-                // Disambiguate {} based on whether it's empty
-                // Empty {} → Set (in expression context)
-                // Non-empty { ... } → Block
-                if let Some(next) = self.tokens.get(self.current + 1) {
-                    if matches!(next.kind, TokenKind::RightBrace) {
-                        // Empty braces: {} → Set
-                        self.advance(); // consume '{'
-                        self.advance(); // consume '}'
-                        return Ok(Expr::Set(Vec::new()));
-                    }
-                }
-                // Non-empty or function body → Block
-                self.parse_block()
+                // Disambiguate {} based on context (expression position)
+                // Per LANG.txt: In expression position, {} should be parsed as a Set
+                // We need to distinguish between:
+                //   {1, 2, 3} - set literal
+                //   {x} - set with one element
+                //   {let y = 1; y} - block with statements
+                self.parse_set_or_block_in_expr_position()
             }
 
             // Operator function references: +, *, /, %, ==, !=, <, >, <=, >=, &&
@@ -1553,29 +1559,165 @@ impl Parser {
         })
     }
 
-    fn parse_block(&mut self) -> Result<Expr, ParseError> {
+    /// Disambiguate between set literal and block in expression position
+    /// Per LANG.txt: In expression position, {} should be parsed as Set
+    /// - {1, 2, 3} → set literal
+    /// - {x} → set with one element
+    /// - {let y = 1; y} → block with statements
+    fn parse_set_or_block_in_expr_position(&mut self) -> Result<Expr, ParseError> {
         self.advance(); // consume '{'
 
+        // Empty braces: {} → empty Set in expression position
+        if let Ok(token) = self.current_token() {
+            if matches!(token.kind, TokenKind::RightBrace) {
+                self.advance();
+                return Ok(Expr::Set(Vec::new()));
+            }
+        }
+
+        // Check if the first token indicates this must be a block
+        // (statement-starting keywords that can't be expression starts)
+        if let Ok(token) = self.current_token() {
+            if matches!(
+                token.kind,
+                TokenKind::Let | TokenKind::Return | TokenKind::Break
+            ) {
+                // Definitely a block - use parse_block logic
+                return self.parse_block_body();
+            }
+        }
+
+        // Try to parse as expression, then look at what follows
+        let first_expr = self.parse_pratt_expr(0)?;
+
+        // Check what follows the first expression
+        if let Ok(token) = self.current_token() {
+            match &token.kind {
+                // Comma means it's definitely a set
+                TokenKind::Comma => {
+                    // It's a set, parse remaining elements
+                    let mut elements = vec![first_expr];
+                    loop {
+                        let token = self.current_token()?;
+                        match &token.kind {
+                            TokenKind::Comma => {
+                                self.advance();
+                                // Check for trailing comma
+                                if let Ok(next) = self.current_token() {
+                                    if matches!(next.kind, TokenKind::RightBrace) {
+                                        self.advance();
+                                        break;
+                                    }
+                                }
+                                let elem = self.parse_pratt_expr(0)?;
+                                elements.push(elem);
+                            }
+                            TokenKind::RightBrace => {
+                                self.advance();
+                                break;
+                            }
+                            _ => {
+                                return Err(ParseError {
+                                    message: format!(
+                                        "Expected ',' or '}}' in set literal, got {:?}",
+                                        token.kind
+                                    ),
+                                    line: token.span.start.line as usize,
+                                    column: token.span.start.column as usize,
+                                })
+                            }
+                        }
+                    }
+                    return Ok(Expr::Set(elements));
+                }
+                // Closing brace with single expression
+                // Per LANG.txt: {identifier} is a set, {complex expr} is a block
+                // This matches usage patterns: {point} for sets, {compute()} for blocks
+                TokenKind::RightBrace => {
+                    self.advance();
+                    // Simple identifier → Set (for patterns like `seen + {point}`)
+                    // Complex expression → Block (for patterns like `part_two: { ... }`)
+                    if matches!(first_expr, Expr::Identifier(_)) {
+                        return Ok(Expr::Set(vec![first_expr]));
+                    } else {
+                        // Treat as a block with single expression statement
+                        return Ok(Expr::Block(vec![Stmt::Expr(first_expr)]));
+                    }
+                }
+                // Semicolon means it's a block
+                TokenKind::Semicolon => {
+                    // It's a block - first_expr becomes a statement, continue parsing
+                    let first_stmt = Stmt::Expr(first_expr);
+                    let mut statements = vec![first_stmt];
+
+                    loop {
+                        self.skip_statement_terminators();
+
+                        let token = self.current_token()?;
+                        if matches!(token.kind, TokenKind::RightBrace) {
+                            self.advance();
+                            break;
+                        }
+
+                        let stmt = self.parse_statement()?;
+                        statements.push(stmt);
+                    }
+                    return Ok(Expr::Block(statements));
+                }
+                // Something else - could be continuation of expression or block
+                _ => {
+                    // Could be a more complex expression that wasn't fully parsed,
+                    // or could be a block statement. Treat as block.
+                    let first_stmt = Stmt::Expr(first_expr);
+                    let mut statements = vec![first_stmt];
+
+                    loop {
+                        self.skip_statement_terminators();
+
+                        let token = self.current_token()?;
+                        if matches!(token.kind, TokenKind::RightBrace) {
+                            self.advance();
+                            break;
+                        }
+
+                        let stmt = self.parse_statement()?;
+                        statements.push(stmt);
+                    }
+                    return Ok(Expr::Block(statements));
+                }
+            }
+        }
+
+        Err(ParseError {
+            message: "Unexpected end of input in braces".to_string(),
+            line: 0,
+            column: 0,
+        })
+    }
+
+    /// Parse block body (after '{' has been consumed)
+    fn parse_block_body(&mut self) -> Result<Expr, ParseError> {
         let mut statements = Vec::new();
 
         loop {
-            // Skip any semicolons between statements
             self.skip_statement_terminators();
 
             let token = self.current_token()?;
-
-            // Check for closing brace
             if matches!(token.kind, TokenKind::RightBrace) {
                 self.advance();
                 break;
             }
 
-            // Parse statement
             let stmt = self.parse_statement()?;
             statements.push(stmt);
         }
 
         Ok(Expr::Block(statements))
+    }
+
+    fn parse_block(&mut self) -> Result<Expr, ParseError> {
+        self.advance(); // consume '{'
+        self.parse_block_body()
     }
 
     /// Parse a complete program with statements and AOC sections

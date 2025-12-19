@@ -493,17 +493,100 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Compile a pipeline operation: x |> f transforms to f(x)
-    /// If f is already a call like f(a, b), transforms to f(a, b, x)
+    ///
+    /// Per LANG.txt §4.7, the pipeline operator threads values through function calls.
+    /// There are two behaviors depending on the right-hand expression:
+    ///
+    /// 1. If f is a builtin name being called with args: x |> map(_ * 2)
+    ///    This transforms to map(_ * 2, x) - value is appended as last argument.
+    ///    This is the common case for builtins like map, filter, fold, etc.
+    ///
+    /// 2. If f is a call to a user-defined function or variable that returns a function:
+    ///    x |> make_func(1) transforms to (make_func(1))(x)
+    ///    The call is evaluated first, returning a function, then that function is called with x.
+    ///
+    /// We distinguish these by checking if the function being called is a known builtin.
     fn compile_pipeline(
         &mut self,
         value: &Expr,
         function: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
-        // If function is already a Call expression, append value to its args
+        // If function is already a Call expression, check if it's a builtin
         if let Expr::Call { function: inner_fn, args } = function {
-            let mut new_args = args.clone();
-            new_args.push(value.clone());
-            return self.compile_call(inner_fn, &new_args);
+            // Check if the inner function is a builtin that takes a collection as last arg
+            let is_known_builtin = if let Expr::Identifier(name) = inner_fn.as_ref() {
+                matches!(name.as_str(),
+                    "map" | "filter" | "fold" | "reduce" | "find" | "any?" | "all?" |
+                    "each" | "scan" | "take" | "skip" | "zip" | "count" | "sum" |
+                    "max" | "min" | "first" | "second" | "last" | "rest" | "push" |
+                    "assoc" | "update" | "update_d" | "get" | "keys" | "values" |
+                    "filter_map" | "find_map" | "includes?" | "excludes?" |
+                    "sort" | "reverse" | "list" | "set" | "dict" | "size" |
+                    "split" | "join" | "rotate" | "combinations" | "flat_map" |
+                    "collect" | "flat" | "flatten" | "chunk" | "windows" |
+                    "group_by" | "partition" | "take_while" | "drop_while" |
+                    "zip_with" | "interleave" | "intersperse" | "transpose" |
+                    "unique" | "frequencies" | "index_of" | "find_index" |
+                    "sorted" | "group" | "nth" | "range"
+                )
+            } else {
+                false
+            };
+
+            if is_known_builtin {
+                // For builtins, append value as last argument: x |> map(f) → map(f, x)
+                let mut new_args = args.clone();
+                new_args.push(value.clone());
+                return self.compile_call(inner_fn, &new_args);
+            } else {
+                // For user-defined functions, evaluate the call first, then call result with value
+                // x |> make_f(1) → (make_f(1))(x)
+                let func_result = self.compile_call(inner_fn, args)?;
+
+                // Now call func_result with value
+                let value_ty = self.infer_expr_type(value);
+                let value_typed = TypedExpr {
+                    expr: value.clone(),
+                    ty: value_ty,
+                    span: crate::lexer::token::Span::new(
+                        crate::lexer::token::Position::new(0, 0),
+                        crate::lexer::token::Position::new(0, 0),
+                    ),
+                };
+                let value_compiled = self.compile_expr(&value_typed)?;
+
+                // Allocate array for the single argument
+                let i64_type = self.context.i64_type();
+                let argv_alloca = self.builder.build_alloca(
+                    i64_type.array_type(1),
+                    "pipeline_argv"
+                ).unwrap();
+
+                // Store the value argument
+                let zero = self.context.i32_type().const_int(0, false);
+                let gep = unsafe {
+                    self.builder.build_gep(
+                        i64_type.array_type(1),
+                        argv_alloca,
+                        &[zero, zero],
+                        "argv_0"
+                    ).unwrap()
+                };
+                self.builder.build_store(gep, value_compiled).unwrap();
+
+                // Call the function result with the value
+                let rt_call = self.get_or_declare_rt_call();
+                let result = self.builder.build_call(
+                    rt_call,
+                    &[
+                        func_result.into(),
+                        self.context.i32_type().const_int(1, false).into(),
+                        argv_alloca.into(),
+                    ],
+                    "pipeline_call"
+                ).unwrap();
+                return Ok(result.try_as_basic_value().left().unwrap());
+            }
         }
 
         // Otherwise, x |> f transforms to f(x)
@@ -2690,41 +2773,81 @@ impl<'ctx> CodegenContext<'ctx> {
                 };
                 let list_val = self.compile_expr(&value_typed)?;
 
-                // Extract each element and bind to the corresponding pattern
-                let rt_get = self.get_or_declare_rt_get();
-                for (i, pat) in patterns.iter().enumerate() {
-                    match pat {
-                        Pattern::Identifier(name) => {
-                            // Get element at index i
-                            let index = self.context.i64_type().const_int(i as u64, false);
-                            let index_val = self.compile_integer(index.get_sign_extended_constant().unwrap());
-                            let elem = self.builder.build_call(
-                                rt_get,
-                                &[index_val.into(), list_val.into()],
-                                &format!("destructure_{}", name),
-                            ).unwrap().try_as_basic_value().left().unwrap();
-
-                            // Create alloca and store
-                            let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
-                            self.builder.build_store(alloca, elem).unwrap();
-                            self.variables.insert(name.clone(), alloca);
-                        }
-                        Pattern::Wildcard => {
-                            // Ignore this element
-                        }
-                        _ => {
-                            return Err(CompileError::UnsupportedPattern(
-                                format!("Nested patterns in let destructuring not yet implemented: {:?}", pat)
-                            ));
-                        }
-                    }
-                }
-                Ok(())
+                // Bind patterns to the list value
+                self.compile_pattern_binding_list(patterns, list_val)
             }
             _ => Err(CompileError::UnsupportedPattern(
                 format!("Pattern type not yet implemented: {:?}", pattern)
             ))
         }
+    }
+
+    /// Bind a list of patterns to elements of a list value
+    /// Supports nested patterns, rest patterns, and wildcards
+    fn compile_pattern_binding_list(
+        &mut self,
+        patterns: &[Pattern],
+        list_val: BasicValueEnum<'ctx>,
+    ) -> Result<(), CompileError> {
+        let rt_get = self.get_or_declare_rt_get();
+        let rt_skip = self.get_or_declare_rt_skip();
+
+        for (i, pat) in patterns.iter().enumerate() {
+            match pat {
+                Pattern::Identifier(name) => {
+                    // Get element at index i
+                    let index_val = self.compile_integer(i as i64);
+                    let elem = self.builder.build_call(
+                        rt_get,
+                        &[index_val.into(), list_val.into()],
+                        &format!("destructure_{}", name),
+                    ).unwrap().try_as_basic_value().left().unwrap();
+
+                    // Create alloca and store
+                    let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
+                    self.builder.build_store(alloca, elem).unwrap();
+                    self.variables.insert(name.clone(), alloca);
+                }
+                Pattern::Wildcard => {
+                    // Ignore this element
+                }
+                Pattern::List(nested_patterns) => {
+                    // Get element at index i (which should be a list)
+                    let index_val = self.compile_integer(i as i64);
+                    let nested_list = self.builder.build_call(
+                        rt_get,
+                        &[index_val.into(), list_val.into()],
+                        &format!("destructure_nested_{}", i),
+                    ).unwrap().try_as_basic_value().left().unwrap();
+
+                    // Recursively bind the nested patterns
+                    self.compile_pattern_binding_list(nested_patterns, nested_list)?;
+                }
+                Pattern::RestIdentifier(name) => {
+                    // Get the rest of the list starting at index i
+                    let skip_count = self.compile_integer(i as i64);
+                    let rest = self.builder.build_call(
+                        rt_skip,
+                        &[skip_count.into(), list_val.into()],
+                        &format!("destructure_rest_{}", name),
+                    ).unwrap().try_as_basic_value().left().unwrap();
+
+                    // Create alloca and store
+                    let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
+                    self.builder.build_store(alloca, rest).unwrap();
+                    self.variables.insert(name.clone(), alloca);
+
+                    // Rest pattern should be last in the list - stop processing
+                    break;
+                }
+                _ => {
+                    return Err(CompileError::UnsupportedPattern(
+                        format!("Pattern type not supported in list destructuring: {:?}", pat)
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     // ===== Phase 9: Closures & Function Calls =====

@@ -259,10 +259,11 @@ fn infer_if_mixed_branches() {
 
 #[test]
 fn infer_block_single_expr() {
-    // { 42 } → Int
+    // { 42 } → Int (single non-identifier expression in braces is a block)
     let ty = infer_type("{ 42 }");
     assert_eq!(ty, Type::Int);
 }
+
 
 #[test]
 fn infer_block_multiple_exprs() {
