@@ -21,6 +21,47 @@ pub unsafe extern "C" fn rt_list_from_values(values: *const Value, count: usize)
     Value::from_heap_ptr(Box::into_raw(list))
 }
 
+/// Push a single element to the end of a list
+/// Returns a new list with the element appended.
+#[no_mangle]
+pub extern "C" fn rt_list_push(list: Value, elem: Value) -> Value {
+    if let Some(l) = list.as_list() {
+        let mut new_list = l.clone();
+        new_list.push_back(elem);
+        Value::from_list(new_list)
+    } else {
+        // If not a list, create a new list with just this element
+        let mut new_list = im::Vector::new();
+        new_list.push_back(elem);
+        Value::from_list(new_list)
+    }
+}
+
+/// Concatenate two lists (or a list with a lazy sequence)
+/// Returns a new list with all elements from both collections.
+#[no_mangle]
+pub extern "C" fn rt_list_concat(list1: Value, list2: Value) -> Value {
+    let mut result = if let Some(l) = list1.as_list() {
+        l.clone()
+    } else {
+        im::Vector::new()
+    };
+
+    // Handle list2 as list or lazy sequence
+    if let Some(l2) = list2.as_list() {
+        result.append(l2.clone());
+    } else if let Some(lazy) = list2.as_lazy_sequence() {
+        // Materialize lazy sequence
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            result.push_back(val);
+            current = *next_seq;
+        }
+    }
+
+    Value::from_list(result)
+}
+
 /// Create an empty set
 #[no_mangle]
 pub extern "C" fn rt_set_new() -> Value {

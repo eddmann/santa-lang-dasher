@@ -2374,6 +2374,7 @@ Many built-in functions currently only support List, Set, Dict. The following ne
 | 19    | CLI                  | Command-line interface                    |
 | 20    | Benchmarks           | Performance validation                    |
 | 21    | Integration          | Final polish & verification               |
+| 22    | **Ergonomics**       | **Partial application, destructuring, spread** |
 
 Each phase builds on previous phases. Release gates ensure quality before proceeding.
 
@@ -2394,3 +2395,208 @@ Dispatch to int add
 
 Expected: 5-20x speedup for numeric-heavy AOC code
 ```
+
+---
+
+## Phase 22: Language Ergonomics
+
+**Goal**: Implement syntactic sugar features that make santa-lang concise and ergonomic for AOC solutions.
+
+**LANG.txt Reference**: §8.4 Partial Application, §5.2 Destructuring, §10.5 Ranges, §6.3 Spread Operator
+
+These features transform verbose explicit code into concise one-liners. Without them, real-world AOC solutions won't run.
+
+### 22.1 Partial Application of Built-ins
+
+When a built-in function is called with fewer arguments than required, it returns a closure capturing the provided arguments:
+
+```santa
+// Current: explicit lambda required
+let parse = |s| split("\n\n", s);
+
+// With partial application:
+let parse = split("\n\n");  // Returns |s| split("\n\n", s)
+
+// Used in pipelines:
+input |> split("\n\n") |> map(ints)
+```
+
+**Implementation**:
+- In codegen, when compiling `Call` to a builtin with fewer args than arity:
+  - Create a closure that captures provided args
+  - Closure takes remaining args and calls the builtin with all args
+- Requires knowing builtin arities (already in `types/builtins.rs`)
+
+**Test Cases**:
+```rust
+#[test]
+fn partial_split() { assert_eq!(eval("split(\",\")(\"a,b,c\")"), list!["a", "b", "c"]); }
+#[test]
+fn partial_map() { assert_eq!(eval("[1,2,3] |> map(_ + 1)"), list![2, 3, 4]); }
+#[test]
+fn partial_in_composition() { assert_eq!(eval("(split(\",\") >> map(int))(\"1,2,3\")"), list![1, 2, 3]); }
+```
+
+### 22.2 Destructuring in Lambda Parameters
+
+Lambda parameters can be patterns that destructure their arguments:
+
+```santa
+// Current: manual extraction
+|pair| { let a = pair[0]; let b = pair[1]; a + b }
+
+// With destructuring:
+|[a, b]| a + b
+
+// Real AOC usage:
+parse_strategy(input) |> map(|[elf, me]| {
+  let shape = lookup[me] + 1;
+  shape + outcome;
+})
+```
+
+**Implementation**:
+- Parser: Allow `Pattern` in lambda parameter position, not just `Identifier`
+- Codegen: For pattern params, compile as:
+  1. Bind argument to temporary
+  2. Pattern match temporary, binding extracted variables
+  3. Compile body with extracted bindings in scope
+
+**Test Cases**:
+```rust
+#[test]
+fn lambda_destructure_list() { assert_eq!(eval("(|[a, b]| a + b)([1, 2])"), 3); }
+#[test]
+fn lambda_destructure_nested() { assert_eq!(eval("(|[[a, b], c]| a + b + c)([[1, 2], 3])"), 6); }
+#[test]
+fn lambda_destructure_rest() { assert_eq!(eval("(|[first, ..rest]| first)([1, 2, 3])"), 1); }
+#[test]
+fn map_with_destructure() { assert_eq!(eval("[[1,2],[3,4]] |> map(|[a,b]| a+b)"), list![3, 7]); }
+```
+
+### 22.3 Infinite Ranges
+
+Ranges without an end value produce unbounded lazy sequences:
+
+```santa
+// Current: only bounded ranges work
+1..10   // Works: LazySequence [1, 2, ..., 9]
+1..=10  // Works: LazySequence [1, 2, ..., 10]
+
+// Infinite ranges:
+1..     // Unbounded: LazySequence [1, 2, 3, ...]
+
+// Used with take/find:
+1.. |> filter(is_prime) |> take(10)   // First 10 primes
+zip("abc", 1..) |> dict               // #{"a": 1, "b": 2, "c": 3}
+```
+
+**Implementation**:
+- Lexer: Already handles `..` - need to allow missing RHS in parser
+- Parser: `Range { start, end: None, inclusive: false }` for `expr..`
+- Runtime: LazySequence Range variant already supports `end: None`
+
+**Test Cases**:
+```rust
+#[test]
+fn infinite_range_take() { assert_eq!(eval("1.. |> take(5) |> list"), list![1, 2, 3, 4, 5]); }
+#[test]
+fn infinite_range_find() { assert_eq!(eval("1.. |> find(_ > 100)"), 101); }
+#[test]
+fn zip_with_infinite() { assert_eq!(eval("zip(\"abc\", 1..) |> dict"), dict!{"a": 1, "b": 2, "c": 3}); }
+```
+
+### 22.4 Spread Operator
+
+The spread operator `..expr` expands collections inline:
+
+```santa
+// In list literals:
+let a = [1, 2];
+let b = [..a, 3, 4];        // [1, 2, 3, 4]
+let c = [0, ..a, ..b];      // [0, 1, 2, 1, 2, 3, 4]
+
+// In function calls:
+zip(..collections)           // Spread list of collections as varargs
+
+// Real AOC usage (Day 5):
+stacks |> assoc(to-1, [..crates, ..stacks[to-1]])
+```
+
+**Implementation**:
+- Parser: Already parses `Spread(Box<Expr>)` - verify it works in lists and calls
+- Codegen for list literals:
+  - For each element, check if `Spread`
+  - If spread, iterate and append all elements
+  - If not spread, append single element
+- Codegen for function calls:
+  - Collect spread args into single list before calling
+
+**Test Cases**:
+```rust
+#[test]
+fn spread_in_list() { assert_eq!(eval("let a = [1,2]; [..a, 3]"), list![1, 2, 3]); }
+#[test]
+fn spread_multiple() { assert_eq!(eval("let a = [1]; let b = [2]; [..a, ..b]"), list![1, 2]); }
+#[test]
+fn spread_in_call() { assert_eq!(eval("let args = [[1,2], [3,4]]; zip(..args) |> list"), list![list![1,3], list![2,4]]); }
+```
+
+### 22.5 Placeholder in Arbitrary Position
+
+The placeholder `_` can appear in any argument position to create a partial function:
+
+```santa
+// Current: only trailing placeholder works via partial application transform
+_ + 1        // Works: |x| x + 1
+
+// Arbitrary position:
+get(_, dict)           // |x| get(x, dict)
+split(_, ",")          // |x| split(x, ",")
+assoc(0, _, list)      // |x| assoc(0, x, list)
+
+// Multiple placeholders:
+assoc(_, _, list)      // |a, b| assoc(a, b, list)
+```
+
+**Implementation**:
+- Parser: Already transforms `_ op expr` to lambda during parsing
+- Extend to function calls: When `Call` has `Placeholder` args:
+  - Count placeholders to determine lambda arity
+  - Create lambda with fresh params
+  - Replace placeholders with params in order
+  - Transform `Call { f, [a, _, b, _] }` → `|p1, p2| f(a, p1, b, p2)`
+
+**Test Cases**:
+```rust
+#[test]
+fn placeholder_first_arg() { assert_eq!(eval("get(_, [10,20,30])(1)"), 20); }
+#[test]
+fn placeholder_middle_arg() { assert_eq!(eval("assoc(0, _, [1,2,3])(99)"), list![99, 2, 3]); }
+#[test]
+fn placeholder_multiple() { assert_eq!(eval("assoc(_, _, [1,2,3])(0, 99)"), list![99, 2, 3]); }
+#[test]
+fn placeholder_in_pipeline() { assert_eq!(eval("[1,2,3] |> get(_, [10,20,30,40])"), list![20, 30, 40]); }
+```
+
+### 22.6 Implementation Order
+
+Recommended order based on dependencies and AOC solution needs:
+
+1. **Infinite ranges** (22.3) - Parser change only, runtime already supports
+2. **Spread operator** (22.4) - Needed for zip and list construction
+3. **Partial application of builtins** (22.1) - Enables pipeline style
+4. **Placeholder in arbitrary position** (22.5) - Extends existing placeholder handling
+5. **Destructuring in lambda params** (22.2) - Most complex, extends parser and codegen
+
+### Release Gate 22
+
+- [x] **Infinite ranges** (`1..`) produce unbounded LazySequence
+- [ ] **Spread in lists** (`[..a, ..b]`) concatenates inline
+- [ ] **Spread in calls** (`f(..args)`) expands arguments
+- [x] **Partial application** of builtins returns closure for missing args
+- [ ] **Placeholder** works in any argument position
+- [ ] **Destructuring** in lambda parameters extracts bindings
+- [x] AOC 2022 Day 1 runs correctly (Day 2-5 need remaining features)
+- [x] All tests pass (275 passing)
+- [x] `cargo clippy` clean

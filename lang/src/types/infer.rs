@@ -152,6 +152,27 @@ impl TypeInference {
             Expr::Set(elements) => self.infer_set(elements)?,
             Expr::Dict(entries) => self.infer_dict(entries)?,
 
+            // Range expressions: start..end or start..=end or start..
+            Expr::Range { start, end, .. } => {
+                let start_ty = self.infer_expr(start)?.ty;
+                if let Some(end_expr) = end {
+                    let end_ty = self.infer_expr(end_expr)?.ty;
+                    // If both are Int, result is LazySequence<Int>
+                    if matches!(start_ty, Type::Int) && matches!(end_ty, Type::Int) {
+                        Type::LazySequence(Box::new(Type::Int))
+                    } else {
+                        Type::Unknown
+                    }
+                } else {
+                    // Unbounded range: if start is Int, result is LazySequence<Int>
+                    if matches!(start_ty, Type::Int) {
+                        Type::LazySequence(Box::new(Type::Int))
+                    } else {
+                        Type::Unknown
+                    }
+                }
+            }
+
             // Identifiers - look up in environment
             Expr::Identifier(name) => {
                 self.env.get(name).cloned().unwrap_or(Type::Unknown)
@@ -291,7 +312,9 @@ impl TypeInference {
             Expr::Function { params, body } if params.len() == 1 => {
                 // Bind the single parameter to the left type and infer the body
                 let old_env = self.env.clone();
-                self.env.insert(params[0].name.clone(), left_ty);
+                if let Some(param_name) = params[0].name() {
+                    self.env.insert(param_name.to_string(), left_ty);
+                }
                 let body_ty = self.infer_expr(body)?.ty;
                 self.env = old_env;
                 Ok(body_ty)
@@ -372,7 +395,9 @@ impl TypeInference {
         // Bind parameters to argument types
         for (i, param) in params.iter().enumerate() {
             let arg_ty = arg_types.get(i).cloned().unwrap_or(Type::Unknown);
-            self.env.insert(param.name.clone(), arg_ty);
+            if let Some(param_name) = param.name() {
+                self.env.insert(param_name.to_string(), arg_ty);
+            }
         }
 
         // Re-infer the body with concrete parameter types
@@ -458,7 +483,9 @@ impl TypeInference {
         // Bind parameters to expected types
         for (i, param) in params.iter().enumerate() {
             let param_ty = expected_params.get(i).cloned().unwrap_or(Type::Unknown);
-            self.env.insert(param.name.clone(), param_ty.clone());
+            if let Some(param_name) = param.name() {
+                self.env.insert(param_name.to_string(), param_ty.clone());
+            }
         }
 
         // Re-infer the body with the expected parameter types
@@ -516,7 +543,9 @@ impl TypeInference {
                 // Use expected parameter types from context
                 params.iter().enumerate().map(|(i, param)| {
                     let ty = expected_params.get(i).cloned().unwrap_or(Type::Unknown);
-                    self.env.insert(param.name.clone(), ty.clone());
+                    if let Some(param_name) = param.name() {
+                        self.env.insert(param_name.to_string(), ty.clone());
+                    }
                     ty
                 }).collect()
             }
@@ -524,7 +553,9 @@ impl TypeInference {
                 // No expected type - params are Unknown
                 params.iter().map(|param| {
                     let ty = Type::Unknown;
-                    self.env.insert(param.name.clone(), ty.clone());
+                    if let Some(param_name) = param.name() {
+                        self.env.insert(param_name.to_string(), ty.clone());
+                    }
                     ty
                 }).collect()
             }

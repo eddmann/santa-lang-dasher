@@ -485,15 +485,25 @@ impl Runner {
         match expr {
             Expr::Integer(n) => n.to_string(),
             Expr::Decimal(d) => d.to_string(),
-            Expr::String(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+            Expr::String(s) => {
+                // Escape special characters in string literals
+                let escaped = s
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('\n', "\\n")
+                    .replace('\r', "\\r")
+                    .replace('\t', "\\t");
+                format!("\"{}\"", escaped)
+            }
             Expr::Boolean(b) => b.to_string(),
             Expr::Nil => "nil".to_string(),
             Expr::Identifier(name) => name.clone(),
             Expr::Placeholder => "_".to_string(),
             Expr::Infix { left, op, right } => {
-                // Don't wrap in parentheses - let operator precedence handle it
+                // Always wrap in parentheses to preserve the original grouping
+                // This ensures expressions like (a + b) % 3 aren't converted to a + b % 3
                 format!(
-                    "{} {} {}",
+                    "({} {} {})",
                     self.expr_to_source(left),
                     self.infix_op_to_source(op),
                     self.expr_to_source(right)
@@ -554,7 +564,7 @@ impl Runner {
             Expr::Function { params, body } => {
                 let params_str: Vec<String> = params
                     .iter()
-                    .map(|p| p.name.clone())
+                    .map(|p| self.pattern_to_source(&p.pattern))
                     .collect();
                 format!("|{}| {}", params_str.join(", "), self.expr_to_source(body))
             }
@@ -607,6 +617,9 @@ impl Runner {
             }
             Expr::Assignment { name, value } => {
                 format!("{} = {}", name, self.expr_to_source(value))
+            }
+            Expr::Spread(inner) => {
+                format!("..{}", self.expr_to_source(inner))
             }
             _ => format!("/* unsupported expr: {:?} */", expr),
         }

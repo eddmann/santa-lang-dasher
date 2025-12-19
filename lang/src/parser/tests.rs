@@ -208,9 +208,12 @@ fn parse_negative_integer_literal() {
     // Negative integers are lexed as single tokens
     let expr = parse_expr("-5").unwrap();
     expect![[r#"
-        Integer(
-            -5,
-        )
+        Prefix {
+            op: Negate,
+            right: Integer(
+                5,
+            ),
+        }
     "#]]
     .assert_debug_eq(&expr);
 }
@@ -237,7 +240,9 @@ fn parse_function_expression() {
         Function {
             params: [
                 Param {
-                    name: "x",
+                    pattern: Identifier(
+                        "x",
+                    ),
                 },
             ],
             body: Infix {
@@ -277,10 +282,48 @@ fn parse_function_multiple_params() {
         Function {
             params: [
                 Param {
-                    name: "a",
+                    pattern: Identifier(
+                        "a",
+                    ),
                 },
                 Param {
-                    name: "b",
+                    pattern: Identifier(
+                        "b",
+                    ),
+                },
+            ],
+            body: Infix {
+                left: Identifier(
+                    "a",
+                ),
+                op: Add,
+                right: Identifier(
+                    "b",
+                ),
+            },
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_function_destructuring_param() {
+    // Test destructuring parameter |[a, b]| a + b
+    let expr = parse_expr("|[a, b]| a + b").unwrap();
+    expect![[r#"
+        Function {
+            params: [
+                Param {
+                    pattern: List(
+                        [
+                            Identifier(
+                                "a",
+                            ),
+                            Identifier(
+                                "b",
+                            ),
+                        ],
+                    ),
                 },
             ],
             body: Infix {
@@ -306,7 +349,9 @@ fn parse_partial_application() {
         Function {
             params: [
                 Param {
-                    name: "__arg_0",
+                    pattern: Identifier(
+                        "__arg_0",
+                    ),
                 },
             ],
             body: Infix {
@@ -332,10 +377,14 @@ fn parse_partial_application_multiple_placeholders() {
         Function {
             params: [
                 Param {
-                    name: "__arg_0",
+                    pattern: Identifier(
+                        "__arg_0",
+                    ),
                 },
                 Param {
-                    name: "__arg_1",
+                    pattern: Identifier(
+                        "__arg_1",
+                    ),
                 },
             ],
             body: Infix {
@@ -361,7 +410,9 @@ fn parse_partial_application_right_operand() {
         Function {
             params: [
                 Param {
-                    name: "__arg_0",
+                    pattern: Identifier(
+                        "__arg_0",
+                    ),
                 },
             ],
             body: Infix {
@@ -389,8 +440,8 @@ fn parse_operator_reference_add() {
         match &args[1] {
             Expr::Function { params, body } => {
                 assert_eq!(params.len(), 2);
-                assert_eq!(params[0].name, "__op_0");
-                assert_eq!(params[1].name, "__op_1");
+                assert_eq!(params[0].name(), Some("__op_0"));
+                assert_eq!(params[1].name(), Some("__op_1"));
                 match body.as_ref() {
                     Expr::Infix { op, .. } => {
                         assert_eq!(*op, InfixOp::Add);
@@ -571,14 +622,16 @@ fn parse_range_exclusive() {
     // Test exclusive range 1..5
     let expr = parse_expr("1..5").unwrap();
     expect![[r#"
-        Infix {
-            left: Integer(
+        Range {
+            start: Integer(
                 1,
             ),
-            op: Range,
-            right: Integer(
-                5,
+            end: Some(
+                Integer(
+                    5,
+                ),
             ),
+            inclusive: false,
         }
     "#]]
     .assert_debug_eq(&expr);
@@ -589,14 +642,32 @@ fn parse_range_inclusive() {
     // Test inclusive range 1..=5
     let expr = parse_expr("1..=5").unwrap();
     expect![[r#"
-        Infix {
-            left: Integer(
+        Range {
+            start: Integer(
                 1,
             ),
-            op: RangeInclusive,
-            right: Integer(
-                5,
+            end: Some(
+                Integer(
+                    5,
+                ),
             ),
+            inclusive: true,
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_range_infinite() {
+    // Test infinite range 1..
+    let expr = parse_expr("1..").unwrap();
+    expect![[r#"
+        Range {
+            start: Integer(
+                1,
+            ),
+            end: None,
+            inclusive: false,
         }
     "#]]
     .assert_debug_eq(&expr);
@@ -661,7 +732,9 @@ fn parse_let_binding_with_lambda() {
             value: Function {
                 params: [
                     Param {
-                        name: "x",
+                        pattern: Identifier(
+                            "x",
+                        ),
                     },
                 ],
                 body: Infix {
@@ -697,7 +770,9 @@ fn parse_memoize_call() {
                     Function {
                         params: [
                             Param {
-                                name: "x",
+                                pattern: Identifier(
+                                    "x",
+                                ),
                             },
                         ],
                         body: Identifier(
@@ -1167,7 +1242,9 @@ fn parse_trailing_lambda() {
                 Function {
                     params: [
                         Param {
-                            name: "x",
+                            pattern: Identifier(
+                                "x",
+                            ),
                         },
                     ],
                     body: Infix {

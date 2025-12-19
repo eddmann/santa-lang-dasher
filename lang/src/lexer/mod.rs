@@ -63,13 +63,9 @@ impl Lexer {
             // Numbers (integers and decimals)
             '0'..='9' => self.lex_number()?,
             '-' => {
-                // Check if this is a negative number or minus operator
-                if self.position + 1 < self.input.len() && self.input[self.position + 1].is_ascii_digit() {
-                    self.lex_number()?
-                } else {
-                    self.advance();
-                    TokenKind::Minus
-                }
+                // Always emit Minus - let parser handle unary minus for negative numbers
+                self.advance();
+                TokenKind::Minus
             }
             // Strings
             '"' => self.lex_string()?,
@@ -186,11 +182,8 @@ impl Lexer {
                     if self.peek() == '=' {
                         self.advance();
                         TokenKind::DotDotEqual
-                    } else if self.peek().is_alphabetic() {
-                        // This is a rest identifier like ..rest
-                        let ident = self.lex_identifier_name()?;
-                        TokenKind::DotDotIdent(ident)
                     } else {
+                        // Always produce DotDot - the parser handles ..identifier for rest patterns
                         TokenKind::DotDot
                     }
                 } else {
@@ -370,11 +363,6 @@ impl Lexer {
         let start = self.current_position();
         let mut text = String::new();
         let mut has_decimal_point = false;
-
-        // Handle negative sign
-        if self.peek() == '-' {
-            text.push(self.advance());
-        }
 
         // Collect digits with optional underscores
         while !self.is_at_end() {

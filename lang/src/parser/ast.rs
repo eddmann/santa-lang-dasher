@@ -118,7 +118,22 @@ pub enum InfixOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
-    pub name: String,
+    pub pattern: Pattern,
+}
+
+impl Param {
+    /// Create a simple identifier parameter
+    pub fn simple(name: String) -> Self {
+        Param { pattern: Pattern::Identifier(name) }
+    }
+
+    /// Get the name if this is a simple identifier parameter
+    pub fn name(&self) -> Option<&str> {
+        match &self.pattern {
+            Pattern::Identifier(name) => Some(name),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

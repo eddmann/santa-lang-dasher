@@ -53,13 +53,26 @@ fn lex_integer_literals() {
             Ok(
                 [
                     Token {
-                        kind: Integer(
-                            -17,
-                        ),
+                        kind: Minus,
                         span: Span {
                             start: Position {
                                 line: 1,
                                 column: 1,
+                            },
+                            end: Position {
+                                line: 1,
+                                column: 2,
+                            },
+                        },
+                    },
+                    Token {
+                        kind: Integer(
+                            17,
+                        ),
+                        span: Span {
+                            start: Position {
+                                line: 1,
+                                column: 2,
                             },
                             end: Position {
                                 line: 1,
@@ -237,13 +250,26 @@ fn lex_decimal_literals() {
             Ok(
                 [
                     Token {
-                        kind: Decimal(
-                            -0.5,
-                        ),
+                        kind: Minus,
                         span: Span {
                             start: Position {
                                 line: 1,
                                 column: 1,
+                            },
+                            end: Position {
+                                line: 1,
+                                column: 2,
+                            },
+                        },
+                    },
+                    Token {
+                        kind: Decimal(
+                            0.5,
+                        ),
+                        span: Span {
+                            start: Position {
+                                line: 1,
+                                column: 2,
                             },
                             end: Position {
                                 line: 1,

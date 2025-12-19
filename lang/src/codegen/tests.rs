@@ -657,7 +657,7 @@ fn codegen_simple_function_expression() {
     // Create a simple function expression: |x| x + 1
     let expr = TypedExpr {
         expr: Expr::Function {
-            params: vec![Param { name: "x".to_string() }],
+            params: vec![Param::simple("x".to_string())],
             body: Box::new(Expr::Infix {
                 left: Box::new(Expr::Identifier("x".to_string())),
                 op: InfixOp::Add,
@@ -690,7 +690,7 @@ fn codegen_function_call() {
     let expr = TypedExpr {
         expr: Expr::Call {
             function: Box::new(Expr::Function {
-                params: vec![Param { name: "x".to_string() }],
+                params: vec![Param::simple("x".to_string())],
                 body: Box::new(Expr::Infix {
                     left: Box::new(Expr::Identifier("x".to_string())),
                     op: InfixOp::Add,
@@ -721,8 +721,8 @@ fn codegen_function_with_multiple_params() {
     let expr = TypedExpr {
         expr: Expr::Function {
             params: vec![
-                Param { name: "a".to_string() },
-                Param { name: "b".to_string() },
+                Param::simple("a".to_string()),
+                Param::simple("b".to_string()),
             ],
             body: Box::new(Expr::Infix {
                 left: Box::new(Expr::Identifier("a".to_string())),
@@ -812,7 +812,7 @@ fn codegen_closure_captures_variable() {
     // Create a closure that captures x: |y| x + y
     let closure_expr = TypedExpr {
         expr: Expr::Function {
-            params: vec![Param { name: "y".to_string() }],
+            params: vec![Param::simple("y".to_string())],
             body: Box::new(Expr::Infix {
                 left: Box::new(Expr::Identifier("x".to_string())),
                 op: InfixOp::Add,
@@ -844,9 +844,9 @@ fn codegen_make_adder_pattern() {
     // This is a function that returns a closure capturing x
     let make_adder_expr = TypedExpr {
         expr: Expr::Function {
-            params: vec![Param { name: "x".to_string() }],
+            params: vec![Param::simple("x".to_string())],
             body: Box::new(Expr::Function {
-                params: vec![Param { name: "y".to_string() }],
+                params: vec![Param::simple("y".to_string())],
                 body: Box::new(Expr::Infix {
                     left: Box::new(Expr::Identifier("x".to_string())),
                     op: InfixOp::Add,
@@ -891,7 +891,7 @@ fn codegen_tco_simple_recursion() {
         mutable: false,
         pattern: Pattern::Identifier("countdown".to_string()),
         value: Expr::Function {
-            params: vec![Param { name: "n".to_string() }],
+            params: vec![Param::simple("n".to_string())],
             body: Box::new(Expr::If {
                 condition: Box::new(Expr::Infix {
                     left: Box::new(Expr::Identifier("n".to_string())),
@@ -935,8 +935,8 @@ fn codegen_tco_factorial_accumulator() {
         pattern: Pattern::Identifier("factorial".to_string()),
         value: Expr::Function {
             params: vec![
-                Param { name: "acc".to_string() },
-                Param { name: "n".to_string() },
+                Param::simple("acc".to_string()),
+                Param::simple("n".to_string()),
             ],
             body: Box::new(Expr::If {
                 condition: Box::new(Expr::Infix {
@@ -983,7 +983,7 @@ fn codegen_tco_generates_branch_not_call() {
         mutable: false,
         pattern: Pattern::Identifier("countdown".to_string()),
         value: Expr::Function {
-            params: vec![Param { name: "n".to_string() }],
+            params: vec![Param::simple("n".to_string())],
             body: Box::new(Expr::If {
                 condition: Box::new(Expr::Infix {
                     left: Box::new(Expr::Identifier("n".to_string())),
@@ -1034,7 +1034,7 @@ fn codegen_tco_non_tail_position_uses_call() {
         mutable: false,
         pattern: Pattern::Identifier("factorial".to_string()),
         value: Expr::Function {
-            params: vec![Param { name: "n".to_string() }],
+            params: vec![Param::simple("n".to_string())],
             body: Box::new(Expr::If {
                 condition: Box::new(Expr::Infix {
                     left: Box::new(Expr::Identifier("n".to_string())),
@@ -1084,7 +1084,7 @@ fn codegen_tco_match_expression() {
         mutable: false,
         pattern: Pattern::Identifier("countdown".to_string()),
         value: Expr::Function {
-            params: vec![Param { name: "n".to_string() }],
+            params: vec![Param::simple("n".to_string())],
             body: Box::new(Expr::Match {
                 subject: Box::new(Expr::Identifier("n".to_string())),
                 arms: vec![
@@ -1754,7 +1754,7 @@ fn codegen_pipeline_operator() {
         mutable: false,
         pattern: Pattern::Identifier("my_func".to_string()),
         value: Expr::Function {
-            params: vec![Param { name: "x".to_string() }],
+            params: vec![Param::simple("x".to_string())],
             body: Box::new(Expr::Identifier("x".to_string())),
         },
     };

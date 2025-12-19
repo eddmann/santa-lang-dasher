@@ -32,8 +32,8 @@ impl Parser {
     fn make_operator_lambda(op: InfixOp) -> Expr {
         Expr::Function {
             params: vec![
-                Param { name: "__op_0".to_string() },
-                Param { name: "__op_1".to_string() },
+                Param::simple("__op_0".to_string()),
+                Param::simple("__op_1".to_string()),
             ],
             body: Box::new(Expr::Infix {
                 left: Box::new(Expr::Identifier("__op_0".to_string())),
@@ -89,7 +89,7 @@ impl Parser {
 
         // Generate parameter names
         let params: Vec<Param> = (0..placeholder_count)
-            .map(|i| Param { name: format!("__arg_{}", i) })
+            .map(|i| Param::simple(format!("__arg_{}", i)))
             .collect();
 
         // Replace placeholders with identifiers
@@ -351,6 +351,14 @@ impl Parser {
                     Ok(Self::make_operator_lambda(InfixOp::Subtract))
                 }
             }
+            TokenKind::DotDot => {
+                // Spread operator: ..expr
+                // Used in list literals: [..a, ..b]
+                // Also used for infinite ranges when at start: ..n (same as 0..n)
+                self.advance(); // consume '..'
+                let expr = self.parse_pratt_expr(7)?; // High precedence
+                Ok(Expr::Spread(Box::new(expr)))
+            }
             TokenKind::VerticalBar => {
                 self.parse_function()
             }
@@ -365,6 +373,21 @@ impl Parser {
             }
             TokenKind::Match => {
                 self.parse_match()
+            }
+            TokenKind::LeftParen => {
+                // Grouped expression: (expr)
+                self.advance(); // consume '('
+                let expr = self.parse_expression()?;
+                let close = self.current_token()?;
+                if !matches!(close.kind, TokenKind::RightParen) {
+                    return Err(ParseError {
+                        message: format!("Expected ')' after grouped expression, got {:?}", close.kind),
+                        line: close.span.start.line as usize,
+                        column: close.span.start.column as usize,
+                    });
+                }
+                self.advance(); // consume ')'
+                Ok(expr)
             }
             TokenKind::LeftBrace => {
                 // Disambiguate {} based on whether it's empty
@@ -443,12 +466,12 @@ impl Parser {
 
         let mut params = Vec::new();
 
-        // Parse parameters
+        // Parse parameters (can be identifiers or patterns like [a, b])
         loop {
             let token = self.current_token()?;
             match &token.kind {
                 TokenKind::Identifier(name) => {
-                    params.push(Param { name: name.clone() });
+                    params.push(Param::simple(name.clone()));
                     self.advance();
 
                     // Check for comma (more params) or closing |
@@ -471,6 +494,56 @@ impl Parser {
                         }
                     }
                 }
+                TokenKind::LeftBracket => {
+                    // Pattern parameter like [a, b]
+                    let pattern = self.parse_pattern()?;
+                    params.push(Param { pattern });
+
+                    // Check for comma (more params) or closing |
+                    let next = self.current_token()?;
+                    match &next.kind {
+                        TokenKind::Comma => {
+                            self.advance();
+                            continue;
+                        }
+                        TokenKind::VerticalBar => {
+                            self.advance(); // consume closing '|'
+                            break;
+                        }
+                        _ => {
+                            return Err(ParseError {
+                                message: format!("Expected ',' or '|' after pattern parameter, got {:?}", next.kind),
+                                line: next.span.start.line as usize,
+                                column: next.span.start.column as usize,
+                            });
+                        }
+                    }
+                }
+                TokenKind::Underscore => {
+                    // Wildcard parameter: |_| or |x, _|
+                    params.push(Param { pattern: Pattern::Wildcard });
+                    self.advance();
+
+                    // Check for comma (more params) or closing |
+                    let next = self.current_token()?;
+                    match &next.kind {
+                        TokenKind::Comma => {
+                            self.advance();
+                            continue;
+                        }
+                        TokenKind::VerticalBar => {
+                            self.advance(); // consume closing '|'
+                            break;
+                        }
+                        _ => {
+                            return Err(ParseError {
+                                message: format!("Expected ',' or '|' after wildcard parameter, got {:?}", next.kind),
+                                line: next.span.start.line as usize,
+                                column: next.span.start.column as usize,
+                            });
+                        }
+                    }
+                }
                 TokenKind::VerticalBar => {
                     // Empty parameter list: ||
                     self.advance();
@@ -478,7 +551,7 @@ impl Parser {
                 }
                 _ => {
                     return Err(ParseError {
-                        message: format!("Expected identifier or '|' in function parameters, got {:?}", token.kind),
+                        message: format!("Expected identifier, '[', or '|' in function parameters, got {:?}", token.kind),
                         line: token.span.start.line as usize,
                         column: token.span.start.column as usize,
                     });
@@ -544,6 +617,16 @@ impl Parser {
         // Parse arguments
         loop {
             let arg = self.parse_pratt_expr(0)?;
+            // Transform placeholders in compound expressions to create nested functions.
+            // This makes `filter(_ != 1)` parse as `filter(|x| x != 1)` first,
+            // then the whole call can be transformed for partial application.
+            // BUT: don't transform bare placeholders - `get(_, dict)` needs `_` to stay
+            // as a placeholder for the outer Call's partial application transform.
+            let arg = if matches!(arg, Expr::Placeholder) {
+                arg // Keep bare placeholder for Call-level partial application
+            } else {
+                self.transform_partial_application(arg)
+            };
             args.push(arg);
 
             let token = self.current_token()?;
@@ -572,10 +655,16 @@ impl Parser {
             }
         }
 
-        Ok(Expr::Call {
+        let call = Expr::Call {
             function: Box::new(function),
             args,
-        })
+        };
+
+        // Transform placeholders at the call level.
+        // This makes `get(_, x)` become `|a| get(a, x)` and
+        // `map(get(_, x))` become `map(|a| get(a, x))` (since the nested
+        // call is already transformed when used as an argument).
+        Ok(self.transform_partial_application(call))
     }
 
     fn parse_index(&mut self, collection: Expr) -> Result<Expr, ParseError> {
@@ -846,6 +935,28 @@ impl Parser {
             }
         }
 
+        // Handle range operators specially - produce Expr::Range instead of Expr::Infix
+        if matches!(token.kind, TokenKind::DotDot | TokenKind::DotDotEqual) {
+            let inclusive = matches!(token.kind, TokenKind::DotDotEqual);
+            self.advance();
+
+            // Check if there's a valid RHS expression (for infinite ranges like 1..)
+            // A valid RHS starts with something that can begin an expression
+            let has_rhs = !self.is_at_end() && self.can_start_expression();
+
+            let end = if has_rhs {
+                Some(Box::new(self.parse_pratt_expr(precedence + 1)?))
+            } else {
+                None
+            };
+
+            return Ok(Expr::Range {
+                start: Box::new(left),
+                end,
+                inclusive,
+            });
+        }
+
         let op = self.token_to_infix_op(&token.kind)?;
 
         self.advance();
@@ -856,6 +967,32 @@ impl Parser {
             op,
             right: Box::new(right),
         })
+    }
+
+    /// Check if current token can start an expression (used for infinite range detection)
+    fn can_start_expression(&self) -> bool {
+        if self.is_at_end() {
+            return false;
+        }
+        let token = &self.tokens[self.current];
+        matches!(
+            token.kind,
+            TokenKind::Integer(_)
+                | TokenKind::Decimal(_)
+                | TokenKind::String(_)
+                | TokenKind::Identifier(_)
+                | TokenKind::True
+                | TokenKind::False
+                | TokenKind::Nil
+                | TokenKind::LeftParen
+                | TokenKind::LeftBracket
+                | TokenKind::LeftBrace
+                | TokenKind::HashBrace
+                | TokenKind::VerticalBar
+                | TokenKind::Minus
+                | TokenKind::Bang
+                | TokenKind::Underscore
+        )
     }
 
     fn token_to_infix_op(&self, kind: &TokenKind) -> Result<InfixOp, ParseError> {
@@ -1071,10 +1208,22 @@ impl Parser {
                     self.advance(); // consume ']'
                     break;
                 }
-                TokenKind::DotDotIdent(name) => {
-                    // Rest pattern: ..rest (lexed as a single token)
-                    let rest_pattern = Pattern::RestIdentifier(name.clone());
-                    self.advance();
+                TokenKind::DotDot => {
+                    // Rest pattern: ..rest (DotDot followed by identifier)
+                    self.advance(); // consume '..'
+                    let token = self.current_token()?;
+                    let name = match &token.kind {
+                        TokenKind::Identifier(name) => name.clone(),
+                        _ => {
+                            return Err(ParseError {
+                                message: format!("Expected identifier after '..' in rest pattern, got {:?}", token.kind),
+                                line: token.span.start.line as usize,
+                                column: token.span.start.column as usize,
+                            });
+                        }
+                    };
+                    self.advance(); // consume identifier
+                    let rest_pattern = Pattern::RestIdentifier(name);
                     patterns.push(rest_pattern);
 
                     // After rest pattern, expect ] or ,

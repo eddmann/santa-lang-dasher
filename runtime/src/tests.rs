@@ -3853,12 +3853,11 @@ fn builtin_lines_single_line() {
 
 #[test]
 fn builtin_lines_empty_string() {
-    // lines("") → [""]
+    // lines("") → [] (empty lines are filtered)
     let v = Value::from_string("");
     let result = rt_lines(v);
     let list = result.as_list().expect("should be a list");
-    assert_eq!(list.len(), 1);
-    assert_eq!(list[0].as_string(), Some(""));
+    assert_eq!(list.len(), 0);
 }
 
 #[test]

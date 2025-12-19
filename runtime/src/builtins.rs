@@ -245,8 +245,37 @@ pub extern "C" fn rt_dict(value: Value) -> Value {
 /// - String: get(1, "hello") → "e"
 #[no_mangle]
 pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
-    // List - index by integer
+    // List - index by integer or slice by range
     if let Some(list) = collection.as_list() {
+        // Check if index is a range for slicing
+        if let Some(range) = index.as_lazy_sequence() {
+            use crate::heap::LazySeqKind;
+            if let LazySeqKind::Range { current, end, inclusive, step: 1 } = &range.kind {
+                let len = list.len() as i64;
+                let start = *current;
+
+                // Calculate end index
+                let end_idx = match end {
+                    Some(e) => {
+                        let e = *e;
+                        if *inclusive { (e + 1).min(len) } else { e.min(len) }
+                    }
+                    None => len, // Unbounded: slice to end
+                };
+
+                if start >= 0 && start <= len && end_idx >= start {
+                    let slice: im::Vector<Value> = list
+                        .iter()
+                        .skip(start as usize)
+                        .take((end_idx - start) as usize)
+                        .copied()
+                        .collect();
+                    return Value::from_list(slice);
+                }
+                return Value::from_list(im::Vector::new());
+            }
+        }
+        // Regular integer index
         if let Some(i) = index.as_integer() {
             if i >= 0 && (i as usize) < list.len() {
                 return list[i as usize];
@@ -268,11 +297,42 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
         return dict.get(&index).copied().unwrap_or_else(Value::nil);
     }
 
-    // String - index by integer to get grapheme
+    // String - index by integer to get grapheme, or slice by range
     if let Some(s) = collection.as_string() {
+        use unicode_segmentation::UnicodeSegmentation;
+
+        // Check if index is a range for slicing
+        if let Some(range) = index.as_lazy_sequence() {
+            use crate::heap::LazySeqKind;
+            if let LazySeqKind::Range { current, end, inclusive, step: 1 } = &range.kind {
+                let graphemes: Vec<&str> = s.graphemes(true).collect();
+                let len = graphemes.len() as i64;
+                let start = *current;
+
+                // Calculate end index
+                let end_idx = match end {
+                    Some(e) => {
+                        let e = *e;
+                        if *inclusive { (e + 1).min(len) } else { e.min(len) }
+                    }
+                    None => len, // Unbounded: slice to end
+                };
+
+                if start >= 0 && start <= len && end_idx >= start {
+                    let slice: String = graphemes
+                        .iter()
+                        .skip(start as usize)
+                        .take((end_idx - start) as usize)
+                        .copied()
+                        .collect();
+                    return Value::from_string(slice);
+                }
+                return Value::from_string(String::new());
+            }
+        }
+        // Regular integer index
         if let Some(i) = index.as_integer() {
             if i >= 0 {
-                use unicode_segmentation::UnicodeSegmentation;
                 if let Some(g) = s.graphemes(true).nth(i as usize) {
                     return Value::from_string(g.to_string());
                 }
@@ -2569,6 +2629,32 @@ pub extern "C" fn rt_min(collection: Value) -> Value {
     Value::nil()
 }
 
+/// `max(a, b)` → Maximum of two values
+///
+/// Returns the larger of two values.
+#[no_mangle]
+pub extern "C" fn rt_max2(a: Value, b: Value) -> Value {
+    use std::cmp::Ordering;
+    match compare_values(a, b) {
+        Some(Ordering::Greater) | Some(Ordering::Equal) => a,
+        Some(Ordering::Less) => b,
+        None => Value::nil(),
+    }
+}
+
+/// `min(a, b)` → Minimum of two values
+///
+/// Returns the smaller of two values.
+#[no_mangle]
+pub extern "C" fn rt_min2(a: Value, b: Value) -> Value {
+    use std::cmp::Ordering;
+    match compare_values(a, b) {
+        Some(Ordering::Less) | Some(Ordering::Equal) => a,
+        Some(Ordering::Greater) => b,
+        None => Value::nil(),
+    }
+}
+
 // ============================================================================
 // §11.9 Sequence Manipulation
 // ============================================================================
@@ -2679,9 +2765,10 @@ pub extern "C" fn rt_sort(comparator: Value, collection: Value) -> Value {
 
             // Check if result is boolean
             if let Some(bool_val) = result.as_bool() {
-                // Per LANG.txt: comparator(a, b) returns true means "a comes before b"
-                // For sort(<, ..): a < b returns true, so a should come first (Less)
-                // For sort(>, ..): a > b returns true, so a should come first (Less)
+                // When comparator returns true (a < b for < operator), a should come first
+                // When comparator returns false (a >= b for < operator), a should come after
+                // This gives: sort(<, [3,1,2]) → [1,2,3] (ascending)
+                //             sort(>, [1,2,3]) → [3,2,1] (descending)
                 if bool_val {
                     std::cmp::Ordering::Less
                 } else {
@@ -2819,6 +2906,17 @@ pub extern "C" fn rt_chunk(size: Value, collection: Value) -> Value {
         return Value::from_list(im::Vector::new());
     }
 
+    // String - chunk into substrings
+    if let Some(s) = collection.as_string() {
+        let mut chunks: im::Vector<Value> = im::Vector::new();
+        let chars: Vec<char> = s.chars().collect();
+        for chunk in chars.chunks(chunk_size) {
+            let chunk_str: String = chunk.iter().collect();
+            chunks.push_back(Value::from_string(&chunk_str));
+        }
+        return Value::from_list(chunks);
+    }
+
     // List
     if let Some(list) = collection.as_list() {
         let mut chunks: im::Vector<Value> = im::Vector::new();
@@ -2914,6 +3012,62 @@ pub extern "C" fn rt_intersection(collection1: Value, collection2: Value) -> Val
         .filter(|v| set2.contains(*v))
         .copied()
         .collect();
+
+    Value::from_set(result)
+}
+
+/// `intersection(..collections)` → Set
+///
+/// Elements found in all of the provided collections.
+/// Can be called with multiple arguments (packaged as a list) or a single list of collections.
+///
+/// Per LANG.txt §11.10:
+/// - intersection({1, 2}, [2, 3], 1..4) → {2}
+/// - intersection([{1, 2}, [2, 3], 1..4]) → {2}
+#[no_mangle]
+pub extern "C" fn rt_intersection_all(collections: Value) -> Value {
+    // Get the list of collections
+    let list = match collections.as_list() {
+        Some(l) => l,
+        None => return Value::from_set(im::HashSet::new()),
+    };
+
+    if list.is_empty() {
+        return Value::from_set(im::HashSet::new());
+    }
+
+    // Check if this is a single list of collections or multiple collections
+    // If there's one element and it's a list, treat it as a list of collections
+    let collections_to_intersect: Vec<Value> = if list.len() == 1 {
+        if let Some(inner_list) = list[0].as_list() {
+            // Single argument that is a list - treat as list of collections
+            inner_list.iter().copied().collect()
+        } else {
+            // Single non-list argument - just return its elements as a set
+            return Value::from_set(collect_elements(list[0]).into_iter().collect());
+        }
+    } else {
+        // Multiple arguments - use them directly
+        list.iter().copied().collect()
+    };
+
+    if collections_to_intersect.is_empty() {
+        return Value::from_set(im::HashSet::new());
+    }
+
+    // Start with the first collection
+    let mut result: im::HashSet<Value> = collect_elements(collections_to_intersect[0])
+        .into_iter()
+        .collect();
+
+    // Intersect with each subsequent collection
+    for coll in collections_to_intersect.iter().skip(1) {
+        let other: im::HashSet<Value> = collect_elements(*coll).into_iter().collect();
+        result = result.iter()
+            .filter(|v| other.contains(*v))
+            .copied()
+            .collect();
+    }
 
     Value::from_set(result)
 }
@@ -3336,6 +3490,57 @@ pub extern "C" fn rt_range_fn(from: Value, to: Value, step: Value) -> Value {
     Value::from_lazy_sequence(lazy)
 }
 
+/// `start..end` → LazySequence (exclusive range)
+///
+/// Create an exclusive range from start to end (end not included).
+/// Called by codegen for range syntax.
+#[no_mangle]
+pub extern "C" fn rt_range_exclusive(start: Value, end: Value) -> Value {
+    let start_val = start.as_integer().unwrap_or(0);
+    let end_val = end.as_integer();
+
+    // Determine step based on direction
+    let step = if let Some(e) = end_val {
+        if e < start_val { -1 } else { 1 }
+    } else {
+        1
+    };
+
+    let lazy = LazySequenceObject::range(start_val, end_val, false, step);
+    Value::from_lazy_sequence(lazy)
+}
+
+/// `start..=end` → LazySequence (inclusive range)
+///
+/// Create an inclusive range from start to end (end included).
+/// Called by codegen for inclusive range syntax.
+#[no_mangle]
+pub extern "C" fn rt_range_inclusive(start: Value, end: Value) -> Value {
+    let start_val = start.as_integer().unwrap_or(0);
+    let end_val = end.as_integer();
+
+    // Determine step based on direction
+    let step = if let Some(e) = end_val {
+        if e < start_val { -1 } else { 1 }
+    } else {
+        1
+    };
+
+    let lazy = LazySequenceObject::range(start_val, end_val, true, step);
+    Value::from_lazy_sequence(lazy)
+}
+
+/// `start..` → LazySequence (unbounded range)
+///
+/// Create an unbounded range starting from start.
+/// Called by codegen for infinite range syntax.
+#[no_mangle]
+pub extern "C" fn rt_range_unbounded(start: Value) -> Value {
+    let start_val = start.as_integer().unwrap_or(0);
+    let lazy = LazySequenceObject::range(start_val, None, false, 1);
+    Value::from_lazy_sequence(lazy)
+}
+
 /// `zip(collection, ..collections)` → List | LazySequence
 ///
 /// Aggregate multiple collections into tuples. Stops when shortest collection is exhausted.
@@ -3398,6 +3603,30 @@ pub extern "C" fn rt_zip(argc: u32, argv: *const Value) -> Value {
     }
 
     Value::from_list(result)
+}
+
+/// zip with spread - takes a collection of collections and zips them
+#[no_mangle]
+pub extern "C" fn rt_zip_spread(collection: Value) -> Value {
+    // Extract elements from the collection
+    let args: Vec<Value> = if let Some(list) = collection.as_list() {
+        list.iter().copied().collect()
+    } else if let Some(lazy) = collection.as_lazy_sequence() {
+        // Materialize lazy sequence
+        let mut result = Vec::new();
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            result.push(val);
+            current = *next_seq;
+        }
+        result
+    } else {
+        // Single element - wrap in vec
+        vec![collection]
+    };
+
+    // Call rt_zip with the extracted elements
+    rt_zip(args.len() as u32, args.as_ptr())
 }
 
 /// Check if a value is an infinite lazy sequence (unbounded range or non-Range lazy)
@@ -3918,7 +4147,8 @@ fn take_from_lazy_recursive(
 /// Per LANG.txt §11.14:
 /// - lines("a\nb\nc") → ["a", "b", "c"]
 /// - lines("single line") → ["single line"]
-/// - lines("") → [""]
+/// - lines("") → []
+/// - lines("a\nb\n") → ["a", "b"] (trailing empty lines filtered)
 #[no_mangle]
 pub extern "C" fn rt_lines(value: Value) -> Value {
     // Only works on strings
@@ -3927,9 +4157,10 @@ pub extern "C" fn rt_lines(value: Value) -> Value {
         None => return Value::from_list(im::Vector::new()),
     };
 
-    // Split on newlines
+    // Split on newlines, filtering empty trailing lines
     let parts: im::Vector<Value> = s
         .split('\n')
+        .filter(|part| !part.is_empty())
         .map(|part| Value::from_string(part.to_string()))
         .collect();
 
@@ -4442,6 +4673,19 @@ pub extern "C" fn rt_type(value: Value) -> Value {
     }
 
     Value::from_string("Unknown".to_string())
+}
+
+/// `str(value)` → String
+///
+/// Convert a value to its string representation.
+///
+/// Per LANG.txt §11.15:
+/// - str(42) → "42"
+/// - str(3.14) → "3.14"
+/// - str([1, 2, 3]) → "[1, 2, 3]"
+#[no_mangle]
+pub extern "C" fn rt_str(value: Value) -> Value {
+    Value::from_string(format_value(&value))
 }
 
 /// `or(a, b)` → Value

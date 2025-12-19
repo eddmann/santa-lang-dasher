@@ -190,7 +190,7 @@ test: {
     let source = runner.test_generate_source(&program);
     println!("Generated source for if:\n{}", source);
     // Should contain valid if expression
-    assert!(source.contains("if input > 0"));
+    assert!(source.contains("if (input > 0)"));
 }
 
 #[test]
@@ -976,3 +976,180 @@ test: {
     assert_eq!(results[0].part_one_actual, Some(Value::from_integer(6)));
 }
 
+
+#[test]
+fn test_generated_source_destructuring() {
+    // Test that generated source for destructuring patterns is correct
+    let program = parse_program(r#"
+let lookup = #{"A": 0, "B": 1}
+
+part_one: [[1, 2], [3, 4]] |> map(|[a, b]| a + b) |> sum
+
+test: {
+  input: nil
+  part_one: 10
+}
+"#);
+    let runner = Runner::new();
+    
+    // Generate the source
+    let generated = runner.generate_test_source_for_debugging(
+        &program.statements,
+        &Expr::Nil,
+        Some(&Expr::Call {
+            function: Box::new(Expr::Identifier("sum".to_string())),
+            args: vec![Expr::Call {
+                function: Box::new(Expr::Identifier("map".to_string())),
+                args: vec![
+                    Expr::List(vec![
+                        Expr::List(vec![Expr::Integer(1), Expr::Integer(2)]),
+                        Expr::List(vec![Expr::Integer(3), Expr::Integer(4)]),
+                    ]),
+                    Expr::Function {
+                        params: vec![crate::parser::ast::Param { 
+                            pattern: crate::parser::ast::Pattern::List(vec![
+                                crate::parser::ast::Pattern::Identifier("a".to_string()),
+                                crate::parser::ast::Pattern::Identifier("b".to_string()),
+                            ])
+                        }],
+                        body: Box::new(Expr::Infix {
+                            left: Box::new(Expr::Identifier("a".to_string())),
+                            op: crate::parser::ast::InfixOp::Add,
+                            right: Box::new(Expr::Identifier("b".to_string())),
+                        }),
+                    },
+                ],
+            }],
+        }),
+        None,
+    );
+    
+    println!("Generated source for destructuring:\n{}", generated);
+    
+    // Check that it contains the destructuring pattern
+    assert!(generated.contains("|[a, b]|"), "Should contain destructuring pattern |[a, b]|, got: {}", generated);
+}
+
+#[test]
+fn test_day2_style_destructuring() {
+    // Test Day 2 style pattern: destructuring in map with block body
+    let program = parse_program(r#"
+let lookup = #{
+  "A": 0, "B": 1, "C": 2,
+  "X": 0, "Y": 1, "Z": 2,
+}
+
+let parse_strategy = lines >> map(split(" "))
+
+part_two: {
+  parse_strategy(input)
+    |> map(|[elf, ending]| {
+      let move = (lookup[elf] + lookup[ending] + 2) % 3 + 1
+      let outcome = lookup[ending] * 3
+      move + outcome
+    })
+    |> sum
+}
+
+test: {
+  input: "A Y
+B X
+C Z"
+  part_two: 12
+}
+"#);
+    let runner = Runner::new();
+    
+    // Generate the test source
+    let test = program.sections.iter().find_map(|s| {
+        if let crate::parser::ast::Section::Test { input, .. } = s {
+            Some(input)
+        } else {
+            None
+        }
+    }).unwrap();
+    
+    let part_two = program.sections.iter().find_map(|s| {
+        if let crate::parser::ast::Section::PartTwo(expr) = s {
+            Some(expr)
+        } else {
+            None
+        }
+    });
+    
+    let generated = runner.generate_test_source_for_debugging(
+        &program.statements,
+        test,
+        None,
+        part_two,
+    );
+    
+    println!("Generated source for Day 2 style:\n{}", generated);
+    
+    // Now actually execute the tests
+    let results = runner.execute_tests(&program).unwrap();
+    println!("Test results: part_two_passed={:?}, actual={:?}", 
+             results[0].part_two_passed, results[0].part_two_actual);
+    
+    assert_eq!(results[0].part_two_passed, Some(true));
+    assert_eq!(results[0].part_two_actual, Some(Value::from_integer(12)));
+}
+
+#[test]
+fn debug_day3_source_generation() {
+    // Debug: see what source is generated for Day 3 style block with lambdas
+    let program = parse_program(r#"
+let priorities = zip("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", 1..) |> dict;
+let parse_groups = lines >> map(split(""));
+let common_item = intersection >> list >> first;
+
+part_one: {
+  let compartments = |rucksack| {
+    let length = size(rucksack) / 2;
+    [rucksack[0..length], rucksack[length..]]
+  };
+
+  parse_groups(input)
+    |> map(compartments >> common_item >> get(_, priorities))
+    |> sum
+}
+
+test: {
+  input: "vJrwpWtwJgWrhcsFMMfFFhFp
+jqHRNqRjqzjGDLGLrsFMfFZSrLrFZsSL"
+  part_one: 54
+}
+"#);
+    let runner = Runner::new();
+
+    // Get the test input and part_one
+    let test = program.sections.iter().find_map(|s| {
+        if let crate::parser::ast::Section::Test { input, .. } = s {
+            Some(input)
+        } else {
+            None
+        }
+    }).unwrap();
+
+    let part_one = program.sections.iter().find_map(|s| {
+        if let crate::parser::ast::Section::PartOne(expr) = s {
+            Some(expr)
+        } else {
+            None
+        }
+    });
+
+    let generated = runner.generate_test_source_for_debugging(
+        &program.statements,
+        test,
+        part_one,
+        None,
+    );
+
+    println!("=== GENERATED SOURCE FOR DAY 3 ===\n{}\n=== END ===", generated);
+
+    // Now actually run the test
+    let results = runner.execute_tests(&program).unwrap();
+    println!("Test results: part_one_passed={:?}, actual={:?}",
+             results[0].part_one_passed, results[0].part_one_actual);
+}

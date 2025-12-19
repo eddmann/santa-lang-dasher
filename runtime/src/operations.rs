@@ -285,6 +285,14 @@ pub extern "C" fn rt_ne(left: Value, right: Value) -> Value {
     Value::from_bool(left != right)
 }
 
+/// Check if a value is truthy
+/// Returns 1 for truthy values, 0 for falsy values.
+/// Per LANG.txt §6.2: false, nil, 0, 0.0, "", [], #{}, #{} are falsy; all other values are truthy.
+#[no_mangle]
+pub extern "C" fn rt_is_truthy(value: Value) -> i64 {
+    if value.is_truthy() { 1 } else { 0 }
+}
+
 /// Less-than comparison
 ///
 /// Per LANG.txt §4.4:
@@ -554,6 +562,31 @@ pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -
         "{} is not callable",
         type_name(&callee)
     ));
+}
+
+/// Apply a function to a collection, spreading the collection elements as arguments.
+///
+/// This is used for `f(..collection)` syntax where collection elements become function arguments.
+#[no_mangle]
+pub extern "C-unwind" fn rt_apply(callee: Value, collection: Value) -> Value {
+    // Collect elements from the collection into a Vec
+    let args: Vec<Value> = if let Some(list) = collection.as_list() {
+        list.iter().copied().collect()
+    } else if let Some(lazy) = collection.as_lazy_sequence() {
+        let mut items = Vec::new();
+        let mut current = lazy.clone();
+        while let Some((val, next_seq)) = current.next() {
+            items.push(val);
+            current = *next_seq;
+        }
+        items
+    } else {
+        // Not a spreadable collection - call with collection as single arg
+        return rt_call(callee, 1, &collection);
+    };
+
+    // Call the function with the collected arguments
+    rt_call(callee, args.len() as u32, args.as_ptr())
 }
 
 /// Get a captured value from a closure environment
