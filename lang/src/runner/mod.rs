@@ -510,8 +510,10 @@ impl Runner {
                 )
             }
             Expr::Prefix { op, right } => {
+                // Wrap operand in parentheses to preserve structure during re-parsing
+                // Without this, `!(a `includes?` b)` becomes `(!a) `includes?` b`
                 format!(
-                    "{}{}",
+                    "{}({})",
                     self.prefix_op_to_source(op),
                     self.expr_to_source(right)
                 )
@@ -582,8 +584,11 @@ impl Runner {
                 }
             }
             Expr::Set(elements) => {
+                // Use set([...]) to unambiguously create a set
+                // {} can be parsed as empty block or empty set depending on context
+                // { elem } can be parsed as a block returning elem
                 let elems: Vec<String> = elements.iter().map(|e| self.expr_to_source(e)).collect();
-                format!("#{{{}}}", elems.join(", "))
+                format!("set([{}])", elems.join(", "))
             }
             Expr::Dict(entries) => {
                 let entries_str: Vec<String> = entries
@@ -622,12 +627,33 @@ impl Runner {
                 format!("..{}", self.expr_to_source(inner))
             }
             Expr::InfixCall { function, left, right } => {
+                // Wrap in parentheses to preserve structure during re-parsing
+                // Without this, `a `f` b || c` might not parse correctly
                 format!(
-                    "{} `{}` {}",
+                    "({} `{}` {})",
                     self.expr_to_source(left),
                     function,
                     self.expr_to_source(right)
                 )
+            }
+            Expr::IfLet { pattern, value, then_branch, else_branch } => {
+                let then_str = self.block_or_expr_to_source(then_branch);
+                let mut s = format!(
+                    "if let {} = {} {}",
+                    self.pattern_to_source(pattern),
+                    self.expr_to_source(value),
+                    then_str
+                );
+                if let Some(else_br) = else_branch {
+                    let else_str = if matches!(else_br.as_ref(), Expr::If { .. } | Expr::IfLet { .. }) {
+                        // else if / else if let chains
+                        self.expr_to_source(else_br)
+                    } else {
+                        self.block_or_expr_to_source(else_br)
+                    };
+                    s.push_str(&format!(" else {}", else_str));
+                }
+                s
             }
             _ => format!("/* unsupported expr: {:?} */", expr),
         }
@@ -767,11 +793,43 @@ impl Runner {
         let mut part_one_time = None;
         let mut part_two_time = None;
 
-        for line in output.lines() {
+        let lines: Vec<&str> = output.lines().collect();
+        let mut i = 0;
+
+        while i < lines.len() {
+            let line = lines[i];
             if let Some(value_str) = line.strip_prefix("PART_ONE: ") {
-                part_one = Some(self.parse_value(value_str)?);
+                // Check if there's a PART_ONE_TIME line following - if so, value is single line
+                if i + 1 < lines.len() && lines[i + 1].starts_with("PART_ONE_TIME: ") {
+                    part_one = Some(self.parse_value(value_str)?);
+                } else {
+                    // Multi-line value - collect until PART_ONE_TIME
+                    let mut multiline = value_str.to_string();
+                    i += 1;
+                    while i < lines.len() && !lines[i].starts_with("PART_ONE_TIME: ") {
+                        multiline.push('\n');
+                        multiline.push_str(lines[i]);
+                        i += 1;
+                    }
+                    part_one = Some(self.parse_value(&multiline)?);
+                    continue; // Don't increment i, we want to process PART_ONE_TIME
+                }
             } else if let Some(value_str) = line.strip_prefix("PART_TWO: ") {
-                part_two = Some(self.parse_value(value_str)?);
+                // Check if there's a PART_TWO_TIME line following - if so, value is single line
+                if i + 1 < lines.len() && lines[i + 1].starts_with("PART_TWO_TIME: ") {
+                    part_two = Some(self.parse_value(value_str)?);
+                } else {
+                    // Multi-line value - collect until PART_TWO_TIME
+                    let mut multiline = value_str.to_string();
+                    i += 1;
+                    while i < lines.len() && !lines[i].starts_with("PART_TWO_TIME: ") {
+                        multiline.push('\n');
+                        multiline.push_str(lines[i]);
+                        i += 1;
+                    }
+                    part_two = Some(self.parse_value(&multiline)?);
+                    continue; // Don't increment i, we want to process PART_TWO_TIME
+                }
             } else if let Some(time_str) = line.strip_prefix("PART_ONE_TIME: ") {
                 if let Ok(nanos) = time_str.trim().parse::<u64>() {
                     part_one_time = Some(Duration::from_nanos(nanos));
@@ -781,6 +839,7 @@ impl Runner {
                     part_two_time = Some(Duration::from_nanos(nanos));
                 }
             }
+            i += 1;
         }
 
         Ok(SolutionResult { part_one, part_two, part_one_time, part_two_time })

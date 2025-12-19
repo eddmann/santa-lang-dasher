@@ -1429,3 +1429,16 @@ fn parse_break_in_if_block() {
     .assert_debug_eq(&expr);
 }
 
+#[test]
+fn parse_if_let_in_section() {
+    // Test if-let inside a section
+    let source = r#"let f = |x| x;
+part_two: { if let y = f(5) { y } }"#;
+    let tokens = lex(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+
+    // Verify the IfLet is correctly parsed inside the section
+    assert!(matches!(&program.sections[0], Section::PartTwo(_)));
+}
+

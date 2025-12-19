@@ -213,9 +213,6 @@ impl From<crate::codegen::compiler::CompileError> for SantaError {
             CompileError::UnsupportedExpression(msg) => format!("Unsupported expression: {}", msg),
             CompileError::UnsupportedStatement(msg) => format!("Unsupported statement: {}", msg),
             CompileError::UnsupportedPattern(msg) => format!("Unsupported pattern: {}", msg),
-            CompileError::ProtectedName(name) => {
-                format!("'{}' is a protected built-in function and cannot be shadowed", name)
-            }
         };
         SantaError::compile_no_span(message)
     }

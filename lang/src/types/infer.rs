@@ -670,17 +670,14 @@ impl TypeInference {
         // Infer type of first element
         let first_ty = self.infer_expr(&elements[0])?.ty;
 
-        // Unify with all other elements
+        // Try to unify with all other elements
+        // If elements have incompatible types (heterogeneous list/tuple), fall back to Unknown
         let elem_ty = elements[1..]
             .iter()
             .try_fold(first_ty, |acc, elem| {
                 let elem_ty = self.infer_expr(elem)?.ty;
-                self.unifier
-                    .unify(&acc, &elem_ty)
-                    .map_err(|e| TypeError {
-                        message: format!("List element type mismatch: {}", e),
-                        span: Span::new(Position::new(1, 1), Position::new(1, 1)),
-                    })
+                // If unification fails, use Unknown (heterogeneous list)
+                Ok(self.unifier.unify(&acc, &elem_ty).unwrap_or(Type::Unknown))
             })?;
 
         Ok(Type::List(Box::new(elem_ty)))
@@ -725,28 +722,23 @@ impl TypeInference {
         let first_value_ty = self.infer_expr(first_value)?.ty;
 
         // Unify with all other entries
+        // If types can't be unified, fall back to Unknown (heterogeneous dicts are valid)
         let (key_ty, value_ty) = entries[1..]
             .iter()
-            .try_fold((first_key_ty, first_value_ty), |(acc_key, acc_value), (k, v)| {
-                let key_ty = self.infer_expr(k)?.ty;
-                let value_ty = self.infer_expr(v)?.ty;
+            .fold((first_key_ty, first_value_ty), |(acc_key, acc_value), (k, v)| {
+                let key_ty = self.infer_expr(k).map(|t| t.ty).unwrap_or(Type::Unknown);
+                let value_ty = self.infer_expr(v).map(|t| t.ty).unwrap_or(Type::Unknown);
 
                 let unified_key = self.unifier
                     .unify(&acc_key, &key_ty)
-                    .map_err(|e| TypeError {
-                        message: format!("Dict key type mismatch: {}", e),
-                        span: Span::new(Position::new(1, 1), Position::new(1, 1)),
-                    })?;
+                    .unwrap_or(Type::Unknown);
 
                 let unified_value = self.unifier
                     .unify(&acc_value, &value_ty)
-                    .map_err(|e| TypeError {
-                        message: format!("Dict value type mismatch: {}", e),
-                        span: Span::new(Position::new(1, 1), Position::new(1, 1)),
-                    })?;
+                    .unwrap_or(Type::Unknown);
 
-                Ok((unified_key, unified_value))
-            })?;
+                (unified_key, unified_value)
+            });
 
         Ok(Type::Dict(Box::new(key_ty), Box::new(value_ty)))
     }

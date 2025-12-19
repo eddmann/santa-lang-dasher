@@ -124,6 +124,16 @@ unsafe fn rt_free(value: Value) {
                 // Just free the allocation if it ever appears
                 drop(Box::from_raw(header_ptr as *mut ObjectHeader));
             }
+            TypeTag::PartialApplication => {
+                let ptr = header_ptr as *mut super::heap::PartialApplicationObject;
+                // Decref the original closure
+                rt_decref((*ptr).closure);
+                // Decref all accumulated arguments
+                for arg in &(*ptr).args {
+                    rt_decref(*arg);
+                }
+                drop(Box::from_raw(ptr));
+            }
         }
     }
 }

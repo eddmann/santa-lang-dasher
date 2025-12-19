@@ -81,6 +81,19 @@ impl Parser {
     /// For example: `_ + 1` becomes `|__arg_0| __arg_0 + 1`
     /// Multiple placeholders: `_ / _` becomes `|__arg_0, __arg_1| __arg_0 / __arg_1`
     fn transform_partial_application(&self, expr: Expr) -> Expr {
+        // Special handling for Pipeline: transform both sides before looking at whole expression
+        // This makes `10 |> _ - 1` correctly become `10 |> (|x| x - 1)`, not `|x| 10 |> x - 1`
+        // And handles chained pipelines like `x |> f |> _ * 2`
+        if let Expr::Infix { left, op: InfixOp::Pipeline, right } = &expr {
+            let transformed_left = self.transform_partial_application((**left).clone());
+            let transformed_right = self.transform_partial_application((**right).clone());
+            return Expr::Infix {
+                left: Box::new(transformed_left),
+                op: InfixOp::Pipeline,
+                right: Box::new(transformed_right),
+            };
+        }
+
         // Count placeholders to see if we need to transform
         let placeholder_count = self.count_placeholders(&expr);
         if placeholder_count == 0 {
@@ -109,6 +122,9 @@ impl Parser {
             Expr::Placeholder => 1,
             Expr::Prefix { right, .. } => self.count_placeholders(right),
             Expr::Infix { left, right, .. } => {
+                self.count_placeholders(left) + self.count_placeholders(right)
+            }
+            Expr::InfixCall { left, right, .. } => {
                 self.count_placeholders(left) + self.count_placeholders(right)
             }
             Expr::Call { function, args } => {
@@ -155,6 +171,13 @@ impl Parser {
                 Expr::Infix {
                     left: Box::new(self.replace_placeholders(*left, counter)),
                     op,
+                    right: Box::new(self.replace_placeholders(*right, counter)),
+                }
+            }
+            Expr::InfixCall { function, left, right } => {
+                Expr::InfixCall {
+                    function,
+                    left: Box::new(self.replace_placeholders(*left, counter)),
                     right: Box::new(self.replace_placeholders(*right, counter)),
                 }
             }
@@ -233,10 +256,16 @@ impl Parser {
 
             // Check for trailing lambda syntax: expr identifier lambda
             // e.g., [1, 2, 3] map |x| x * 2
+            // For OrOr (||), only treat as trailing lambda if it can't be the OR operator
             if let TokenKind::Identifier(func_name) = &token.kind {
                 // Look ahead to see if there's a lambda following
                 if let Some(next) = self.tokens.get(self.current + 1) {
-                    if matches!(next.kind, TokenKind::VerticalBar | TokenKind::OrOr) {
+                    let is_lambda_start = match &next.kind {
+                        TokenKind::VerticalBar => true,
+                        TokenKind::OrOr => min_precedence > 1, // Only if || can't be OR operator
+                        _ => false,
+                    };
+                    if is_lambda_start {
                         // This is a trailing lambda
                         let func_name = func_name.clone();
                         self.advance(); // consume identifier
@@ -256,7 +285,18 @@ impl Parser {
 
             // Check for trailing lambda after a call: call(...) |params| body
             // e.g., fold(init) |acc, x| acc + x  ->  fold(init, |acc, x| acc + x)
-            if matches!(token.kind, TokenKind::VerticalBar | TokenKind::OrOr) {
+            // For OrOr (||), only treat as trailing lambda if it can't be the OR operator
+            // at this precedence level (i.e., OrOr precedence 1 < min_precedence)
+            let is_trailing_lambda = match &token.kind {
+                TokenKind::VerticalBar => true,
+                TokenKind::OrOr => {
+                    // Only treat || as trailing lambda if OR operator doesn't apply here
+                    // OR has precedence 1, so only treat as lambda if min_precedence > 1
+                    min_precedence > 1
+                }
+                _ => false,
+            };
+            if is_trailing_lambda {
                 if let Expr::Call { function, mut args } = left {
                     // Parse the lambda and add it as an additional argument
                     let lambda = self.parse_expression()?;
@@ -317,8 +357,12 @@ impl Parser {
                 // Check for direct trailing lambda syntax: identifier |params| body
                 // e.g., memoize |x| x becomes memoize(|x| x)
                 // This is the LANG.txt §8.8 "Direct trailing lambda" feature
+                // NOTE: Only match VerticalBar (|) here, not OrOr (||).
+                // OrOr should primarily be the OR operator. If we match OrOr here,
+                // expressions like `a `func` b || c` get misparsed because
+                // the high-precedence parsing of `b` sees `|| c` as a trailing lambda.
                 if let Some(next) = self.tokens.get(self.current) {
-                    if matches!(next.kind, TokenKind::VerticalBar | TokenKind::OrOr) {
+                    if matches!(next.kind, TokenKind::VerticalBar) {
                         // This is a direct trailing lambda call
                         let lambda = self.parse_expression()?;
                         return Ok(Expr::Call {
@@ -703,12 +747,12 @@ impl Parser {
     fn parse_set_or_dict(&mut self) -> Result<Expr, ParseError> {
         self.advance(); // consume '#{'
 
-        // Check for empty set/dict
+        // Check for empty dict
         if let Ok(token) = self.current_token() {
             if matches!(token.kind, TokenKind::RightBrace) {
                 self.advance();
-                // Empty #{} is a set per LANG.txt
-                return Ok(Expr::Set(Vec::new()));
+                // Empty #{} is an empty dictionary per LANG.txt
+                return Ok(Expr::Dict(Vec::new()));
             }
         }
 
@@ -1348,6 +1392,57 @@ impl Parser {
 
     fn parse_if(&mut self) -> Result<Expr, ParseError> {
         self.advance(); // consume 'if'
+
+        // Check for if-let pattern
+        if matches!(self.current_token().map(|t| &t.kind), Ok(TokenKind::Let)) {
+            self.advance(); // consume 'let'
+
+            // Parse pattern
+            let pattern = self.parse_pattern()?;
+
+            // Expect '='
+            let token = self.current_token()?;
+            if !matches!(token.kind, TokenKind::Equal) {
+                return Err(ParseError {
+                    message: format!("Expected '=' after if-let pattern, got {:?}", token.kind),
+                    line: token.span.start.line as usize,
+                    column: token.span.start.column as usize,
+                });
+            }
+            self.advance(); // consume '='
+
+            // Parse value expression
+            let value = self.parse_expression()?;
+
+            // Parse then branch
+            let then_branch = self.parse_block()?;
+
+            // Check for else branch
+            let else_branch = if matches!(self.current_token().map(|t| &t.kind), Ok(TokenKind::Else)) {
+                self.advance(); // consume 'else'
+                let token = self.current_token()?;
+                if matches!(token.kind, TokenKind::LeftBrace) {
+                    Some(self.parse_block()?)
+                } else if matches!(token.kind, TokenKind::If) {
+                    Some(self.parse_if()?)
+                } else {
+                    return Err(ParseError {
+                        message: format!("Expected '{{' or 'if' after else, got {:?}", token.kind),
+                        line: token.span.start.line as usize,
+                        column: token.span.start.column as usize,
+                    });
+                }
+            } else {
+                None
+            };
+
+            return Ok(Expr::IfLet {
+                pattern,
+                value: Box::new(value),
+                then_branch: Box::new(then_branch),
+                else_branch: else_branch.map(Box::new),
+            });
+        }
 
         // Parse condition expression
         let condition = self.parse_expression()?;

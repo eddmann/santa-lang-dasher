@@ -31,7 +31,7 @@ let pour = |point, rock, sand| {
     |> find(|point| rock `excludes?` point && sand `excludes?` point);
 
   if next_point == nil {
-    return sand + {point};
+    return sand + set([point]);
   }
 
   pour(next_point, rock, sand);

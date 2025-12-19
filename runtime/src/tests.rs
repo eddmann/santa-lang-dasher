@@ -2087,9 +2087,10 @@ fn builtin_fold_set() {
 }
 
 // scan() tests
+// Note: scan includes the initial value as the first element (per reference implementations)
 #[test]
 fn builtin_scan_list() {
-    // scan(0, +, [1, 2]) → [1, 3]
+    // scan(0, +, [1, 2]) → [0, 1, 3]
     let list = Value::from_list(vec![
         Value::from_integer(1),
         Value::from_integer(2),
@@ -2098,20 +2099,22 @@ fn builtin_scan_list() {
     let initial = Value::from_integer(0);
     let result = rt_scan(initial, folder, list);
     let scanned = result.as_list().expect("should be a list");
-    assert_eq!(scanned.len(), 2);
-    assert_eq!(scanned[0].as_integer(), Some(1));  // 0 + 1
-    assert_eq!(scanned[1].as_integer(), Some(3));  // 1 + 2
+    assert_eq!(scanned.len(), 3);
+    assert_eq!(scanned[0].as_integer(), Some(0));  // initial
+    assert_eq!(scanned[1].as_integer(), Some(1));  // 0 + 1
+    assert_eq!(scanned[2].as_integer(), Some(3));  // 1 + 2
 }
 
 #[test]
 fn builtin_scan_empty() {
-    // scan(0, +, []) → []
+    // scan(0, +, []) → [0] (just the initial value)
     let list = Value::from_list(im::Vector::new());
     let folder = make_test_closure(sum_closure, 2);
     let initial = Value::from_integer(0);
     let result = rt_scan(initial, folder, list);
     let scanned = result.as_list().expect("should be a list");
-    assert!(scanned.is_empty());
+    assert_eq!(scanned.len(), 1);
+    assert_eq!(scanned[0].as_integer(), Some(0));
 }
 
 // fold_s() tests
@@ -4702,8 +4705,8 @@ fn builtin_reduce_lazy_range_empty_panics() {
 
 #[test]
 fn builtin_scan_lazy_range() {
-    // scan(0, +, 1..5) → [1, 3, 6, 10]
-    // Intermediate sums: 0+1=1, 1+2=3, 3+3=6, 6+4=10
+    // scan(0, +, 1..5) → [0, 1, 3, 6, 10]
+    // Initial value 0, then intermediate sums: 0+1=1, 1+2=3, 3+3=6, 6+4=10
     let lazy = LazySequenceObject::range(1, Some(5), false, 1);
     let range_val = Value::from_lazy_sequence(lazy);
     let folder = make_test_closure(sum_closure, 2);
@@ -4711,16 +4714,17 @@ fn builtin_scan_lazy_range() {
     let result = rt_scan(initial, folder, range_val);
 
     let result_list = result.as_list().expect("should be a list");
-    assert_eq!(result_list.len(), 4);
-    assert_eq!(result_list[0].as_integer(), Some(1));
-    assert_eq!(result_list[1].as_integer(), Some(3));
-    assert_eq!(result_list[2].as_integer(), Some(6));
-    assert_eq!(result_list[3].as_integer(), Some(10));
+    assert_eq!(result_list.len(), 5);
+    assert_eq!(result_list[0].as_integer(), Some(0));  // initial
+    assert_eq!(result_list[1].as_integer(), Some(1));
+    assert_eq!(result_list[2].as_integer(), Some(3));
+    assert_eq!(result_list[3].as_integer(), Some(6));
+    assert_eq!(result_list[4].as_integer(), Some(10));
 }
 
 #[test]
 fn builtin_scan_lazy_range_empty() {
-    // scan(0, +, 5..5) → [] (empty range)
+    // scan(0, +, 5..5) → [0] (empty range, just initial)
     let lazy = LazySequenceObject::range(5, Some(5), false, 1);
     let range_val = Value::from_lazy_sequence(lazy);
     let folder = make_test_closure(sum_closure, 2);
@@ -4728,7 +4732,8 @@ fn builtin_scan_lazy_range_empty() {
     let result = rt_scan(initial, folder, range_val);
 
     let result_list = result.as_list().expect("should be a list");
-    assert!(result_list.is_empty());
+    assert_eq!(result_list.len(), 1);
+    assert_eq!(result_list[0].as_integer(), Some(0));
 }
 
 // ============================================================================

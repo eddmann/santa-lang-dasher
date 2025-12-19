@@ -23,7 +23,9 @@ let uncovered_x = |ranges| {
     [[start, end], ..tail] { recur(tail, max(max_end, end)) }
   };
 
-  let [[_, initial_end], ..sorted] = ranges |> sort(|[s1], [s2]| s1 > s2);
+  let sorted_ranges = ranges |> sort(|[s1], [s2]| s1 > s2);
+  let initial_end = sorted_ranges[0][1];
+  let sorted = rest(sorted_ranges);
 
   recur(sorted, initial_end);
 }

@@ -275,10 +275,13 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
                 return Value::from_list(im::Vector::new());
             }
         }
-        // Regular integer index
+        // Regular integer index (supports negative indexing)
+        // Per LANG.txt: [10, 20, 30][-1] → 30 (from end)
         if let Some(i) = index.as_integer() {
-            if i >= 0 && (i as usize) < list.len() {
-                return list[i as usize];
+            let len = list.len() as i64;
+            let idx = if i < 0 { len + i } else { i };
+            if idx >= 0 && idx < len {
+                return list[idx as usize];
             }
         }
         return Value::nil();
@@ -330,12 +333,14 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
                 return Value::from_string(String::new());
             }
         }
-        // Regular integer index
+        // Regular integer index (supports negative indexing)
+        // Per LANG.txt: "hello"[-1] → "o"
         if let Some(i) = index.as_integer() {
-            if i >= 0 {
-                if let Some(g) = s.graphemes(true).nth(i as usize) {
-                    return Value::from_string(g.to_string());
-                }
+            let graphemes: Vec<&str> = s.graphemes(true).collect();
+            let len = graphemes.len() as i64;
+            let idx = if i < 0 { len + i } else { i };
+            if idx >= 0 && idx < len {
+                return Value::from_string(graphemes[idx as usize].to_string());
             }
         }
         return Value::nil();
@@ -382,9 +387,30 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
                     return Value::from_integer(value);
                 }
 
-                // For other LazySequence types, iterate to the index
+                // For Iterate sequences, we need to call the generator
+                LazySeqKind::Iterate { generator, current } => {
+                    // Generator can be a closure, partial application, or memoized closure
+                    let mut cur = *current;
+                    for _ in 0..idx {
+                        cur = call_value(*generator, &[cur]);
+                    }
+                    return cur;
+                }
+
+                // For other LazySequence types (Map/Filter/Zip), collect and index
                 _ => {
-                    // Clone and iterate - less efficient but general
+                    let needs_forcing = matches!(
+                        &lazy_seq.kind,
+                        LazySeqKind::Map { .. } | LazySeqKind::Filter { .. } | LazySeqKind::Zip { .. }
+                    );
+
+                    if needs_forcing {
+                        // Force to list first
+                        let elements = collect_bounded_lazy(&lazy_seq);
+                        return elements.get(idx).copied().unwrap_or(Value::nil());
+                    }
+
+                    // Clone and iterate - for other simple types
                     let mut current_seq: Box<crate::heap::LazySequenceObject> = Box::new(lazy_seq.clone());
                     for _ in 0..idx {
                         match current_seq.next() {
@@ -819,6 +845,12 @@ pub fn call_closure(closure: &ClosureObject, args: &[Value]) -> Value {
         args.len() as u32,
         args.as_ptr(),
     )
+}
+
+/// Call any callable value (closure, partial application, memoized closure) with arguments.
+/// This is the internal Rust equivalent of rt_call for use within builtins.
+pub fn call_value(callee: Value, args: &[Value]) -> Value {
+    crate::operations::rt_call(callee, args.len() as u32, args.as_ptr())
 }
 
 /// `update(key, updater, collection)` → Collection
@@ -1604,21 +1636,45 @@ pub extern "C" fn rt_fold(initial: Value, folder: Value, collection: Value) -> V
         return acc;
     }
 
-    // LazySequence - iterate using next() until exhausted
-    // Break support allows termination of unbounded sequences
+    // LazySequence - iterate using appropriate method
+    // Map/Filter/Zip require closure evaluation, so we force them to a list first
     if let Some(lazy) = collection.as_lazy_sequence() {
-        let mut current = lazy.clone();
-        while let Some((val, next_lazy)) = current.next() {
-            acc = call_closure(closure, &[acc, val]);
-            if break_occurred() {
-                if let Some(break_val) = take_break_value() {
-                    return break_val;
+        use crate::heap::LazySeqKind;
+
+        // Check if this is a Map/Filter/Zip that needs forcing
+        let needs_forcing = matches!(
+            &lazy.kind,
+            LazySeqKind::Map { .. } | LazySeqKind::Filter { .. } | LazySeqKind::Zip { .. }
+        );
+
+        if needs_forcing {
+            // Force to list first, then iterate
+            let elements = collect_bounded_lazy(&lazy);
+            for v in elements.iter() {
+                acc = call_closure(closure, &[acc, *v]);
+                if break_occurred() {
+                    if let Some(break_val) = take_break_value() {
+                        return break_val;
+                    }
+                    return acc;
                 }
-                return acc;
             }
-            current = *next_lazy;
+            return acc;
+        } else {
+            // Use next() for Range, Repeat, Cycle, etc.
+            let mut current = lazy.clone();
+            while let Some((val, next_lazy)) = current.next() {
+                acc = call_closure(closure, &[acc, val]);
+                if break_occurred() {
+                    if let Some(break_val) = take_break_value() {
+                        return break_val;
+                    }
+                    return acc;
+                }
+                current = *next_lazy;
+            }
+            return acc;
         }
-        return acc;
     }
 
     acc
@@ -1627,9 +1683,9 @@ pub extern "C" fn rt_fold(initial: Value, folder: Value, collection: Value) -> V
 /// `scan(initial, folder, collection)` → List
 ///
 /// Return all intermediate fold results as a list.
+/// The initial value is included as the first element (matching reference implementations).
 ///
-/// Per LANG.txt §11.5:
-/// - scan(0, +, [1, 2]) → [1, 3]
+/// - scan(0, +, [1, 2]) → [0, 1, 3]
 #[no_mangle]
 pub extern "C" fn rt_scan(initial: Value, folder: Value, collection: Value) -> Value {
     // Get the closure - if not a closure, return empty list
@@ -1640,6 +1696,9 @@ pub extern "C" fn rt_scan(initial: Value, folder: Value, collection: Value) -> V
 
     let mut acc = initial;
     let mut results: im::Vector<Value> = im::Vector::new();
+
+    // Include initial value as first element (per reference implementations)
+    results.push_back(acc);
 
     // List
     if let Some(list) = collection.as_list() {
@@ -1933,14 +1992,13 @@ fn find_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> Value {
         }
 
         LazySeqKind::Iterate { generator, current } => {
-            if let Some(gen_closure) = generator.as_closure() {
-                let mut cur = *current;
-                for _ in 0..MAX_ITERATIONS {
-                    if call_closure(predicate, &[cur]).is_truthy() {
-                        return cur;
-                    }
-                    cur = call_closure(gen_closure, &[cur]);
+            // Generator can be a closure, partial application, or memoized closure
+            let mut cur = *current;
+            for _ in 0..MAX_ITERATIONS {
+                if call_closure(predicate, &[cur]).is_truthy() {
+                    return cur;
                 }
+                cur = call_value(*generator, &[cur]);
             }
             Value::nil()
         }
@@ -2996,6 +3054,66 @@ pub extern "C" fn rt_union(collection1: Value, collection2: Value) -> Value {
     Value::from_set(result)
 }
 
+/// `union(..collections)` → Set
+///
+/// Elements found in any of the provided collections.
+/// Can be called with multiple arguments (packaged as a list) or a single list of collections.
+///
+/// Per LANG.txt §11.10:
+/// - union({1, 2}, [2, 3], 1..4) → {1, 2, 3}
+/// - union([{1, 2}, [2, 3], 1..4]) → {1, 2, 3}
+#[no_mangle]
+pub extern "C" fn rt_union_all(collections: Value) -> Value {
+    // Get the list of collections
+    let list = match collections.as_list() {
+        Some(l) => l,
+        None => {
+            // Single non-list value - return its elements as a set
+            return Value::from_set(collect_elements(collections).into_iter().collect());
+        }
+    };
+
+    if list.is_empty() {
+        return Value::from_set(im::HashSet::new());
+    }
+
+    // Check if this is a single list of collections or multiple collections
+    // If there's one element and it's a list/set/lazy, treat it as a list of collections
+    let collections_to_union: Vec<Value> = if list.len() == 1 {
+        let first = list[0];
+        if first.as_list().is_some() || first.as_set().is_some() || first.as_lazy_sequence().is_some() {
+            // Single argument that is a collection - check if it contains collections
+            let elements: Vec<Value> = collect_elements(first);
+            // Check if first element is itself a collection
+            if !elements.is_empty() && (elements[0].as_list().is_some()
+                || elements[0].as_set().is_some()
+                || elements[0].as_lazy_sequence().is_some()) {
+                // It's a list of collections - use the elements as collections
+                elements
+            } else {
+                // Single collection - just return its elements as a set
+                return Value::from_set(elements.into_iter().collect());
+            }
+        } else {
+            // Single non-collection argument
+            return Value::from_set(collect_elements(first).into_iter().collect());
+        }
+    } else {
+        // Multiple arguments - use them directly
+        list.iter().copied().collect()
+    };
+
+    // Union all collections
+    let mut result: im::HashSet<Value> = im::HashSet::new();
+    for coll in collections_to_union {
+        for elem in collect_elements(coll) {
+            result.insert(elem);
+        }
+    }
+
+    Value::from_set(result)
+}
+
 /// `intersection(collection1, collection2)` → Set
 ///
 /// Elements found in all collections.
@@ -3133,7 +3251,13 @@ pub extern "C" fn rt_includes(collection: Value, value: Value) -> Value {
                 return Value::from_bool(in_bounds && aligned);
             }
         }
-        // For other lazy sequences, iterate
+        // Map/Filter/Zip require closure evaluation - force to list first
+        if matches!(&lazy.kind, LazySeqKind::Map { .. } | LazySeqKind::Filter { .. } | LazySeqKind::Zip { .. }) {
+            let items = collect_bounded_lazy(lazy);
+            let found = items.iter().any(|v| *v == value);
+            return Value::from_bool(found);
+        }
+        // For other lazy sequences, iterate using next()
         let mut current = lazy.clone();
         while let Some((val, next_seq)) = current.next() {
             if val == value {
@@ -3211,16 +3335,36 @@ pub extern "C" fn rt_any(predicate: Value, collection: Value) -> Value {
         return Value::from_bool(false);
     }
 
-    // LazySequence (including Range)
+    // LazySequence (including Range, Map, Filter, Zip)
     if let Some(lazy) = collection.as_lazy_sequence() {
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
-            if call_closure(closure, &[val]).is_truthy() {
-                return Value::from_bool(true);
+        use crate::heap::LazySeqKind;
+
+        // Check if this needs forcing (Map/Filter/Zip)
+        let needs_forcing = matches!(
+            &lazy.kind,
+            LazySeqKind::Map { .. } | LazySeqKind::Filter { .. } | LazySeqKind::Zip { .. }
+        );
+
+        if needs_forcing {
+            // Force to list first, then iterate
+            let elements = collect_bounded_lazy(&lazy);
+            for v in elements.iter() {
+                if call_closure(closure, &[*v]).is_truthy() {
+                    return Value::from_bool(true);
+                }
             }
-            current = *next_seq;
+            return Value::from_bool(false);
+        } else {
+            // Use next() for Range, Repeat, Cycle, etc.
+            let mut current = lazy.clone();
+            while let Some((val, next_seq)) = current.next() {
+                if call_closure(closure, &[val]).is_truthy() {
+                    return Value::from_bool(true);
+                }
+                current = *next_seq;
+            }
+            return Value::from_bool(false);
         }
-        return Value::from_bool(false);
     }
 
     Value::from_bool(false)
@@ -3275,11 +3419,27 @@ pub extern "C" fn rt_all(predicate: Value, collection: Value) -> Value {
         return Value::from_bool(true);
     }
 
-    // Range (bounded only, per spec)
+    // LazySequence (Range, Map, Filter, Zip, etc.)
     if let Some(lazy) = collection.as_lazy_sequence() {
         use crate::heap::LazySeqKind;
-        if let LazySeqKind::Range { end: Some(_), .. } = &lazy.kind {
-            // Bounded range - iterate and check
+
+        // Check if this needs forcing (Map/Filter/Zip)
+        let needs_forcing = matches!(
+            &lazy.kind,
+            LazySeqKind::Map { .. } | LazySeqKind::Filter { .. } | LazySeqKind::Zip { .. }
+        );
+
+        if needs_forcing {
+            // Force to list first, then iterate
+            let elements = collect_bounded_lazy(&lazy);
+            for v in elements.iter() {
+                if !call_closure(closure, &[*v]).is_truthy() {
+                    return Value::from_bool(false);
+                }
+            }
+            return Value::from_bool(true);
+        } else if let LazySeqKind::Range { end: Some(_), .. } = &lazy.kind {
+            // Bounded range - iterate using next()
             let mut current = lazy.clone();
             while let Some((val, next_seq)) = current.next() {
                 if !call_closure(closure, &[val]).is_truthy() {
@@ -3289,7 +3449,7 @@ pub extern "C" fn rt_all(predicate: Value, collection: Value) -> Value {
             }
             return Value::from_bool(true);
         }
-        // Unbounded lazy sequences not supported per spec
+        // Unbounded lazy sequences not supported per spec - return true (vacuously)
     }
 
     Value::from_bool(true)
@@ -3759,7 +3919,7 @@ fn collection_to_vector(v: Value, max_len: usize) -> im::Vector<Value> {
 /// Collect all elements from a bounded lazy sequence.
 /// For unbounded sequences, this will loop forever - caller must ensure sequence is bounded.
 /// Handles all lazy sequence variants including Map, Filter, and Iterate.
-fn collect_bounded_lazy(lazy: &LazySequenceObject) -> im::Vector<Value> {
+pub fn collect_bounded_lazy(lazy: &LazySequenceObject) -> im::Vector<Value> {
     let mut result: im::Vector<Value> = im::Vector::new();
     collect_bounded_lazy_recursive(&mut result, lazy);
     result
@@ -3782,12 +3942,11 @@ fn collect_bounded_lazy_recursive(
         LazySeqKind::Iterate { generator, current } => {
             // Iterate is potentially infinite, but we'll try to collect with a limit
             // In practice, users should use take() for iterate sequences
-            if let Some(gen_closure) = generator.as_closure() {
-                let mut cur = *current;
-                for _ in 0..MAX_ELEMENTS {
-                    result.push_back(cur);
-                    cur = call_closure(gen_closure, &[cur]);
-                }
+            // Generator can be a closure, partial application, or memoized closure
+            let mut cur = *current;
+            for _ in 0..MAX_ELEMENTS {
+                result.push_back(cur);
+                cur = call_value(*generator, &[cur]);
             }
         }
 
@@ -3975,13 +4134,12 @@ fn take_from_lazy_recursive(
         }
 
         LazySeqKind::Iterate { generator, current } => {
-            if let Some(gen_closure) = generator.as_closure() {
-                let mut cur = *current;
-                while *remaining > 0 {
-                    result.push_back(cur);
-                    *remaining -= 1;
-                    cur = call_closure(gen_closure, &[cur]);
-                }
+            // Generator can be a closure, partial application, or memoized closure
+            let mut cur = *current;
+            while *remaining > 0 {
+                result.push_back(cur);
+                *remaining -= 1;
+                cur = call_value(*generator, &[cur]);
             }
         }
 

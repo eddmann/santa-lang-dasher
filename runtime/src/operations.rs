@@ -102,10 +102,49 @@ pub extern "C" fn rt_add(left: Value, right: Value) -> Value {
         return Value::from_list(result);
     }
 
+    // Handle List + LazySequence (force lazy to list, then concatenate)
+    // This is used in patterns like: rock + line_between(...)
+    // where line_between returns a lazy sequence of points
+    if let Some(list) = left.as_list() {
+        if let Some(lazy) = right.as_lazy_sequence() {
+            let mut result = list.clone();
+            let items = crate::builtins::collect_bounded_lazy(lazy);
+            result.append(items);
+            return Value::from_list(result);
+        }
+    }
+
     // Handle Set + Set (union) per LANG.txt §4
     if let (Some(l), Some(r)) = (left.as_set(), right.as_set()) {
         let result = l.clone().union(r.clone());
         return Value::from_set(result);
+    }
+
+    // Handle Set + List (add list elements to set)
+    // This is used in patterns like: visited + next_positions
+    // where next_positions is a list of items to add to the visited set
+    if let Some(set) = left.as_set() {
+        if let Some(list) = right.as_list() {
+            let mut result = set.clone();
+            for item in list.iter() {
+                result.insert(*item);
+            }
+            return Value::from_set(result);
+        }
+    }
+
+    // Handle Set + LazySequence (force lazy sequence to list, then add to set)
+    // This is used in patterns like: rock + void
+    // where void is a lazy sequence of points to add to the rock set
+    if let Some(set) = left.as_set() {
+        if let Some(lazy) = right.as_lazy_sequence() {
+            let mut result = set.clone();
+            let items = crate::builtins::collect_bounded_lazy(lazy);
+            for item in items.iter() {
+                result.insert(*item);
+            }
+            return Value::from_set(result);
+        }
     }
 
     // Handle Dict + Dict (merge, right precedence) per LANG.txt §4
@@ -145,6 +184,41 @@ pub extern "C" fn rt_sub(left: Value, right: Value) -> Value {
     if let Some(l) = left.as_decimal() {
         if let Some(r) = right.as_integer() {
             return Value::from_decimal(l - r as f64);
+        }
+    }
+
+    // Handle Set - Set (difference) per LANG.txt §4
+    // {1, 2, 3} - {2} → {1, 3}
+    if let (Some(l), Some(r)) = (left.as_set(), right.as_set()) {
+        let result: im::HashSet<Value> = l.iter()
+            .filter(|v| !r.contains(*v))
+            .copied()
+            .collect();
+        return Value::from_set(result);
+    }
+
+    // Handle Set - List (remove list elements from set)
+    if let Some(set) = left.as_set() {
+        if let Some(list) = right.as_list() {
+            let to_remove: im::HashSet<Value> = list.iter().copied().collect();
+            let result: im::HashSet<Value> = set.iter()
+                .filter(|v| !to_remove.contains(*v))
+                .copied()
+                .collect();
+            return Value::from_set(result);
+        }
+    }
+
+    // Handle Set - LazySequence (remove lazy elements from set)
+    if let Some(set) = left.as_set() {
+        if let Some(lazy) = right.as_lazy_sequence() {
+            let items = crate::builtins::collect_bounded_lazy(lazy);
+            let to_remove: im::HashSet<Value> = items.iter().copied().collect();
+            let result: im::HashSet<Value> = set.iter()
+                .filter(|v| !to_remove.contains(*v))
+                .copied()
+                .collect();
+            return Value::from_set(result);
         }
     }
 
@@ -291,6 +365,30 @@ pub extern "C" fn rt_ne(left: Value, right: Value) -> Value {
 #[no_mangle]
 pub extern "C" fn rt_is_truthy(value: Value) -> i64 {
     if value.is_truthy() { 1 } else { 0 }
+}
+
+/// Logical NOT operation
+///
+/// Per LANG.txt §4.2: `!x` returns the logical negation of x's truthiness.
+/// Returns true if x is falsy, false if x is truthy.
+#[no_mangle]
+pub extern "C" fn rt_not(value: Value) -> Value {
+    Value::from_bool(!value.is_truthy())
+}
+
+/// Numeric negation
+///
+/// Per LANG.txt §4.1: `-x` returns the arithmetic negation of x.
+/// Works on integers and decimals.
+#[no_mangle]
+pub extern "C" fn rt_negate(value: Value) -> Value {
+    if let Some(n) = value.as_integer() {
+        Value::from_integer(-n)
+    } else if let Some(f) = value.as_decimal() {
+        Value::from_decimal(-f)
+    } else {
+        Value::nil()
+    }
 }
 
 /// Less-than comparison
@@ -470,7 +568,7 @@ fn value_to_string(value: &Value) -> String {
 
 // ===== Closure Operations =====
 
-use super::heap::ClosureObject;
+use super::heap::{ClosureObject, PartialApplicationObject};
 
 /// Create a new closure with the given function pointer and captured values
 ///
@@ -517,8 +615,35 @@ pub unsafe extern "C" fn rt_make_closure(
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -> Value {
-    // Try regular closure first
+    // Collect arguments into a vector
+    let new_args: Vec<Value> = if argc == 0 || argv.is_null() {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(argv, argc as usize).to_vec() }
+    };
+
+    // Try partial application first - combine args and recurse
+    if let Some(partial) = callee.as_partial_application() {
+        // Combine accumulated args with new args
+        let mut all_args = partial.args.clone();
+        all_args.extend(new_args);
+
+        let total_argc = all_args.len() as u32;
+
+        // Recurse with combined args on the original closure
+        return rt_call(partial.closure, total_argc, all_args.as_ptr());
+    }
+
+    // Try regular closure
     if let Some(closure) = callee.as_closure() {
+        // Check if we have enough arguments (auto-currying support)
+        if argc < closure.arity {
+            // Create a partial application
+            let remaining = closure.arity - argc;
+            let partial = PartialApplicationObject::new(callee, new_args, remaining);
+            return Value::from_partial_application(partial);
+        }
+
         // Cast the function pointer to the expected signature
         let fn_ptr: extern "C" fn(*const ClosureObject, u32, *const Value) -> Value =
             unsafe { std::mem::transmute(closure.function_ptr) };
@@ -529,15 +654,8 @@ pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -
 
     // Try memoized closure
     if let Some(memoized) = callee.as_memoized_closure() {
-        // Collect arguments into a vector for cache lookup
-        let args: Vec<Value> = if argc == 0 || argv.is_null() {
-            Vec::new()
-        } else {
-            unsafe { std::slice::from_raw_parts(argv, argc as usize).to_vec() }
-        };
-
         // Check cache first
-        if let Some(cached) = memoized.get_cached(&args) {
+        if let Some(cached) = memoized.get_cached(&new_args) {
             return cached;
         }
 
@@ -545,10 +663,10 @@ pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -
         let inner_closure = memoized.inner_closure;
         if let Some(closure) = inner_closure.as_closure() {
             // Call the inner closure
-            let result = crate::builtins::call_closure(closure, &args);
+            let result = crate::builtins::call_closure(closure, &new_args);
 
             // Cache the result
-            memoized.cache_result(args, result);
+            memoized.cache_result(new_args, result);
 
             return result;
         }

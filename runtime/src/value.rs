@@ -1,4 +1,4 @@
-use super::heap::{StringObject, ListObject, SetObject, DictObject, MutableCellObject, ClosureObject, LazySequenceObject, MemoizedClosureObject, ObjectHeader, TypeTag};
+use super::heap::{StringObject, ListObject, SetObject, DictObject, MutableCellObject, ClosureObject, LazySequenceObject, MemoizedClosureObject, PartialApplicationObject, ObjectHeader, TypeTag};
 
 /// 64-bit NaN-boxed value representation
 ///
@@ -393,6 +393,11 @@ impl Value {
         Value::from_heap_ptr(ptr)
     }
 
+    pub fn from_partial_application(partial: Box<PartialApplicationObject>) -> Self {
+        let ptr = Box::into_raw(partial);
+        Value::from_heap_ptr(ptr)
+    }
+
     pub fn as_memoized_closure(&self) -> Option<&MemoizedClosureObject> {
         if self.heap_type_tag() == Some(TypeTag::MemoizedClosure) {
             let ptr = self.0 as *const MemoizedClosureObject;
@@ -404,6 +409,19 @@ impl Value {
 
     pub fn is_memoized_closure(&self) -> bool {
         self.heap_type_tag() == Some(TypeTag::MemoizedClosure)
+    }
+
+    pub fn as_partial_application(&self) -> Option<&PartialApplicationObject> {
+        if self.heap_type_tag() == Some(TypeTag::PartialApplication) {
+            let ptr = self.0 as *const PartialApplicationObject;
+            unsafe { Some(&*ptr) }
+        } else {
+            None
+        }
+    }
+
+    pub fn is_partial_application(&self) -> bool {
+        self.heap_type_tag() == Some(TypeTag::PartialApplication)
     }
 
     // ===== Truthiness (LANG.txt §14.1) =====

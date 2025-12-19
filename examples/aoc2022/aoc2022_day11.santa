@@ -42,7 +42,7 @@ let round = |apply_relief, monkeys| {
   }
 }
 
-let monkey_business = map(get("activity")) >> sort(<) >> |[a, b]| a * b;
+let monkey_business = map(get("activity")) >> sort(>) >> |[a, b]| a * b;
 
 part_one: {
   parse_monkeys(input)

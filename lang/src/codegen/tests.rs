@@ -1663,18 +1663,20 @@ fn codegen_get_ir() {
     assert!(ir.contains("ret i64 42"), "IR should contain return statement");
 }
 
-// ===== Phase 7: Protected Built-in Names =====
+// ===== Phase 7: Builtin Name Shadowing =====
+// Note: Builtins are NOT protected. Users can shadow them with their own bindings.
+// Per reference implementations (blitzen, rs), the runtime resolves user globals
+// first, then falls back to builtins.
 
 #[test]
-fn codegen_protected_builtin_name_sum_fails() {
+fn codegen_builtin_name_shadowing_sum_succeeds() {
     use crate::parser::ast::{Stmt, Pattern};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
     let _function = codegen.create_test_function();
 
-    // Attempt to bind a variable with the same name as built-in 'sum'
-    // This should produce a CompileError::ProtectedName
+    // Binding to 'sum' (a builtin name) should succeed
     let let_stmt = Stmt::Let {
         mutable: false,
         pattern: Pattern::Identifier("sum".to_string()),
@@ -1682,24 +1684,18 @@ fn codegen_protected_builtin_name_sum_fails() {
     };
 
     let result = codegen.compile_stmt(&let_stmt);
-    assert!(result.is_err(), "Should fail when binding to protected name 'sum'");
-    match result.unwrap_err() {
-        super::compiler::CompileError::ProtectedName(name) => {
-            assert_eq!(name, "sum", "Error should name 'sum' as protected");
-        }
-        err => panic!("Expected ProtectedName error, got: {:?}", err),
-    }
+    assert!(result.is_ok(), "Binding to builtin name 'sum' should succeed");
 }
 
 #[test]
-fn codegen_protected_builtin_name_map_fails() {
+fn codegen_builtin_name_shadowing_map_succeeds() {
     use crate::parser::ast::{Stmt, Pattern};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
     let _function = codegen.create_test_function();
 
-    // Attempt to bind to 'map' - a core transformation function
+    // Binding to 'map' (a builtin name) should succeed
     let let_stmt = Stmt::Let {
         mutable: false,
         pattern: Pattern::Identifier("map".to_string()),
@@ -1707,13 +1703,7 @@ fn codegen_protected_builtin_name_map_fails() {
     };
 
     let result = codegen.compile_stmt(&let_stmt);
-    assert!(result.is_err(), "Should fail when binding to protected name 'map'");
-    match result.unwrap_err() {
-        super::compiler::CompileError::ProtectedName(name) => {
-            assert_eq!(name, "map", "Error should name 'map' as protected");
-        }
-        err => panic!("Expected ProtectedName error, got: {:?}", err),
-    }
+    assert!(result.is_ok(), "Binding to builtin name 'map' should succeed");
 }
 
 #[test]

@@ -10,54 +10,11 @@ pub enum CompileError {
     UnsupportedExpression(String),
     UnsupportedStatement(String),
     UnsupportedPattern(String),
-    ProtectedName(String),
 }
 
-/// List of protected built-in function names that cannot be shadowed.
-/// Per LANG.txt §14.6: "Built-in functions are protected and cannot be shadowed"
-const PROTECTED_BUILTINS: &[&str] = &[
-    // Type conversion (§11.1)
-    "int", "ints", "list", "set", "dict",
-    // Collection access (§11.2)
-    "get", "size", "first", "second", "last", "rest", "keys", "values",
-    // Collection modification (§11.3)
-    "push", "assoc", "update", "update_d",
-    // Transformation (§11.4)
-    "map", "filter", "flat_map", "filter_map", "find_map",
-    // Reduction (§11.5)
-    "reduce", "fold", "fold_s", "scan",
-    // Iteration (§11.6)
-    "each",
-    // Search (§11.7)
-    "find", "count",
-    // Aggregation (§11.8)
-    "sum", "max", "min",
-    // Sequence manipulation (§11.9)
-    "skip", "take", "sort", "reverse", "rotate", "chunk",
-    // Set operations (§11.10)
-    "union", "intersection",
-    // Membership (§11.11)
-    "includes?", "excludes?", "any?", "all?",
-    // Sequence generators (§11.12)
-    "zip", "repeat", "cycle", "iterate", "combinations", "range",
-    // String functions (§11.14)
-    "lines", "split", "regex_match", "regex_match_all", "md5",
-    "upper", "lower", "replace", "join",
-    // Math functions (§11.15)
-    "abs",
-    // Bitwise functions (§4.5)
-    "bit_and", "bit_or", "bit_xor", "bit_not", "bit_shift_left", "bit_shift_right",
-    // Utility functions (§11.16)
-    "id", "type", "memoize", "or", "and",
-    // External functions (§13)
-    "puts", "read",
-    // Note: "evaluate" excluded since it's out of scope for Dasher (AOT limitation)
-];
-
-/// Check if a name is a protected built-in that cannot be shadowed
-fn is_protected_builtin(name: &str) -> bool {
-    PROTECTED_BUILTINS.contains(&name)
-}
+// Note: Builtins are NOT protected. Per reference implementations (blitzen, rs),
+// user-defined variables/functions can shadow builtins. The runtime resolves
+// user globals first, then falls back to builtins.
 
 impl<'ctx> CodegenContext<'ctx> {
     pub fn compile_expr(&mut self, expr: &TypedExpr) -> Result<BasicValueEnum<'ctx>, CompileError> {
@@ -93,6 +50,16 @@ impl<'ctx> CodegenContext<'ctx> {
                             format!("Failed to create function value for builtin: {}", name)
                         ))
                     }
+                } else if Self::is_variadic_builtin_function(name) {
+                    // Variadic builtins used as function values (e.g., union, intersection)
+                    // Treat as 1-arg functions that take a list/collection
+                    if let Some(result) = self.compile_partial_builtin(name, &[], 1)? {
+                        Ok(result)
+                    } else {
+                        Err(CompileError::UnsupportedExpression(
+                            format!("Failed to create function value for variadic builtin: {}", name)
+                        ))
+                    }
                 } else {
                     Err(CompileError::UnsupportedExpression(
                         format!("Undefined variable: {}", name)
@@ -122,6 +89,9 @@ impl<'ctx> CodegenContext<'ctx> {
             },
             Expr::If { condition, then_branch, else_branch } => {
                 self.compile_if(condition, then_branch, else_branch.as_deref())
+            },
+            Expr::IfLet { pattern, value, then_branch, else_branch } => {
+                self.compile_if_let(pattern, value, then_branch, else_branch.as_deref())
             },
             Expr::Block(stmts) => {
                 self.compile_block(stmts)
@@ -1482,6 +1452,113 @@ impl<'ctx> CodegenContext<'ctx> {
         Ok(phi.as_basic_value())
     }
 
+    /// Compile an if-let expression
+    ///
+    /// `if let pattern = value { then } else { else }` evaluates value,
+    /// checks if it's truthy, and if so binds the pattern and executes then.
+    fn compile_if_let(
+        &mut self,
+        pattern: &Pattern,
+        value: &Expr,
+        then_branch: &Expr,
+        else_branch: Option<&Expr>,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Get the current function
+        let current_fn = self.builder.get_insert_block()
+            .and_then(|bb| bb.get_parent())
+            .ok_or_else(|| CompileError::UnsupportedExpression(
+                "if-let expression requires a function context".to_string()
+            ))?;
+
+        // Compile the value expression
+        let value_ty = self.infer_expr_type(value);
+        let value_typed = TypedExpr {
+            expr: value.clone(),
+            ty: value_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        let value_val = self.compile_expr(&value_typed)?;
+
+        // Call rt_is_truthy to check if value is truthy
+        let rt_is_truthy = self.get_or_declare_rt_is_truthy();
+        let is_truthy = self.builder.build_call(
+            rt_is_truthy,
+            &[value_val.into()],
+            "is_truthy",
+        ).unwrap().try_as_basic_value().left().unwrap();
+
+        // Convert to bool
+        let cond_bool = self.builder.build_int_compare(
+            inkwell::IntPredicate::NE,
+            is_truthy.into_int_value(),
+            self.context.i64_type().const_zero(),
+            "truthy_bool",
+        ).unwrap();
+
+        // Create basic blocks
+        let then_bb = self.context.append_basic_block(current_fn, "if_let_then");
+        let else_bb = self.context.append_basic_block(current_fn, "if_let_else");
+        let merge_bb = self.context.append_basic_block(current_fn, "if_let_merge");
+
+        // Branch based on truthiness
+        self.builder.build_conditional_branch(cond_bool, then_bb, else_bb).unwrap();
+
+        // Compile then branch (with pattern binding)
+        self.builder.position_at_end(then_bb);
+
+        // Save variables for scoping
+        let saved_variables = self.variables.clone();
+
+        // Bind pattern variables to the value
+        self.bind_pattern_variables(pattern, value_val)?;
+
+        let then_ty = self.infer_expr_type(then_branch);
+        let then_typed = TypedExpr {
+            expr: then_branch.clone(),
+            ty: then_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        let then_val = self.compile_expr(&then_typed)?;
+
+        // Restore variables
+        self.variables = saved_variables;
+
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        let then_end_bb = self.builder.get_insert_block().unwrap();
+
+        // Compile else branch (or nil)
+        self.builder.position_at_end(else_bb);
+        let else_val = if let Some(else_expr) = else_branch {
+            let else_ty = self.infer_expr_type(else_expr);
+            let else_typed = TypedExpr {
+                expr: else_expr.clone(),
+                ty: else_ty,
+                span: crate::lexer::token::Span::new(
+                    crate::lexer::token::Position::new(0, 0),
+                    crate::lexer::token::Position::new(0, 0),
+                ),
+            };
+            self.compile_expr(&else_typed)?
+        } else {
+            self.compile_nil()
+        };
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        let else_end_bb = self.builder.get_insert_block().unwrap();
+
+        // Merge with phi
+        self.builder.position_at_end(merge_bb);
+        let phi = self.builder.build_phi(self.context.i64_type(), "if_let_result").unwrap();
+        phi.add_incoming(&[(&then_val, then_end_bb), (&else_val, else_end_bb)]);
+
+        Ok(phi.as_basic_value())
+    }
+
     /// Compile a block of statements
     fn compile_block(&mut self, stmts: &[Stmt]) -> Result<BasicValueEnum<'ctx>, CompileError> {
         if stmts.is_empty() {
@@ -1549,10 +1626,26 @@ impl<'ctx> CodegenContext<'ctx> {
                         last_val = Some(val);
                     }
                 }
-                Stmt::Return(_) => {
-                    return Err(CompileError::UnsupportedStatement(
-                        "Return not yet supported in blocks".to_string()
-                    ));
+                Stmt::Return(expr) => {
+                    // Compile the return value expression
+                    let return_ty = self.infer_expr_type(expr);
+                    let return_typed = TypedExpr {
+                        expr: expr.clone(),
+                        ty: return_ty,
+                        span: crate::lexer::token::Span::new(
+                            crate::lexer::token::Position::new(0, 0),
+                            crate::lexer::token::Position::new(0, 0),
+                        ),
+                    };
+                    let return_val = self.compile_expr(&return_typed)?;
+
+                    // Return from the current function
+                    self.builder.build_return(Some(&return_val)).unwrap();
+
+                    // Create a new basic block for any code after return (unreachable)
+                    let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let unreachable_block = self.context.append_basic_block(func, "after_return");
+                    self.builder.position_at_end(unreachable_block);
                 }
                 Stmt::Break(expr) => {
                     // Compile the break value expression
@@ -2505,11 +2598,6 @@ impl<'ctx> CodegenContext<'ctx> {
     fn compile_let(&mut self, pattern: &Pattern, value: &Expr, _mutable: bool) -> Result<(), CompileError> {
         match pattern {
             Pattern::Identifier(name) => {
-                // Check if trying to shadow a protected built-in name
-                if is_protected_builtin(name) {
-                    return Err(CompileError::ProtectedName(name.clone()));
-                }
-
                 // For recursive function bindings, we need to pre-allocate the variable
                 // so the function body can reference itself
                 let is_function = matches!(value, Expr::Function { .. });
@@ -2607,9 +2695,6 @@ impl<'ctx> CodegenContext<'ctx> {
                 for (i, pat) in patterns.iter().enumerate() {
                     match pat {
                         Pattern::Identifier(name) => {
-                            if is_protected_builtin(name) {
-                                return Err(CompileError::ProtectedName(name.clone()));
-                            }
                             // Get element at index i
                             let index = self.context.i64_type().const_int(i as u64, false);
                             let index_val = self.compile_integer(index.get_sign_extended_constant().unwrap());
@@ -2868,6 +2953,10 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::If { condition, then_branch, else_branch } => {
                 self.compile_if_tail(condition, then_branch, else_branch.as_deref())
             }
+            // If-let expressions: both branches are in tail position
+            Expr::IfLet { pattern, value, then_branch, else_branch } => {
+                self.compile_if_let_tail(pattern, value, then_branch, else_branch.as_deref())
+            }
             // Match expressions: arm bodies are in tail position
             Expr::Match { subject, arms } => {
                 self.compile_match_tail(subject, arms)
@@ -3030,6 +3119,99 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Only add phi incoming if the branch doesn't have a terminator (wasn't a tail call)
         let phi = self.builder.build_phi(self.context.i64_type(), "if_result").unwrap();
+        if then_needs_branch {
+            phi.add_incoming(&[(&then_val, then_end_bb)]);
+        }
+        if else_needs_branch {
+            phi.add_incoming(&[(&else_val, else_end_bb)]);
+        }
+
+        Ok(phi.as_basic_value())
+    }
+
+    /// Compile an if-let expression with tail-position awareness
+    fn compile_if_let_tail(
+        &mut self,
+        pattern: &Pattern,
+        value: &Expr,
+        then_branch: &Expr,
+        else_branch: Option<&Expr>,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        // Get the current function
+        let current_fn = self.builder.get_insert_block()
+            .and_then(|bb| bb.get_parent())
+            .ok_or_else(|| CompileError::UnsupportedExpression(
+                "if-let expression requires a function context".to_string()
+            ))?;
+
+        // Compile the value expression
+        let value_ty = self.infer_expr_type(value);
+        let value_typed = TypedExpr {
+            expr: value.clone(),
+            ty: value_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        let value_val = self.compile_expr(&value_typed)?;
+
+        // Call rt_is_truthy to check if value is truthy
+        let rt_is_truthy = self.get_or_declare_rt_is_truthy();
+        let is_truthy = self.builder.build_call(
+            rt_is_truthy,
+            &[value_val.into()],
+            "is_truthy",
+        ).unwrap().try_as_basic_value().left().unwrap();
+
+        // Convert to bool
+        let cond_bool = self.builder.build_int_compare(
+            inkwell::IntPredicate::NE,
+            is_truthy.into_int_value(),
+            self.context.i64_type().const_zero(),
+            "truthy_bool",
+        ).unwrap();
+
+        // Create basic blocks
+        let then_bb = self.context.append_basic_block(current_fn, "if_let_then");
+        let else_bb = self.context.append_basic_block(current_fn, "if_let_else");
+        let merge_bb = self.context.append_basic_block(current_fn, "if_let_merge");
+
+        // Branch based on truthiness
+        self.builder.build_conditional_branch(cond_bool, then_bb, else_bb).unwrap();
+
+        // Compile then branch (with pattern binding, in tail position)
+        self.builder.position_at_end(then_bb);
+        let saved_variables = self.variables.clone();
+        self.bind_pattern_variables(pattern, value_val)?;
+        let then_val = self.compile_expr_in_tail_position(then_branch)?;
+        self.variables = saved_variables;
+        let then_needs_branch = self.builder.get_insert_block()
+            .map(|bb| bb.get_terminator().is_none())
+            .unwrap_or(false);
+        if then_needs_branch {
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+        let then_end_bb = self.builder.get_insert_block().unwrap();
+
+        // Compile else branch (in tail position)
+        self.builder.position_at_end(else_bb);
+        let else_val = if let Some(else_expr) = else_branch {
+            self.compile_expr_in_tail_position(else_expr)?
+        } else {
+            self.compile_nil()
+        };
+        let else_needs_branch = self.builder.get_insert_block()
+            .map(|bb| bb.get_terminator().is_none())
+            .unwrap_or(false);
+        if else_needs_branch {
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+        let else_end_bb = self.builder.get_insert_block().unwrap();
+
+        // Merge block with phi node
+        self.builder.position_at_end(merge_bb);
+        let phi = self.builder.build_phi(self.context.i64_type(), "if_let_result").unwrap();
         if then_needs_branch {
             phi.add_incoming(&[(&then_val, then_end_bb)]);
         }
@@ -3211,10 +3393,26 @@ impl<'ctx> CodegenContext<'ctx> {
                         self.compile_expr(&expr_typed)?;
                     }
                 }
-                Stmt::Return(_) => {
-                    return Err(CompileError::UnsupportedStatement(
-                        "Return not yet supported in blocks".to_string()
-                    ));
+                Stmt::Return(expr) => {
+                    // Compile the return value expression
+                    let return_ty = self.infer_expr_type(expr);
+                    let return_typed = TypedExpr {
+                        expr: expr.clone(),
+                        ty: return_ty,
+                        span: crate::lexer::token::Span::new(
+                            crate::lexer::token::Position::new(0, 0),
+                            crate::lexer::token::Position::new(0, 0),
+                        ),
+                    };
+                    let return_val = self.compile_expr(&return_typed)?;
+
+                    // Return from the current function
+                    self.builder.build_return(Some(&return_val)).unwrap();
+
+                    // Create a new basic block for any code after return (unreachable)
+                    let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let unreachable_block = self.context.append_basic_block(func, "after_return");
+                    self.builder.position_at_end(unreachable_block);
                 }
                 Stmt::Break(expr) => {
                     // Compile the break value expression
@@ -3317,6 +3515,16 @@ impl<'ctx> CodegenContext<'ctx> {
                     Self::collect_free_variables(else_br, bound, free);
                 }
             }
+            Expr::IfLet { pattern, value, then_branch, else_branch } => {
+                Self::collect_free_variables(value, bound, free);
+                // Pattern bindings are in scope for then_branch
+                let mut new_bound = bound.clone();
+                Self::collect_pattern_variables(pattern, &mut new_bound);
+                Self::collect_free_variables(then_branch, &new_bound, free);
+                if let Some(else_br) = else_branch {
+                    Self::collect_free_variables(else_br, bound, free);
+                }
+            }
             Expr::Call { function, args } => {
                 Self::collect_free_variables(function, bound, free);
                 for arg in args {
@@ -3401,8 +3609,12 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
                 Self::collect_free_variables(value, bound, free);
             }
-            Expr::InfixCall { left, right, .. } => {
-                // a `f` b - collect from both operands
+            Expr::InfixCall { function, left, right } => {
+                // a `f` b - collect from function and both operands
+                // The function name is a string, so check if it's a free variable
+                if !bound.contains(function) {
+                    free.insert(function.clone());
+                }
                 Self::collect_free_variables(left, bound, free);
                 Self::collect_free_variables(right, bound, free);
             }
@@ -3473,6 +3685,15 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::If { condition, then_branch, else_branch } => {
                 Self::value_has_self_reference(name, condition, bound)
                     || Self::value_has_self_reference(name, then_branch, bound)
+                    || else_branch.as_ref().is_some_and(|e| Self::value_has_self_reference(name, e, bound))
+            }
+            Expr::IfLet { pattern, value, then_branch, else_branch } => {
+                if Self::value_has_self_reference(name, value, bound) {
+                    return true;
+                }
+                let mut inner_bound = bound.clone();
+                Self::collect_pattern_variables(pattern, &mut inner_bound);
+                Self::value_has_self_reference(name, then_branch, &inner_bound)
                     || else_branch.as_ref().is_some_and(|e| Self::value_has_self_reference(name, e, bound))
             }
             Expr::Call { function, args } => {
@@ -3622,6 +3843,15 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::If { condition, then_branch, else_branch } => {
                 Self::collect_mutable_captures_recursive(condition, mutable_vars, bound, captured);
                 Self::collect_mutable_captures_recursive(then_branch, mutable_vars, bound, captured);
+                if let Some(else_br) = else_branch {
+                    Self::collect_mutable_captures_recursive(else_br, mutable_vars, bound, captured);
+                }
+            }
+            Expr::IfLet { pattern, value, then_branch, else_branch } => {
+                Self::collect_mutable_captures_recursive(value, mutable_vars, bound, captured);
+                let mut new_bound = bound.clone();
+                Self::collect_pattern_variables(pattern, &mut new_bound);
+                Self::collect_mutable_captures_recursive(then_branch, mutable_vars, &new_bound, captured);
                 if let Some(else_br) = else_branch {
                     Self::collect_mutable_captures_recursive(else_br, mutable_vars, bound, captured);
                 }
@@ -3823,6 +4053,12 @@ impl<'ctx> CodegenContext<'ctx> {
         Ok(call_result.try_as_basic_value().left().unwrap())
     }
 
+    /// Check if a name is a variadic builtin that can be used as a function value.
+    /// These are builtins like union/intersection that accept a variable number of collections.
+    fn is_variadic_builtin_function(name: &str) -> bool {
+        matches!(name, "union" | "intersection")
+    }
+
     /// Get the arity (expected argument count) for a builtin function.
     /// Returns None if not a known builtin or if it's variadic.
     fn get_builtin_arity(name: &str) -> Option<usize> {
@@ -3836,19 +4072,21 @@ impl<'ctx> CodegenContext<'ctx> {
             // 2-arg builtins
             "split" | "join" | "map" | "filter" | "reduce" | "find" | "count" | "any"
             | "all" | "take" | "skip" | "sort" | "rotate" | "chunk" | "includes" | "excludes"
-            | "get" | "assoc" | "update" | "push" | "union" | "flat_map"
+            | "get" | "push" | "flat_map"
             | "filter_map" | "find_map" | "each" | "combinations"
             | "includes?" | "excludes?" | "any?" | "all?" => Some(2),
+            // Variadic builtins (any number of args, handled specially)
+            "union" | "intersection" => None,
             // 2-arg builtins (additional)
             "regex_match" | "regex_match_all" | "iterate" => Some(2),
             // 3-arg builtins
-            "fold" | "scan" | "slice" => Some(3),
+            "fold" | "scan" | "slice" | "fold_s" | "update" | "assoc" => Some(3),
+            // 4-arg builtins
+            "update_d" => Some(4),
             // range supports 2 or 3 args, handled specially
             "range" => None,
             // Variadic or special
             "puts" | "zip" | "read" | "hash" | "memoize" | "regex" => None,
-            // intersection is variadic but defaults to arity 1 for partial application
-            "intersection" => Some(1),
             _ => None,
         }
     }
@@ -4596,18 +4834,53 @@ impl<'ctx> CodegenContext<'ctx> {
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "union" => {
-                // union(collection1, collection2) - set union
-                if args.len() != 2 {
+                // union(..collections) - set union of all collections
+                // Can be called with multiple args or a single list of collections
+                if args.is_empty() {
                     return Err(CompileError::UnsupportedExpression(
-                        format!("union expects 2 arguments, got {}", args.len())
+                        "union requires at least 1 argument".to_string()
                     ));
                 }
-                let coll1 = self.compile_arg(&args[0])?;
-                let coll2 = self.compile_arg(&args[1])?;
-                let rt_union = self.get_or_declare_rt_union();
+
+                // Compile all arguments
+                let mut compiled_args = Vec::new();
+                for arg in args {
+                    compiled_args.push(self.compile_arg(arg)?);
+                }
+
+                // Create a list from the arguments using rt_list_from_values
+                let i64_type = self.context.i64_type();
+                let argc = compiled_args.len();
+                let array_type = i64_type.array_type(argc as u32);
+                let array_alloca = self.builder.build_alloca(array_type, "union_args").unwrap();
+
+                // Store each argument in the array
+                for (i, arg) in compiled_args.iter().enumerate() {
+                    let index = i64_type.const_int(i as u64, false);
+                    let elem_ptr = unsafe {
+                        self.builder.build_in_bounds_gep(
+                            array_type,
+                            array_alloca,
+                            &[i64_type.const_zero(), index],
+                            &format!("union_arg_ptr_{}", i),
+                        ).unwrap()
+                    };
+                    self.builder.build_store(elem_ptr, *arg).unwrap();
+                }
+
+                // Create list from the array
+                let rt_list_from_values = self.get_or_declare_rt_list_from_values();
+                let list = self.builder.build_call(
+                    rt_list_from_values,
+                    &[array_alloca.into(), i64_type.const_int(argc as u64, false).into()],
+                    "union_list",
+                ).unwrap().try_as_basic_value().left().unwrap();
+
+                // Call rt_union_all(list)
+                let rt_union_all = self.get_or_declare_rt_union_all();
                 let result = self.builder.build_call(
-                    rt_union,
-                    &[coll1.into(), coll2.into()],
+                    rt_union_all,
+                    &[list.into()],
                     "union_result",
                 ).unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
@@ -5954,15 +6227,15 @@ impl<'ctx> CodegenContext<'ctx> {
         self.module.add_function(fn_name, fn_type, None)
     }
 
-    /// Get or declare the rt_union runtime function
-    fn get_or_declare_rt_union(&self) -> inkwell::values::FunctionValue<'ctx> {
-        let fn_name = "rt_union";
+    /// Get or declare the rt_union_all runtime function (variadic via list)
+    fn get_or_declare_rt_union_all(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_union_all";
         if let Some(func) = self.module.get_function(fn_name) {
             return func;
         }
 
         let i64_type = self.context.i64_type();
-        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
         self.module.add_function(fn_name, fn_type, None)
     }
 

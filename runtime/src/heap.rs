@@ -17,6 +17,7 @@ pub enum TypeTag {
     LazySequence,
     MutableCell,
     MemoizedClosure,  // Closure with memoization cache
+    PartialApplication, // Closure with some args already applied
 }
 
 /// Header for all heap-allocated objects
@@ -250,6 +251,34 @@ impl MemoizedClosureObject {
     pub fn cache_result(&self, args: Vec<super::value::Value>, result: super::value::Value) {
         let mut cache = self.cache.borrow_mut();
         cache.insert(args, result);
+    }
+}
+
+/// Partial application object - stores a closure with some arguments already applied
+///
+/// When a function is called with fewer arguments than its arity, a partial
+/// application is created that captures the provided arguments. When called
+/// with more arguments, the accumulated args are combined and the original
+/// function is called.
+#[repr(C)]
+pub struct PartialApplicationObject {
+    pub header: ObjectHeader,
+    /// The original closure being partially applied
+    pub closure: super::value::Value,
+    /// Arguments already provided
+    pub args: Vec<super::value::Value>,
+    /// Remaining arity (original arity - args.len())
+    pub remaining_arity: u32,
+}
+
+impl PartialApplicationObject {
+    pub fn new(closure: super::value::Value, args: Vec<super::value::Value>, remaining_arity: u32) -> Box<Self> {
+        Box::new(PartialApplicationObject {
+            header: ObjectHeader::new(TypeTag::PartialApplication),
+            closure,
+            args,
+            remaining_arity,
+        })
     }
 }
 
