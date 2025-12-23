@@ -4,7 +4,7 @@
 .DS_Store
 
 # Reference implementations (for comparison only)
-/santa-lang-rs/
+/santa-lang-comet/
 /santa-lang-blitzen/
 
 # IDE

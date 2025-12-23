@@ -126,7 +126,7 @@ Before marking a phase complete:
 
 ## Reference Implementation
 
-The santa-lang-rs and santa-lang-blitzen repositories can be referenced for:
+The santa-lang-comet and santa-lang-blitzen repositories can be referenced for:
 - Lexer/parser structure
 - Builtin function signatures
 - Test patterns

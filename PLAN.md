@@ -295,7 +295,7 @@ pub enum Expr {
 }
 ```
 
-### 2.2 Operator Precedence (from santa-lang-rs reference implementation)
+### 2.2 Operator Precedence (from santa-lang-comet reference implementation)
 
 From highest to lowest:
 1. `[]` - Index (highest)
@@ -308,7 +308,7 @@ From highest to lowest:
 8. `==` `!=` `=` - Equality/Assignment (same level)
 9. `&&` `||` - Logical AND/OR (same level, lowest)
 
-**Note**: This matches santa-lang-rs behavior where `&&` and `||` have the same precedence, and `=` groups with equality operators.
+**Note**: This matches santa-lang-comet behavior where `&&` and `||` have the same precedence, and `=` groups with equality operators.
 
 ### 2.3 Trailing Lambda Syntax (Recognition)
 
