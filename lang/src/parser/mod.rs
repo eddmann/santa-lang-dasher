@@ -287,8 +287,11 @@ impl Parser {
                         let func_name = func_name.clone();
                         self.advance(); // consume identifier
 
-                        // Parse the lambda
-                        let lambda = self.parse_expression()?;
+                        // Parse the lambda with limited body precedence
+                        // This ensures `list |> map |x| x |> dict` is parsed as
+                        // `(list |> map(|x| x)) |> dict` rather than
+                        // `list |> map(|x| x |> dict)`
+                        let lambda = self.parse_trailing_lambda()?;
 
                         // Transform to: func_name(left, lambda)
                         left = Expr::Call {
@@ -315,8 +318,8 @@ impl Parser {
             };
             if is_trailing_lambda {
                 if let Expr::Call { function, mut args } = left {
-                    // Parse the lambda and add it as an additional argument
-                    let lambda = self.parse_expression()?;
+                    // Parse the lambda with limited body precedence
+                    let lambda = self.parse_trailing_lambda()?;
                     args.push(lambda);
                     left = Expr::Call { function, args };
                     continue;
@@ -381,7 +384,9 @@ impl Parser {
                 if let Some(next) = self.tokens.get(self.current) {
                     if matches!(next.kind, TokenKind::VerticalBar) {
                         // This is a direct trailing lambda call
-                        let lambda = self.parse_expression()?;
+                        // Use parse_trailing_lambda to limit body precedence, so that
+                        // `[1, 2] |> map |x| x |> size` parses correctly
+                        let lambda = self.parse_trailing_lambda()?;
                         return Ok(Expr::Call {
                             function: Box::new(Expr::Identifier(value)),
                             args: vec![lambda],
@@ -698,6 +703,12 @@ impl Parser {
     /// trailing postfix operations like `()`. This ensures `|| { ... }()` is parsed
     /// as `(|| { ... })()` rather than `|| ({ ... }())`.
     fn parse_body_expr(&mut self) -> Result<Expr, ParseError> {
+        self.parse_body_expr_with_min_prec(0)
+    }
+
+    /// Parse function body with a minimum precedence for non-block bodies.
+    /// Used by trailing lambdas to limit body parsing.
+    fn parse_body_expr_with_min_prec(&mut self, min_prec: u8) -> Result<Expr, ParseError> {
         let token = self.current_token()?;
 
         // If body starts with `{`, parse just the block (no postfix operations)
@@ -705,8 +716,157 @@ impl Parser {
             return self.parse_block();
         }
 
-        // Otherwise parse normally (e.g., for `|x| x + 1`)
-        self.parse_pratt_expr(0)
+        // Otherwise parse with the given minimum precedence
+        self.parse_pratt_expr(min_prec)
+    }
+
+    /// Parse a lambda expression in trailing position (e.g., `map |x| x + 1`)
+    ///
+    /// For trailing lambdas, the body should NOT consume pipeline operators.
+    /// This ensures `list |> map |x| x |> dict` is parsed as
+    /// `(list |> map(|x| x)) |> dict` rather than `list |> map(|x| x |> dict)`.
+    fn parse_trailing_lambda(&mut self) -> Result<Expr, ParseError> {
+        let token = self.current_token()?;
+
+        match &token.kind {
+            TokenKind::VerticalBar => {
+                self.advance(); // consume first '|'
+
+                let mut params = Vec::new();
+
+                // Parse parameters (can be identifiers or patterns like [a, b])
+                loop {
+                    let token = self.current_token()?;
+                    match &token.kind {
+                        TokenKind::Identifier(name) => {
+                            params.push(Param::simple(name.clone()));
+                            self.advance();
+
+                            let next = self.current_token()?;
+                            match &next.kind {
+                                TokenKind::Comma => {
+                                    self.advance();
+                                    continue;
+                                }
+                                TokenKind::VerticalBar => {
+                                    self.advance(); // consume closing '|'
+                                    break;
+                                }
+                                _ => {
+                                    return Err(ParseError {
+                                        message: format!(
+                                            "Expected ',' or '|' in function parameters, got {:?}",
+                                            next.kind
+                                        ),
+                                        line: next.span.start.line as usize,
+                                        column: next.span.start.column as usize,
+                                    });
+                                }
+                            }
+                        }
+                        TokenKind::LeftBracket => {
+                            let pattern = self.parse_pattern()?;
+                            params.push(Param { pattern });
+
+                            let next = self.current_token()?;
+                            match &next.kind {
+                                TokenKind::Comma => {
+                                    self.advance();
+                                    continue;
+                                }
+                                TokenKind::VerticalBar => {
+                                    self.advance();
+                                    break;
+                                }
+                                _ => {
+                                    return Err(ParseError {
+                                        message: format!(
+                                            "Expected ',' or '|' after pattern parameter, got {:?}",
+                                            next.kind
+                                        ),
+                                        line: next.span.start.line as usize,
+                                        column: next.span.start.column as usize,
+                                    });
+                                }
+                            }
+                        }
+                        TokenKind::DotDot => {
+                            // Rest parameter: |..rest|
+                            self.advance();
+                            let name_token = self.current_token()?;
+                            let name = match &name_token.kind {
+                                TokenKind::Identifier(name) => name.clone(),
+                                _ => {
+                                    return Err(ParseError {
+                                        message: format!(
+                                            "Expected identifier after '..' in rest parameter, got {:?}",
+                                            name_token.kind
+                                        ),
+                                        line: name_token.span.start.line as usize,
+                                        column: name_token.span.start.column as usize,
+                                    });
+                                }
+                            };
+                            self.advance();
+                            params.push(Param {
+                                pattern: Pattern::RestIdentifier(name),
+                            });
+
+                            let next = self.current_token()?;
+                            if !matches!(next.kind, TokenKind::VerticalBar) {
+                                return Err(ParseError {
+                                    message: format!(
+                                        "Expected '|' after rest parameter, got {:?}",
+                                        next.kind
+                                    ),
+                                    line: next.span.start.line as usize,
+                                    column: next.span.start.column as usize,
+                                });
+                            }
+                            self.advance();
+                            break;
+                        }
+                        TokenKind::VerticalBar => {
+                            self.advance();
+                            break;
+                        }
+                        _ => {
+                            return Err(ParseError {
+                                message: format!(
+                                    "Expected parameter or '|', got {:?}",
+                                    token.kind
+                                ),
+                                line: token.span.start.line as usize,
+                                column: token.span.start.column as usize,
+                            });
+                        }
+                    }
+                }
+
+                // Parse body with precedence 5 (just above pipeline's 4)
+                // This stops the body before consuming |> operators
+                let body = self.parse_body_expr_with_min_prec(5)?;
+
+                Ok(Expr::Function {
+                    params,
+                    body: Box::new(body),
+                })
+            }
+            TokenKind::OrOr => {
+                // Empty parameter list: || body
+                self.advance();
+                let body = self.parse_body_expr_with_min_prec(5)?;
+                Ok(Expr::Function {
+                    params: Vec::new(),
+                    body: Box::new(body),
+                })
+            }
+            _ => Err(ParseError {
+                message: format!("Expected '|' or '||' for trailing lambda, got {:?}", token.kind),
+                line: token.span.start.line as usize,
+                column: token.span.start.column as usize,
+            }),
+        }
     }
 
     fn parse_call(&mut self, function: Expr) -> Result<Expr, ParseError> {

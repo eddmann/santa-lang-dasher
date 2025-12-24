@@ -3594,18 +3594,13 @@ impl<'ctx> CodegenContext<'ctx> {
                         .unwrap()
                 };
 
-                // Cast rest_count to i32 for rt_list_from_values
-                let rest_count_i32 = self
-                    .builder
-                    .build_int_truncate(rest_count, self.context.i32_type(), "rest_count_i32")
-                    .unwrap();
-
+                // rt_list_from_values expects (ptr, count) with count as i64/usize
                 let rt_list_from_values = self.get_or_declare_rt_list_from_values();
                 let rest_list = self
                     .builder
                     .build_call(
                         rt_list_from_values,
-                        &[rest_count_i32.into(), rest_argv.into()],
+                        &[rest_argv.into(), rest_count.into()],
                         "rest_args",
                     )
                     .unwrap();
@@ -3698,10 +3693,18 @@ impl<'ctx> CodegenContext<'ctx> {
         // Now create the closure object by calling rt_make_closure
         // Note: We need to use saved_variables to get capture values BEFORE restoring self.variables
         let fn_ptr = closure_fn.as_global_value().as_pointer_value();
+
+        // Calculate arity: count non-rest parameters
+        // A rest parameter (|..args| or |a, ..rest|) doesn't count toward arity
+        // because it accepts 0+ additional arguments
+        let required_params = params
+            .iter()
+            .filter(|p| !matches!(p.pattern, Pattern::RestIdentifier(_)))
+            .count();
         let arity = self
             .context
             .i32_type()
-            .const_int(params.len() as u64, false);
+            .const_int(required_params as u64, false);
 
         // Create array of captured values
         let captures_count = captured_vars.len();
