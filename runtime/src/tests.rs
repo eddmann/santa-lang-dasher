@@ -3156,8 +3156,8 @@ extern "C" fn less_comparator(_env: *const ClosureObject, argc: u32, argv: *cons
 }
 
 #[test]
-fn builtin_sort_ascending() {
-    // sort(<, [3, 2, 1]) → [1, 2, 3]
+fn builtin_sort_with_less_than() {
+    // sort(<, [3, 2, 1]) → [3, 2, 1] (descending, matches Comet behavior)
     let list = Value::from_list(
         vec![
             Value::from_integer(3),
@@ -3171,19 +3171,19 @@ fn builtin_sort_ascending() {
     let result = rt_sort(comparator, list);
     let sorted = result.as_list().expect("should be a list");
     assert_eq!(sorted.len(), 3);
-    assert_eq!(sorted[0].as_integer(), Some(1));
+    assert_eq!(sorted[0].as_integer(), Some(3));
     assert_eq!(sorted[1].as_integer(), Some(2));
-    assert_eq!(sorted[2].as_integer(), Some(3));
+    assert_eq!(sorted[2].as_integer(), Some(1));
 }
 
 #[test]
-fn builtin_sort_descending() {
-    // sort(>, [3, 2, 1]) → [3, 2, 1] (already descending)
+fn builtin_sort_with_greater_than() {
+    // sort(>, [3, 2, 1]) → [1, 2, 3] (ascending, matches Comet behavior)
     let list = Value::from_list(
         vec![
-            Value::from_integer(1),
-            Value::from_integer(2),
             Value::from_integer(3),
+            Value::from_integer(2),
+            Value::from_integer(1),
         ]
         .into_iter()
         .collect(),
@@ -3192,9 +3192,9 @@ fn builtin_sort_descending() {
     let result = rt_sort(comparator, list);
     let sorted = result.as_list().expect("should be a list");
     assert_eq!(sorted.len(), 3);
-    assert_eq!(sorted[0].as_integer(), Some(3));
+    assert_eq!(sorted[0].as_integer(), Some(1));
     assert_eq!(sorted[1].as_integer(), Some(2));
-    assert_eq!(sorted[2].as_integer(), Some(1));
+    assert_eq!(sorted[2].as_integer(), Some(3));
 }
 
 #[test]

@@ -2899,14 +2899,13 @@ pub extern "C" fn rt_sort(comparator: Value, collection: Value) -> Value {
 
             // Check if result is boolean
             if let Some(bool_val) = result.as_bool() {
-                // When comparator returns true (a < b for < operator), a should come first
-                // When comparator returns false (a >= b for < operator), a should come after
-                // This gives: sort(<, [3,1,2]) → [1,2,3] (ascending)
-                //             sort(>, [1,2,3]) → [3,2,1] (descending)
+                // When comparator returns true, a should come AFTER b (to match Comet behavior)
+                // This gives: sort(<, [3,1,2]) → [3,2,1] (descending)
+                //             sort(>, [1,2,3]) → [1,2,3] (ascending)
                 if bool_val {
-                    std::cmp::Ordering::Less
-                } else {
                     std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Less
                 }
             }
             // Check if result is integer
