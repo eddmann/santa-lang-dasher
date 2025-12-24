@@ -4,7 +4,7 @@
 //!   dasher <SCRIPT>           Run solution file
 //!   dasher -t <SCRIPT>        Run tests (exclude @slow)
 //!   dasher -t -s <SCRIPT>     Run tests (include @slow)
-//!   dasher -e <SCRIPT>        Compile to executable (same name as script)
+//!   dasher -c <SCRIPT>        Compile to executable (same name as script)
 
 use clap::Parser;
 use std::path::PathBuf;
@@ -30,9 +30,9 @@ struct Args {
     #[arg(short = 's', long = "slow")]
     include_slow: bool,
 
-    /// Emit executable (compile only, output in same directory as script)
-    #[arg(short = 'e', long = "emit")]
-    emit: bool,
+    /// Compile to executable (output in same directory as script)
+    #[arg(short = 'c', long = "compile")]
+    compile: bool,
 }
 
 fn main() -> ExitCode {
@@ -48,7 +48,7 @@ fn main() -> ExitCode {
     };
 
     // Emit mode: compile to executable and exit (don't run)
-    if args.emit {
+    if args.compile {
         use santa_lang::codegen::pipeline::Compiler;
 
         // Output path: same directory as script, same name without extension
@@ -293,16 +293,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_args_emit_mode() {
-        let args = Args::try_parse_from(["dasher", "-e", "test.santa"]).unwrap();
-        assert!(args.emit);
+    fn parse_args_compile_mode() {
+        let args = Args::try_parse_from(["dasher", "-c", "test.santa"]).unwrap();
+        assert!(args.compile);
         assert_eq!(args.script, PathBuf::from("test.santa"));
     }
 
     #[test]
-    fn parse_args_emit_mode_long() {
-        let args = Args::try_parse_from(["dasher", "--emit", "path/to/script.santa"]).unwrap();
-        assert!(args.emit);
+    fn parse_args_compile_mode_long() {
+        let args = Args::try_parse_from(["dasher", "--compile", "path/to/script.santa"]).unwrap();
+        assert!(args.compile);
         assert_eq!(args.script, PathBuf::from("path/to/script.santa"));
     }
 }
