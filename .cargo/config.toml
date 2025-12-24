@@ -1,3 +1,7 @@
 [env]
 LLVM_SYS_180_PREFIX = "/opt/homebrew/opt/llvm@18"
 LIBRARY_PATH = "/opt/homebrew/lib"
+MACOSX_DEPLOYMENT_TARGET = "15.0"
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-args=-Wl,-no_warn_duplicate_libraries"]

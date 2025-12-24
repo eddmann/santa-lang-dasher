@@ -353,6 +353,8 @@ impl Compiler {
             .arg("-lSystem")
             .arg("-lc")
             .arg("-lm")
+            // Suppress duplicate library warnings (clang adds -lSystem automatically)
+            .arg("-Wl,-no_warn_duplicate_libraries")
             .status()?;
 
         if !status.success() {

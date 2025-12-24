@@ -45,6 +45,8 @@ pub struct TestResult {
     pub part_two_passed: Option<bool>,
     pub part_one_actual: Option<Value>,
     pub part_two_actual: Option<Value>,
+    pub part_one_expected: Option<Value>,
+    pub part_two_expected: Option<Value>,
     pub part_one_time: Option<Duration>,
     pub part_two_time: Option<Duration>,
     pub slow: bool,
@@ -199,22 +201,24 @@ impl Runner {
         // Compile and execute
         let solution_result = self.compile_and_execute(&source)?;
 
+        // Evaluate expected values
+        let part_one_expected = expected_one
+            .map(|e| self.eval_expected_value(e))
+            .transpose()?;
+        let part_two_expected = expected_two
+            .map(|e| self.eval_expected_value(e))
+            .transpose()?;
+
         // Compare results with expected values
-        let part_one_passed = match (solution_result.part_one.as_ref(), expected_one) {
-            (Some(actual), Some(expected)) => {
-                let expected_val = self.eval_expected_value(expected)?;
-                Some(self.values_equal(actual, &expected_val))
-            }
+        let part_one_passed = match (solution_result.part_one.as_ref(), part_one_expected.as_ref()) {
+            (Some(actual), Some(expected)) => Some(self.values_equal(actual, expected)),
             (None, None) => None,
             (Some(_), None) => None,  // Has actual but no expected - not tested
             (None, Some(_)) => Some(false),  // Expected but didn't produce - failure
         };
 
-        let part_two_passed = match (solution_result.part_two.as_ref(), expected_two) {
-            (Some(actual), Some(expected)) => {
-                let expected_val = self.eval_expected_value(expected)?;
-                Some(self.values_equal(actual, &expected_val))
-            }
+        let part_two_passed = match (solution_result.part_two.as_ref(), part_two_expected.as_ref()) {
+            (Some(actual), Some(expected)) => Some(self.values_equal(actual, expected)),
             (None, None) => None,
             (Some(_), None) => None,
             (None, Some(_)) => Some(false),
@@ -225,6 +229,8 @@ impl Runner {
             part_two_passed,
             part_one_actual: solution_result.part_one,
             part_two_actual: solution_result.part_two,
+            part_one_expected,
+            part_two_expected,
             part_one_time: solution_result.part_one_time,
             part_two_time: solution_result.part_two_time,
             slow,
@@ -868,9 +874,8 @@ impl Runner {
         }
     }
 
-    /// Test helper: generate source code for a program (for debugging)
-    #[cfg(test)]
-    pub fn test_generate_source(&self, program: &Program) -> String {
+    /// Generate source code for a program (for AOT compilation)
+    pub fn generate_source(&self, program: &Program) -> String {
         let input_expr = self.get_input_section(program);
         let part_one_expr = self.get_part_one_section(program);
         let part_two_expr = self.get_part_two_section(program);
@@ -881,6 +886,12 @@ impl Runner {
             part_one_expr,
             part_two_expr,
         )
+    }
+
+    /// Test helper: alias for generate_source (for debugging)
+    #[cfg(test)]
+    pub fn test_generate_source(&self, program: &Program) -> String {
+        self.generate_source(program)
     }
 }
 
