@@ -449,7 +449,10 @@ fn parse_operator_reference_add() {
                     _ => panic!("Expected Infix body"),
                 }
             }
-            _ => panic!("Expected Function for operator reference, got {:?}", args[1]),
+            _ => panic!(
+                "Expected Function for operator reference, got {:?}",
+                args[1]
+            ),
         }
     } else {
         panic!("Expected Call expression");
@@ -716,7 +719,7 @@ fn parse_composition() {
 #[test]
 fn parse_let_binding() {
     // Test simple let binding: let x = 42;
-    let stmt = parse_stmt("let x = 42").unwrap();
+    let _stmt = parse_stmt("let x = 42").unwrap();
 }
 
 #[test]
@@ -1441,4 +1444,3 @@ part_two: { if let y = f(5) { y } }"#;
     // Verify the IfLet is correctly parsed inside the section
     assert!(matches!(&program.sections[0], Section::PartTwo(_)));
 }
-

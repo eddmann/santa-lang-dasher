@@ -16,5 +16,12 @@ regex = "1.10"
 md-5 = "0.10"  # Phase 14 (Built-ins) - MD5 hashing
 dirs = "5.0"  # Phase 19 (CLI) - Cross-platform directories
 clap = { version = "4.4", features = ["derive"] }  # Phase 19 (CLI) - Argument parsing
-ureq = "2.9"  # HTTP client for read() URL fetching
+ureq = { version = "2.9", default-features = false, features = ["native-tls", "gzip"] }  # HTTP client - native-tls avoids bundling rustls
 expect-test = "1.5"
+
+# Optimize release builds for smaller binary size
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = "z"  # Optimize for size

@@ -15,6 +15,7 @@ regex.workspace = true
 md-5.workspace = true
 dirs.workspace = true
 ureq.workspace = true
+native-tls = "0.2"
 
 [dev-dependencies]
 expect-test.workspace = true

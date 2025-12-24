@@ -1,7 +1,7 @@
 pub mod token;
 
-pub use token::{Token, TokenKind};
 use token::{Position, Span};
+pub use token::{Token, TokenKind};
 
 #[cfg(test)]
 mod tests;
@@ -104,7 +104,10 @@ impl Lexer {
                 self.advance();
                 // Check for comment
                 if self.peek() == '/' {
-                    return Ok(Token::new(self.lex_comment()?, Span::new(start, self.current_position())));
+                    return Ok(Token::new(
+                        self.lex_comment()?,
+                        Span::new(start, self.current_position()),
+                    ));
                 }
                 TokenKind::Slash
             }
@@ -396,11 +399,17 @@ impl Lexer {
         if has_decimal_point {
             text.parse::<f64>()
                 .map(TokenKind::Decimal)
-                .map_err(|_| LexError::InvalidNumber { text, position: start })
+                .map_err(|_| LexError::InvalidNumber {
+                    text,
+                    position: start,
+                })
         } else {
             text.parse::<i64>()
                 .map(TokenKind::Integer)
-                .map_err(|_| LexError::InvalidNumber { text, position: start })
+                .map_err(|_| LexError::InvalidNumber {
+                    text,
+                    position: start,
+                })
         }
     }
 

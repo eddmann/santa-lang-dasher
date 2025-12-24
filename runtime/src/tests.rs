@@ -1,5 +1,5 @@
-use super::value::Value;
 use super::builtins::format_value;
+use super::value::Value;
 
 // ===== NaN-boxing Tests =====
 
@@ -48,9 +48,9 @@ fn value_from_boolean_false() {
 
 #[test]
 fn value_from_decimal() {
-    let v = Value::from_decimal(3.14);
+    let v = Value::from_decimal(2.71);
     assert!(!v.is_integer());
-    assert_eq!(v.as_decimal(), Some(3.14));
+    assert_eq!(v.as_decimal(), Some(2.71));
 }
 
 // ===== Large Integer Tests =====
@@ -58,12 +58,12 @@ fn value_from_decimal() {
 #[test]
 fn value_large_integer() {
     // 61-bit integers can be stored inline (3 bits lost to tag)
-    let large = (1i64 << 60) - 1;  // Max 61-bit positive
+    let large = (1i64 << 60) - 1; // Max 61-bit positive
     let v = Value::from_integer(large);
     assert!(v.is_integer());
     assert_eq!(v.as_integer(), Some(large));
 
-    let small = -(1i64 << 60);  // Min 61-bit negative
+    let small = -(1i64 << 60); // Min 61-bit negative
     let v = Value::from_integer(small);
     assert!(v.is_integer());
     assert_eq!(v.as_integer(), Some(small));
@@ -88,7 +88,7 @@ fn value_truthiness() {
     assert!(Value::from_bool(true).is_truthy());
     assert!(Value::from_integer(1).is_truthy());
     assert!(Value::from_integer(-1).is_truthy());
-    assert!(Value::from_decimal(3.14).is_truthy());
+    assert!(Value::from_decimal(2.71).is_truthy());
 }
 
 // ===== Heap Object Tests =====
@@ -153,7 +153,7 @@ fn string_grapheme_length() {
 
 // ===== Reference Counting Tests =====
 
-use crate::refcount::{rt_incref, rt_decref, rt_get_refcount};
+use crate::refcount::{rt_decref, rt_get_refcount, rt_incref};
 
 #[test]
 fn refcount_string_starts_at_one() {
@@ -186,9 +186,9 @@ fn refcount_decrement() {
 fn refcount_primitives_ignored() {
     // Primitives (integers, booleans, nil, decimals) should not be refcounted
     let v = Value::from_integer(42);
-    rt_incref(v);  // Should do nothing
-    rt_decref(v);  // Should do nothing
-    // No assertion - just shouldn't crash
+    rt_incref(v); // Should do nothing
+    rt_decref(v); // Should do nothing
+                  // No assertion - just shouldn't crash
 }
 
 #[test]
@@ -273,7 +273,7 @@ fn refcount_lazy_sequence_decrefs_value_on_free() {
 
 // ===== Runtime Operations Tests =====
 
-use crate::operations::{rt_add, rt_sub, rt_mul, rt_div, rt_mod};
+use crate::operations::{rt_add, rt_div, rt_mod, rt_mul, rt_sub};
 
 #[test]
 fn runtime_add_integers() {
@@ -344,14 +344,16 @@ fn runtime_add_string_coerces_right() {
 #[test]
 fn runtime_add_list_concatenation() {
     // [1, 2] + [3, 4] → [1, 2, 3, 4]
-    let left = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
-    let right = Value::from_list(vec![
-        Value::from_integer(3),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let left = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
+    let right = Value::from_list(
+        vec![Value::from_integer(3), Value::from_integer(4)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_add(left, right);
 
     let list = result.as_list().expect("should be a list");
@@ -366,14 +368,16 @@ fn runtime_add_list_concatenation() {
 #[test]
 fn runtime_add_set_union() {
     // {1, 2} + {2, 3} → {1, 2, 3}
-    let left = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
-    let right = Value::from_set(vec![
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let left = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
+    let right = Value::from_set(
+        vec![Value::from_integer(2), Value::from_integer(3)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_add(left, right);
 
     let set = result.as_set().expect("should be a set");
@@ -401,9 +405,18 @@ fn runtime_add_dict_merge() {
 
     let dict = result.as_dict().expect("should be a dict");
     assert_eq!(dict.len(), 3);
-    assert_eq!(dict.get(&Value::from_integer(1)), Some(&Value::from_integer(2)));
-    assert_eq!(dict.get(&Value::from_integer(3)), Some(&Value::from_integer(5))); // Right wins
-    assert_eq!(dict.get(&Value::from_integer(6)), Some(&Value::from_integer(7)));
+    assert_eq!(
+        dict.get(&Value::from_integer(1)),
+        Some(&Value::from_integer(2))
+    );
+    assert_eq!(
+        dict.get(&Value::from_integer(3)),
+        Some(&Value::from_integer(5))
+    ); // Right wins
+    assert_eq!(
+        dict.get(&Value::from_integer(6)),
+        Some(&Value::from_integer(7))
+    );
 }
 
 #[test]
@@ -496,7 +509,7 @@ fn runtime_division_by_zero_panics() {
     // Per LANG.txt §15.5: 10 / 0 → RuntimeErr
     let left = Value::from_integer(10);
     let right = Value::from_integer(0);
-    let _result = rt_div(left, right);  // Should panic
+    let _result = rt_div(left, right); // Should panic
 }
 
 #[test]
@@ -505,7 +518,7 @@ fn runtime_modulo_by_zero_panics() {
     // Per LANG.txt §15.5: modulo by zero → RuntimeErr
     let left = Value::from_integer(10);
     let right = Value::from_integer(0);
-    let _result = rt_mod(left, right);  // Should panic
+    let _result = rt_mod(left, right); // Should panic
 }
 
 // ===== Comparison Operations Tests =====
@@ -577,9 +590,17 @@ fn runtime_lt_strings() {
 fn runtime_lt_lists_panics() {
     // Per LANG.txt §4.4: Lists are not comparable
     // [1, 2] < [3, 4] → RuntimeErr
-    let left = Value::from_list(vec![Value::from_integer(1), Value::from_integer(2)].into_iter().collect());
-    let right = Value::from_list(vec![Value::from_integer(3), Value::from_integer(4)].into_iter().collect());
-    let _result = rt_lt(left, right);  // Should panic
+    let left = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
+    let right = Value::from_list(
+        vec![Value::from_integer(3), Value::from_integer(4)]
+            .into_iter()
+            .collect(),
+    );
+    let _result = rt_lt(left, right); // Should panic
 }
 
 #[test]
@@ -588,7 +609,7 @@ fn runtime_lt_sets_panics() {
     // Per LANG.txt §4.4: Sets are not comparable
     let left = Value::from_set(vec![Value::from_integer(1)].into_iter().collect());
     let right = Value::from_set(vec![Value::from_integer(2)].into_iter().collect());
-    let _result = rt_lt(left, right);  // Should panic
+    let _result = rt_lt(left, right); // Should panic
 }
 
 #[test]
@@ -597,7 +618,7 @@ fn runtime_lt_mixed_types_panics() {
     // Per LANG.txt §4.4: Comparing different non-numeric types is an error
     let left = Value::from_integer(1);
     let right = Value::from_list(vec![Value::from_integer(1)].into_iter().collect());
-    let _result = rt_lt(left, right);  // Should panic
+    let _result = rt_lt(left, right); // Should panic
 }
 
 // ===== Hashability Tests =====
@@ -607,7 +628,7 @@ fn hashability_primitives_are_hashable() {
     assert!(Value::from_integer(42).is_hashable());
     assert!(Value::nil().is_hashable());
     assert!(Value::from_bool(true).is_hashable());
-    assert!(Value::from_decimal(3.14).is_hashable());
+    assert!(Value::from_decimal(2.71).is_hashable());
     assert!(Value::from_string("hello").is_hashable());
 }
 
@@ -619,7 +640,11 @@ fn hashability_sets_are_hashable() {
 
 #[test]
 fn hashability_lists_with_hashable_elements() {
-    let list = Value::from_list(vec![Value::from_integer(1), Value::from_string("a")].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_string("a")]
+            .into_iter()
+            .collect(),
+    );
     assert!(list.is_hashable());
 }
 
@@ -636,7 +661,7 @@ fn runtime_push_dict_to_set_panics() {
     // {#{a: 1}} → RuntimeErr
     let set = Value::from_set(im::HashSet::new());
     let dict = Value::from_dict(im::HashMap::new());
-    let _result = rt_push(dict, set);  // Should panic
+    let _result = rt_push(dict, set); // Should panic
 }
 
 #[test]
@@ -648,7 +673,7 @@ fn runtime_assoc_dict_key_panics() {
     let dict = Value::from_dict(im::HashMap::new());
     let key = Value::from_dict(im::HashMap::new()); // Dict as key
     let value = Value::from_string("value");
-    let _result = rt_assoc(key, value, dict);  // Should panic
+    let _result = rt_assoc(key, value, dict); // Should panic
 }
 
 // ===== Built-in Function Tests (Phase 10) =====
@@ -806,11 +831,15 @@ use crate::builtins::rt_list;
 #[test]
 fn builtin_list_from_list() {
     // list([1, 2, 3]) → [1, 2, 3] (identity)
-    let v = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let v = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_list(v);
     let list = result.as_list().expect("should be a list");
     assert_eq!(list.len(), 3);
@@ -820,11 +849,15 @@ fn builtin_list_from_list() {
 #[test]
 fn builtin_list_from_set() {
     // list({1, 2, 3}) → [1, 2, 3] (order is implementation-defined)
-    let v = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let v = Value::from_set(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_list(v);
     let list = result.as_list().expect("should be a list");
     assert_eq!(list.len(), 3);
@@ -890,12 +923,16 @@ use crate::builtins::rt_set;
 #[test]
 fn builtin_set_from_list() {
     // set([1, 2, 2, 3]) → {1, 2, 3}
-    let v = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let v = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_set(v);
     let set = result.as_set().expect("should be a set");
     assert_eq!(set.len(), 3);
@@ -904,11 +941,15 @@ fn builtin_set_from_list() {
 #[test]
 fn builtin_set_from_set() {
     // set({1, 2, 3}) → {1, 2, 3} (identity)
-    let v = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let v = Value::from_set(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_set(v);
     let set = result.as_set().expect("should be a set");
     assert_eq!(set.len(), 3);
@@ -944,20 +985,28 @@ use crate::builtins::rt_dict;
 #[test]
 fn builtin_dict_from_list_of_tuples() {
     // dict([[1, 2], [3, 4]]) → #{1: 2, 3: 4}
-    let tuple1 = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
-    let tuple2 = Value::from_list(vec![
-        Value::from_integer(3),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let tuple1 = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
+    let tuple2 = Value::from_list(
+        vec![Value::from_integer(3), Value::from_integer(4)]
+            .into_iter()
+            .collect(),
+    );
     let v = Value::from_list(vec![tuple1, tuple2].into_iter().collect());
     let result = rt_dict(v);
     let dict = result.as_dict().expect("should be a dict");
     assert_eq!(dict.len(), 2);
-    assert_eq!(dict.get(&Value::from_integer(1)), Some(&Value::from_integer(2)));
-    assert_eq!(dict.get(&Value::from_integer(3)), Some(&Value::from_integer(4)));
+    assert_eq!(
+        dict.get(&Value::from_integer(1)),
+        Some(&Value::from_integer(2))
+    );
+    assert_eq!(
+        dict.get(&Value::from_integer(3)),
+        Some(&Value::from_integer(4))
+    );
 }
 
 #[test]
@@ -974,16 +1023,17 @@ fn builtin_dict_from_dict() {
 
 // ===== Collection Access Functions (§11.2) =====
 
-use crate::builtins::{rt_get, rt_size, rt_first, rt_second, rt_last, rt_rest, rt_keys, rt_values};
+use crate::builtins::{rt_first, rt_get, rt_keys, rt_last, rt_rest, rt_second, rt_size, rt_values};
 
 // get() tests
 #[test]
 fn builtin_get_list() {
     // get(1, [1, 2]) → 2
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_get(Value::from_integer(1), list);
     assert_eq!(result.as_integer(), Some(2));
 }
@@ -991,10 +1041,11 @@ fn builtin_get_list() {
 #[test]
 fn builtin_get_list_out_of_bounds() {
     // get(5, [1, 2]) → nil
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_get(Value::from_integer(5), list);
     assert!(result.is_nil());
 }
@@ -1002,10 +1053,11 @@ fn builtin_get_list_out_of_bounds() {
 #[test]
 fn builtin_get_set_membership() {
     // get(1, {1, 2}) → 1 (found)
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_get(Value::from_integer(1), set);
     assert_eq!(result.as_integer(), Some(1));
 }
@@ -1013,10 +1065,11 @@ fn builtin_get_set_membership() {
 #[test]
 fn builtin_get_set_not_found() {
     // get(3, {1, 2}) → nil
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_get(Value::from_integer(3), set);
     assert!(result.is_nil());
 }
@@ -1043,20 +1096,22 @@ fn builtin_get_string() {
 // size() tests
 #[test]
 fn builtin_size_list() {
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_size(list);
     assert_eq!(result.as_integer(), Some(2));
 }
 
 #[test]
 fn builtin_size_set() {
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_size(set);
     assert_eq!(result.as_integer(), Some(2));
 }
@@ -1101,10 +1156,11 @@ fn builtin_size_inclusive_range() {
 // first() tests
 #[test]
 fn builtin_first_list() {
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_first(list);
     assert_eq!(result.as_integer(), Some(1));
 }
@@ -1136,19 +1192,18 @@ fn builtin_first_range() {
 // second() tests
 #[test]
 fn builtin_second_list() {
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_second(list);
     assert_eq!(result.as_integer(), Some(2));
 }
 
 #[test]
 fn builtin_second_list_too_short() {
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-    ].into_iter().collect());
+    let list = Value::from_list(vec![Value::from_integer(1)].into_iter().collect());
     let result = rt_second(list);
     assert!(result.is_nil());
 }
@@ -1176,10 +1231,11 @@ fn builtin_second_range_too_short() {
 // last() tests
 #[test]
 fn builtin_last_list() {
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_last(list);
     assert_eq!(result.as_integer(), Some(2));
 }
@@ -1224,11 +1280,15 @@ fn builtin_last_descending_range() {
 // rest() tests
 #[test]
 fn builtin_rest_list() {
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_rest(list);
     let rest = result.as_list().expect("should be a list");
     assert_eq!(rest.len(), 2);
@@ -1304,16 +1364,17 @@ fn builtin_values_dict() {
 
 // ===== Collection Modification Functions (§11.3) =====
 
-use crate::builtins::{rt_push, rt_assoc};
+use crate::builtins::{rt_assoc, rt_push};
 
 // push() tests
 #[test]
 fn builtin_push_list() {
     // push(3, [1, 2]) → [1, 2, 3]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_push(Value::from_integer(3), list);
     let new_list = result.as_list().expect("should be a list");
     assert_eq!(new_list.len(), 3);
@@ -1325,10 +1386,11 @@ fn builtin_push_list() {
 #[test]
 fn builtin_push_set() {
     // push(3, {1, 2}) → {1, 2, 3}
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_push(Value::from_integer(3), set);
     let new_set = result.as_set().expect("should be a set");
     assert_eq!(new_set.len(), 3);
@@ -1338,10 +1400,11 @@ fn builtin_push_set() {
 #[test]
 fn builtin_push_set_already_present() {
     // push(1, {1, 2}) → {1, 2} (no change)
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_push(Value::from_integer(1), set);
     let new_set = result.as_set().expect("should be a set");
     assert_eq!(new_set.len(), 2);
@@ -1351,10 +1414,11 @@ fn builtin_push_set_already_present() {
 #[test]
 fn builtin_assoc_list() {
     // assoc(0, 3, [1, 2]) → [3, 2]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_assoc(Value::from_integer(0), Value::from_integer(3), list);
     let new_list = result.as_list().expect("should be a list");
     assert_eq!(new_list.len(), 2);
@@ -1383,7 +1447,10 @@ fn builtin_assoc_dict_replace() {
     let result = rt_assoc(Value::from_integer(1), Value::from_integer(1), dict);
     let new_dict = result.as_dict().expect("should be a dict");
     assert_eq!(new_dict.len(), 2);
-    assert_eq!(new_dict.get(&Value::from_integer(1)), Some(&Value::from_integer(1)));
+    assert_eq!(
+        new_dict.get(&Value::from_integer(1)),
+        Some(&Value::from_integer(1))
+    );
 }
 
 #[test]
@@ -1395,7 +1462,10 @@ fn builtin_assoc_dict_add() {
     let result = rt_assoc(Value::from_integer(0), Value::from_integer(1), dict);
     let new_dict = result.as_dict().expect("should be a dict");
     assert_eq!(new_dict.len(), 2);
-    assert_eq!(new_dict.get(&Value::from_integer(0)), Some(&Value::from_integer(1)));
+    assert_eq!(
+        new_dict.get(&Value::from_integer(0)),
+        Some(&Value::from_integer(1))
+    );
 }
 
 // ===== Transformation Functions (§11.4) =====
@@ -1430,7 +1500,11 @@ extern "C" fn add_one_closure(_env: *const ClosureObject, argc: u32, argv: *cons
 }
 
 /// Test closure: doubles a string
-extern "C" fn double_string_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+extern "C" fn double_string_closure(
+    _env: *const ClosureObject,
+    argc: u32,
+    argv: *const Value,
+) -> Value {
     if argc != 1 || argv.is_null() {
         return Value::nil();
     }
@@ -1446,10 +1520,11 @@ extern "C" fn double_string_closure(_env: *const ClosureObject, argc: u32, argv:
 #[test]
 fn builtin_map_list() {
     // map(_ + 1, [1, 2]) → [2, 3]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let mapper = make_test_closure(add_one_closure, 1);
     let result = rt_map(mapper, list);
     let new_list = result.as_list().expect("should be a list");
@@ -1461,10 +1536,11 @@ fn builtin_map_list() {
 #[test]
 fn builtin_map_set() {
     // map(_ + 1, {1, 2}) → {2, 3}
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let mapper = make_test_closure(add_one_closure, 1);
     let result = rt_map(mapper, set);
     let new_set = result.as_set().expect("should be a set");
@@ -1485,8 +1561,14 @@ fn builtin_map_dict_value_only() {
     let result = rt_map(mapper, dict);
     let new_dict = result.as_dict().expect("should be a dict");
     assert_eq!(new_dict.len(), 2);
-    assert_eq!(new_dict.get(&Value::from_integer(1)), Some(&Value::from_integer(3)));
-    assert_eq!(new_dict.get(&Value::from_integer(3)), Some(&Value::from_integer(5)));
+    assert_eq!(
+        new_dict.get(&Value::from_integer(1)),
+        Some(&Value::from_integer(3))
+    );
+    assert_eq!(
+        new_dict.get(&Value::from_integer(3)),
+        Some(&Value::from_integer(5))
+    );
 }
 
 #[test]
@@ -1517,7 +1599,11 @@ fn builtin_map_empty_list() {
 use crate::builtins::rt_filter;
 
 /// Test closure: returns true if value == 1
-extern "C" fn equals_one_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+extern "C" fn equals_one_closure(
+    _env: *const ClosureObject,
+    argc: u32,
+    argv: *const Value,
+) -> Value {
     if argc != 1 || argv.is_null() {
         return Value::from_bool(false);
     }
@@ -1530,7 +1616,11 @@ extern "C" fn equals_one_closure(_env: *const ClosureObject, argc: u32, argv: *c
 }
 
 /// Test closure: returns true if value > 1
-extern "C" fn greater_than_one_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+extern "C" fn greater_than_one_closure(
+    _env: *const ClosureObject,
+    argc: u32,
+    argv: *const Value,
+) -> Value {
     if argc != 1 || argv.is_null() {
         return Value::from_bool(false);
     }
@@ -1558,10 +1648,11 @@ extern "C" fn equals_a_closure(_env: *const ClosureObject, argc: u32, argv: *con
 #[test]
 fn builtin_filter_list() {
     // filter(_ == 1, [1, 2]) → [1]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let predicate = make_test_closure(equals_one_closure, 1);
     let result = rt_filter(predicate, list);
     let new_list = result.as_list().expect("should be a list");
@@ -1572,10 +1663,11 @@ fn builtin_filter_list() {
 #[test]
 fn builtin_filter_set() {
     // filter(_ == 1, {1, 2}) → {1}
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let predicate = make_test_closure(equals_one_closure, 1);
     let result = rt_filter(predicate, set);
     let new_set = result.as_set().expect("should be a set");
@@ -1593,7 +1685,11 @@ fn builtin_filter_dict_value_only() {
     let dict = Value::from_dict(entries);
 
     // Create predicate that checks if value == 2
-    extern "C" fn equals_two_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+    extern "C" fn equals_two_closure(
+        _env: *const ClosureObject,
+        argc: u32,
+        argv: *const Value,
+    ) -> Value {
         if argc != 1 || argv.is_null() {
             return Value::from_bool(false);
         }
@@ -1609,7 +1705,10 @@ fn builtin_filter_dict_value_only() {
     let result = rt_filter(predicate, dict);
     let new_dict = result.as_dict().expect("should be a dict");
     assert_eq!(new_dict.len(), 1);
-    assert_eq!(new_dict.get(&Value::from_integer(1)), Some(&Value::from_integer(2)));
+    assert_eq!(
+        new_dict.get(&Value::from_integer(1)),
+        Some(&Value::from_integer(2))
+    );
 }
 
 #[test]
@@ -1637,9 +1736,7 @@ fn builtin_filter_empty_list() {
 #[test]
 fn builtin_filter_none_match() {
     // filter(_ > 1, [1]) → []
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-    ].into_iter().collect());
+    let list = Value::from_list(vec![Value::from_integer(1)].into_iter().collect());
     let predicate = make_test_closure(greater_than_one_closure, 1);
     let result = rt_filter(predicate, list);
     let new_list = result.as_list().expect("should be a list");
@@ -1647,7 +1744,11 @@ fn builtin_filter_none_match() {
 }
 
 /// Test closure: returns truthy if value is odd (v % 2 != 0)
-extern "C" fn is_odd_predicate_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+extern "C" fn is_odd_predicate_closure(
+    _env: *const ClosureObject,
+    argc: u32,
+    argv: *const Value,
+) -> Value {
     if argc != 1 || argv.is_null() {
         return Value::from_bool(false);
     }
@@ -1669,7 +1770,10 @@ fn builtin_filter_range_exclusive() {
     let predicate = make_test_closure(is_odd_predicate_closure, 1);
     let result = rt_filter(predicate, range);
     // filter on LazySequence returns LazySequence
-    assert!(result.is_lazy_sequence(), "filter on range should return LazySequence");
+    assert!(
+        result.is_lazy_sequence(),
+        "filter on range should return LazySequence"
+    );
     // Convert to list to check values
     let list_result = rt_list(result);
     let list = list_result.as_list().expect("should convert to list");
@@ -1685,7 +1789,10 @@ fn builtin_filter_range_inclusive() {
     let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(5), true, 1));
     let predicate = make_test_closure(is_odd_predicate_closure, 1);
     let result = rt_filter(predicate, range);
-    assert!(result.is_lazy_sequence(), "filter on range should return LazySequence");
+    assert!(
+        result.is_lazy_sequence(),
+        "filter on range should return LazySequence"
+    );
     let list_result = rt_list(result);
     let list = list_result.as_list().expect("should convert to list");
     assert_eq!(list.len(), 3);
@@ -1701,7 +1808,10 @@ fn builtin_filter_range_unbounded_take() {
     let range = Value::from_lazy_sequence(LazySequenceObject::range(0, None, false, 1));
     let predicate = make_test_closure(is_odd_predicate_closure, 1);
     let filtered = rt_filter(predicate, range);
-    assert!(filtered.is_lazy_sequence(), "filter on range should return LazySequence");
+    assert!(
+        filtered.is_lazy_sequence(),
+        "filter on range should return LazySequence"
+    );
     // Take first 3 odd numbers
     let taken = rt_take(Value::from_integer(3), filtered);
     let list = taken.as_list().expect("should be a list");
@@ -1716,23 +1826,32 @@ fn builtin_filter_range_unbounded_take() {
 use crate::builtins::rt_flat_map;
 
 /// Test closure: doubles each list element: |x| [x, x * 2]
-extern "C" fn duplicate_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+extern "C" fn duplicate_closure(
+    _env: *const ClosureObject,
+    argc: u32,
+    argv: *const Value,
+) -> Value {
     if argc != 1 || argv.is_null() {
         return Value::from_list(im::Vector::new());
     }
     let arg = unsafe { *argv };
     if let Some(i) = arg.as_integer() {
-        Value::from_list(vec![
-            Value::from_integer(i),
-            Value::from_integer(i * 2),
-        ].into_iter().collect())
+        Value::from_list(
+            vec![Value::from_integer(i), Value::from_integer(i * 2)]
+                .into_iter()
+                .collect(),
+        )
     } else {
         Value::from_list(im::Vector::new())
     }
 }
 
 /// Test closure: identity for list elements (returns input * 2 as per LANG.txt example)
-extern "C" fn double_list_elements_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+extern "C" fn double_list_elements_closure(
+    _env: *const ClosureObject,
+    argc: u32,
+    argv: *const Value,
+) -> Value {
     if argc != 1 || argv.is_null() {
         return Value::from_list(im::Vector::new());
     }
@@ -1758,14 +1877,16 @@ extern "C" fn double_list_elements_closure(_env: *const ClosureObject, argc: u32
 #[test]
 fn builtin_flat_map_list() {
     // flat_map(_ * 2, [[1, 2], [3, 4]]) → [2, 4, 6, 8]
-    let inner1 = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
-    let inner2 = Value::from_list(vec![
-        Value::from_integer(3),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let inner1 = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
+    let inner2 = Value::from_list(
+        vec![Value::from_integer(3), Value::from_integer(4)]
+            .into_iter()
+            .collect(),
+    );
     let list = Value::from_list(vec![inner1, inner2].into_iter().collect());
     let mapper = make_test_closure(double_list_elements_closure, 1);
     let result = rt_flat_map(mapper, list);
@@ -1780,10 +1901,11 @@ fn builtin_flat_map_list() {
 #[test]
 fn builtin_flat_map_expand() {
     // flat_map(|x| [x, x * 2], [1, 2]) → [1, 2, 2, 4]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let mapper = make_test_closure(duplicate_closure, 1);
     let result = rt_flat_map(mapper, list);
     let flat = result.as_list().expect("should be a list");
@@ -1828,7 +1950,11 @@ use crate::builtins::rt_filter_map;
 
 /// Test closure: returns doubled value if odd, nil otherwise
 /// |v| if v % 2 { v * 2 }
-extern "C" fn double_if_odd_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+extern "C" fn double_if_odd_closure(
+    _env: *const ClosureObject,
+    argc: u32,
+    argv: *const Value,
+) -> Value {
     if argc != 1 || argv.is_null() {
         return Value::nil();
     }
@@ -1847,29 +1973,37 @@ extern "C" fn double_if_odd_closure(_env: *const ClosureObject, argc: u32, argv:
 #[test]
 fn builtin_filter_map_list() {
     // [1, 2, 3, 4] |> filter_map(|v| if v % 2 { v * 2 }) → [2, 6]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+            Value::from_integer(4),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let mapper = make_test_closure(double_if_odd_closure, 1);
     let result = rt_filter_map(mapper, list);
     let new_list = result.as_list().expect("should be a list");
     assert_eq!(new_list.len(), 2);
-    assert_eq!(new_list[0].as_integer(), Some(2));   // 1 * 2
-    assert_eq!(new_list[1].as_integer(), Some(6));   // 3 * 2
+    assert_eq!(new_list[0].as_integer(), Some(2)); // 1 * 2
+    assert_eq!(new_list[1].as_integer(), Some(6)); // 3 * 2
 }
 
 #[test]
 fn builtin_filter_map_set() {
     // {1, 2, 3, 4} |> filter_map(|v| if v % 2 { v * 2 }) → {2, 6}
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+            Value::from_integer(4),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let mapper = make_test_closure(double_if_odd_closure, 1);
     let result = rt_filter_map(mapper, set);
     let new_set = result.as_set().expect("should be a set");
@@ -1908,10 +2042,11 @@ use crate::builtins::rt_find_map;
 #[test]
 fn builtin_find_map_list() {
     // [1, 2] |> find_map(|v| if v % 2 { v * 2 }) → 2
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let mapper = make_test_closure(double_if_odd_closure, 1);
     let result = rt_find_map(mapper, list);
     assert_eq!(result.as_integer(), Some(2)); // 1 * 2
@@ -1920,10 +2055,11 @@ fn builtin_find_map_list() {
 #[test]
 fn builtin_find_map_no_match() {
     // [2, 4] |> find_map(|v| if v % 2 { v * 2 }) → nil
-    let list = Value::from_list(vec![
-        Value::from_integer(2),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(2), Value::from_integer(4)]
+            .into_iter()
+            .collect(),
+    );
     let mapper = make_test_closure(double_if_odd_closure, 1);
     let result = rt_find_map(mapper, list);
     assert!(result.is_nil());
@@ -1961,7 +2097,7 @@ fn builtin_find_map_range_no_match() {
 
 // ===== Reduction Functions (§11.5) =====
 
-use crate::builtins::{rt_reduce, rt_fold, rt_scan, rt_each};
+use crate::builtins::{rt_each, rt_fold, rt_reduce, rt_scan};
 
 /// Test closure: adds two integers (acc + val)
 extern "C" fn sum_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
@@ -1981,10 +2117,11 @@ extern "C" fn sum_closure(_env: *const ClosureObject, argc: u32, argv: *const Va
 #[test]
 fn builtin_reduce_list() {
     // reduce(+, [1, 2]) → 3
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let reducer = make_test_closure(sum_closure, 2);
     let result = rt_reduce(reducer, list);
     assert_eq!(result.as_integer(), Some(3));
@@ -1993,12 +2130,16 @@ fn builtin_reduce_list() {
 #[test]
 fn builtin_reduce_multiple() {
     // reduce(+, [1, 2, 3, 4]) → 10
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+            Value::from_integer(4),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let reducer = make_test_closure(sum_closure, 2);
     let result = rt_reduce(reducer, list);
     assert_eq!(result.as_integer(), Some(10));
@@ -2007,9 +2148,7 @@ fn builtin_reduce_multiple() {
 #[test]
 fn builtin_reduce_single_element() {
     // reduce(+, [5]) → 5
-    let list = Value::from_list(vec![
-        Value::from_integer(5),
-    ].into_iter().collect());
+    let list = Value::from_list(vec![Value::from_integer(5)].into_iter().collect());
     let reducer = make_test_closure(sum_closure, 2);
     let result = rt_reduce(reducer, list);
     assert_eq!(result.as_integer(), Some(5));
@@ -2018,10 +2157,11 @@ fn builtin_reduce_single_element() {
 #[test]
 fn builtin_reduce_set() {
     // reduce(+, {1, 2}) → 3 (order not guaranteed, but sum is same)
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let reducer = make_test_closure(sum_closure, 2);
     let result = rt_reduce(reducer, set);
     assert_eq!(result.as_integer(), Some(3));
@@ -2033,17 +2173,18 @@ fn builtin_reduce_empty_panics() {
     // Per LANG.txt §11.5: reduce on empty collection → RuntimeErr
     let list = Value::from_list(im::Vector::new());
     let reducer = make_test_closure(sum_closure, 2);
-    let _result = rt_reduce(reducer, list);  // Should panic
+    let _result = rt_reduce(reducer, list); // Should panic
 }
 
 // fold() tests
 #[test]
 fn builtin_fold_list() {
     // fold(0, +, [1, 2]) → 3
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let folder = make_test_closure(sum_closure, 2);
     let initial = Value::from_integer(0);
     let result = rt_fold(initial, folder, list);
@@ -2053,10 +2194,11 @@ fn builtin_fold_list() {
 #[test]
 fn builtin_fold_with_initial() {
     // fold(10, +, [1, 2]) → 13
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let folder = make_test_closure(sum_closure, 2);
     let initial = Value::from_integer(10);
     let result = rt_fold(initial, folder, list);
@@ -2076,10 +2218,11 @@ fn builtin_fold_empty_returns_initial() {
 #[test]
 fn builtin_fold_set() {
     // fold(0, +, {1, 2}) → 3
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let folder = make_test_closure(sum_closure, 2);
     let initial = Value::from_integer(0);
     let result = rt_fold(initial, folder, set);
@@ -2091,18 +2234,19 @@ fn builtin_fold_set() {
 #[test]
 fn builtin_scan_list() {
     // scan(0, +, [1, 2]) → [0, 1, 3]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let folder = make_test_closure(sum_closure, 2);
     let initial = Value::from_integer(0);
     let result = rt_scan(initial, folder, list);
     let scanned = result.as_list().expect("should be a list");
     assert_eq!(scanned.len(), 3);
-    assert_eq!(scanned[0].as_integer(), Some(0));  // initial
-    assert_eq!(scanned[1].as_integer(), Some(1));  // 0 + 1
-    assert_eq!(scanned[2].as_integer(), Some(3));  // 1 + 2
+    assert_eq!(scanned[0].as_integer(), Some(0)); // initial
+    assert_eq!(scanned[1].as_integer(), Some(1)); // 0 + 1
+    assert_eq!(scanned[2].as_integer(), Some(3)); // 1 + 2
 }
 
 #[test]
@@ -2133,10 +2277,11 @@ extern "C" fn fibonacci_folder(_env: *const ClosureObject, argc: u32, argv: *con
             let a = list[0].as_integer().unwrap_or(0);
             let b = list[1].as_integer().unwrap_or(0);
             // Return [b, a + b]
-            return Value::from_list(vec![
-                Value::from_integer(b),
-                Value::from_integer(a + b),
-            ].into_iter().collect());
+            return Value::from_list(
+                vec![Value::from_integer(b), Value::from_integer(a + b)]
+                    .into_iter()
+                    .collect(),
+            );
         }
     }
     Value::nil()
@@ -2146,22 +2291,27 @@ extern "C" fn fibonacci_folder(_env: *const ClosureObject, argc: u32, argv: *con
 fn builtin_fold_s_fibonacci() {
     // fold_s([0, 1], |[a, b], _| [b, a + b], 1..10) → 55
     // This computes fib(10) using state
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-        Value::from_integer(4),
-        Value::from_integer(5),
-        Value::from_integer(6),
-        Value::from_integer(7),
-        Value::from_integer(8),
-        Value::from_integer(9),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+            Value::from_integer(4),
+            Value::from_integer(5),
+            Value::from_integer(6),
+            Value::from_integer(7),
+            Value::from_integer(8),
+            Value::from_integer(9),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let folder = make_test_closure(fibonacci_folder, 2);
-    let initial = Value::from_list(vec![
-        Value::from_integer(0),
-        Value::from_integer(1),
-    ].into_iter().collect());
+    let initial = Value::from_list(
+        vec![Value::from_integer(0), Value::from_integer(1)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_fold_s(initial, folder, list);
     // After 9 iterations starting from [0, 1]:
     // [0,1] -> [1,1] -> [1,2] -> [2,3] -> [3,5] -> [5,8] -> [8,13] -> [13,21] -> [21,34] -> [34,55]
@@ -2174,10 +2324,11 @@ fn builtin_fold_s_empty_returns_first_of_initial() {
     // fold_s([42, 0], fn, []) → 42
     let list = Value::from_list(im::Vector::new());
     let folder = make_test_closure(fibonacci_folder, 2);
-    let initial = Value::from_list(vec![
-        Value::from_integer(42),
-        Value::from_integer(0),
-    ].into_iter().collect());
+    let initial = Value::from_list(
+        vec![Value::from_integer(42), Value::from_integer(0)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_fold_s(initial, folder, list);
     assert_eq!(result.as_integer(), Some(42));
 }
@@ -2189,10 +2340,11 @@ fn builtin_fold_s_with_range() {
     use crate::heap::LazySequenceObject;
     let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(10), false, 1));
     let folder = make_test_closure(fibonacci_folder, 2);
-    let initial = Value::from_list(vec![
-        Value::from_integer(0),
-        Value::from_integer(1),
-    ].into_iter().collect());
+    let initial = Value::from_list(
+        vec![Value::from_integer(0), Value::from_integer(1)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_fold_s(initial, folder, range);
     // After 9 iterations (1..10 has 9 elements) starting from [0, 1]:
     // [0,1] -> [1,1] -> [1,2] -> [2,3] -> [3,5] -> [5,8] -> [8,13] -> [13,21] -> [21,34]
@@ -2204,10 +2356,11 @@ fn builtin_fold_s_with_range() {
 #[test]
 fn builtin_each_returns_nil() {
     // each always returns nil
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let mapper = make_test_closure(add_one_closure, 1);
     let result = rt_each(mapper, list);
     assert!(result.is_nil());
@@ -2253,10 +2406,11 @@ extern "C" fn is_odd_closure(_env: *const ClosureObject, argc: u32, argv: *const
 #[test]
 fn builtin_find_list() {
     // find(_ % 2, [1, 2]) → 1
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let predicate = make_test_closure(is_odd_closure, 1);
     let result = rt_find(predicate, list);
     assert_eq!(result.as_integer(), Some(1));
@@ -2265,10 +2419,11 @@ fn builtin_find_list() {
 #[test]
 fn builtin_find_list_no_match() {
     // find(_ % 2, [2, 4]) → nil
-    let list = Value::from_list(vec![
-        Value::from_integer(2),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(2), Value::from_integer(4)]
+            .into_iter()
+            .collect(),
+    );
     let predicate = make_test_closure(is_odd_closure, 1);
     let result = rt_find(predicate, list);
     assert!(result.is_nil());
@@ -2277,10 +2432,11 @@ fn builtin_find_list_no_match() {
 #[test]
 fn builtin_find_set() {
     // find(_ % 2, {1, 2}) → 1
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let predicate = make_test_closure(is_odd_closure, 1);
     let result = rt_find(predicate, set);
     // Set iteration order is not guaranteed, but since 1 is odd it should be found
@@ -2292,7 +2448,11 @@ fn builtin_find_set() {
 #[test]
 fn builtin_find_string() {
     // find(_ == "b", "ab") → "b"
-    extern "C" fn equals_b_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+    extern "C" fn equals_b_closure(
+        _env: *const ClosureObject,
+        argc: u32,
+        argv: *const Value,
+    ) -> Value {
         if argc != 1 || argv.is_null() {
             return Value::from_bool(false);
         }
@@ -2322,7 +2482,11 @@ fn builtin_find_empty_list() {
 fn builtin_find_range() {
     // find(_ > 5, 1..10) → 6
     use crate::heap::LazySequenceObject;
-    extern "C" fn greater_than_5(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+    extern "C" fn greater_than_5(
+        _env: *const ClosureObject,
+        argc: u32,
+        argv: *const Value,
+    ) -> Value {
         if argc != 1 || argv.is_null() {
             return Value::from_bool(false);
         }
@@ -2344,7 +2508,11 @@ fn builtin_find_range() {
 fn builtin_find_range_no_match() {
     // find(_ > 100, 1..5) → nil
     use crate::heap::LazySequenceObject;
-    extern "C" fn greater_than_100(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+    extern "C" fn greater_than_100(
+        _env: *const ClosureObject,
+        argc: u32,
+        argv: *const Value,
+    ) -> Value {
         if argc != 1 || argv.is_null() {
             return Value::from_bool(false);
         }
@@ -2368,7 +2536,11 @@ fn builtin_find_filtered_range() {
     // First odd > 2 in range 1..10 is 3
     use crate::heap::LazySequenceObject;
 
-    extern "C" fn greater_than_2(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+    extern "C" fn greater_than_2(
+        _env: *const ClosureObject,
+        argc: u32,
+        argv: *const Value,
+    ) -> Value {
         if argc != 1 || argv.is_null() {
             return Value::from_bool(false);
         }
@@ -2397,12 +2569,16 @@ use crate::builtins::rt_count;
 #[test]
 fn builtin_count_list() {
     // count(_ % 2, [1, 2, 3, 4]) → 2
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+            Value::from_integer(4),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let predicate = make_test_closure(is_odd_closure, 1);
     let result = rt_count(predicate, list);
     assert_eq!(result.as_integer(), Some(2));
@@ -2411,12 +2587,16 @@ fn builtin_count_list() {
 #[test]
 fn builtin_count_set() {
     // count(_ % 2, {1, 2, 3, 4}) → 2
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+            Value::from_integer(4),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let predicate = make_test_closure(is_odd_closure, 1);
     let result = rt_count(predicate, set);
     assert_eq!(result.as_integer(), Some(2));
@@ -2425,7 +2605,11 @@ fn builtin_count_set() {
 #[test]
 fn builtin_count_string() {
     // count(_ == "a", "abab") → 2
-    extern "C" fn count_a_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+    extern "C" fn count_a_closure(
+        _env: *const ClosureObject,
+        argc: u32,
+        argv: *const Value,
+    ) -> Value {
         if argc != 1 || argv.is_null() {
             return Value::from_bool(false);
         }
@@ -2454,10 +2638,11 @@ fn builtin_count_empty_list() {
 #[test]
 fn builtin_count_none_match() {
     // count(_ % 2, [2, 4]) → 0
-    let list = Value::from_list(vec![
-        Value::from_integer(2),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(2), Value::from_integer(4)]
+            .into_iter()
+            .collect(),
+    );
     let predicate = make_test_closure(is_odd_closure, 1);
     let result = rt_count(predicate, list);
     assert_eq!(result.as_integer(), Some(0));
@@ -2501,7 +2686,11 @@ fn builtin_count_filtered_range() {
     // Count even numbers (should be 0 since all filtered values are odd)
     let is_even_pred = make_test_closure(is_even, 1);
     let result = rt_count(is_even_pred, filtered);
-    assert_eq!(result.as_integer(), Some(0), "no even numbers in filtered odd range");
+    assert_eq!(
+        result.as_integer(),
+        Some(0),
+        "no even numbers in filtered odd range"
+    );
 }
 
 #[test]
@@ -2511,7 +2700,11 @@ fn builtin_count_filtered_range_with_matches() {
     // count(_ > 5, [1, 3, 5, 7, 9]) → 2 (7 and 9)
     use crate::heap::LazySequenceObject;
 
-    extern "C" fn greater_than_5(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+    extern "C" fn greater_than_5(
+        _env: *const ClosureObject,
+        argc: u32,
+        argv: *const Value,
+    ) -> Value {
         if argc != 1 || argv.is_null() {
             return Value::from_bool(false);
         }
@@ -2536,16 +2729,17 @@ fn builtin_count_filtered_range_with_matches() {
 
 // ===== Aggregation Functions (§11.8) =====
 
-use crate::builtins::{rt_sum, rt_max, rt_min};
+use crate::builtins::{rt_max, rt_min, rt_sum};
 
 // sum() tests per LANG.txt §11.8
 #[test]
 fn builtin_sum_list() {
     // sum([1, 2]) → 3
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_sum(list);
     assert_eq!(result.as_integer(), Some(3));
 }
@@ -2553,10 +2747,11 @@ fn builtin_sum_list() {
 #[test]
 fn builtin_sum_list_decimals() {
     // sum([1.5, 2.5]) → 4.0
-    let list = Value::from_list(vec![
-        Value::from_decimal(1.5),
-        Value::from_decimal(2.5),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_decimal(1.5), Value::from_decimal(2.5)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_sum(list);
     assert_eq!(result.as_decimal(), Some(4.0));
 }
@@ -2572,10 +2767,11 @@ fn builtin_sum_empty_list() {
 #[test]
 fn builtin_sum_set() {
     // sum({1, 2}) → 3
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_sum(set);
     assert_eq!(result.as_integer(), Some(3));
 }
@@ -2625,10 +2821,11 @@ fn builtin_sum_large_range() {
 #[test]
 fn builtin_max_list() {
     // max([1, 2]) → 2
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_max(list);
     assert_eq!(result.as_integer(), Some(2));
 }
@@ -2644,10 +2841,11 @@ fn builtin_max_empty_list() {
 #[test]
 fn builtin_max_set() {
     // max({1, 2}) → 2
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_max(set);
     assert_eq!(result.as_integer(), Some(2));
 }
@@ -2687,10 +2885,11 @@ fn builtin_max_descending_range() {
 #[test]
 fn builtin_min_list() {
     // min([1, 2]) → 1
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_min(list);
     assert_eq!(result.as_integer(), Some(1));
 }
@@ -2706,10 +2905,11 @@ fn builtin_min_empty_list() {
 #[test]
 fn builtin_min_set() {
     // min({1, 2}) → 1
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_min(set);
     assert_eq!(result.as_integer(), Some(1));
 }
@@ -2747,17 +2947,21 @@ fn builtin_min_descending_range() {
 
 // ===== Sequence Manipulation Functions (§11.9) =====
 
-use crate::builtins::{rt_skip, rt_take, rt_sort, rt_reverse, rt_rotate, rt_chunk};
+use crate::builtins::{rt_chunk, rt_reverse, rt_rotate, rt_skip, rt_sort, rt_take};
 
 // skip() tests per LANG.txt §11.9
 #[test]
 fn builtin_skip_list() {
     // skip(1, [1, 2, 3]) → [2, 3]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_skip(Value::from_integer(1), list);
     let skipped = result.as_list().expect("should be a list");
     assert_eq!(skipped.len(), 2);
@@ -2768,11 +2972,15 @@ fn builtin_skip_list() {
 #[test]
 fn builtin_skip_list_all() {
     // skip(5, [1, 2, 3]) → []
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_skip(Value::from_integer(5), list);
     let skipped = result.as_list().expect("should be a list");
     assert!(skipped.is_empty());
@@ -2781,11 +2989,15 @@ fn builtin_skip_list_all() {
 #[test]
 fn builtin_skip_set() {
     // skip(1, {1, 2, 3}) → {?, ?} (order not guaranteed)
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_skip(Value::from_integer(1), set);
     let skipped = result.as_set().expect("should be a set");
     assert_eq!(skipped.len(), 2);
@@ -2822,11 +3034,15 @@ fn builtin_skip_range_all() {
 #[test]
 fn builtin_take_list() {
     // take(2, [1, 2, 3]) → [1, 2]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_take(Value::from_integer(2), list);
     let taken = result.as_list().expect("should be a list");
     assert_eq!(taken.len(), 2);
@@ -2837,10 +3053,11 @@ fn builtin_take_list() {
 #[test]
 fn builtin_take_list_more_than_size() {
     // take(5, [1, 2]) → [1, 2]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_take(Value::from_integer(5), list);
     let taken = result.as_list().expect("should be a list");
     assert_eq!(taken.len(), 2);
@@ -2849,11 +3066,15 @@ fn builtin_take_list_more_than_size() {
 #[test]
 fn builtin_take_set() {
     // take(2, {1, 2, 3}) → [?, ?] (order not guaranteed, returns list)
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_take(Value::from_integer(2), set);
     let taken = result.as_list().expect("should be a list");
     assert_eq!(taken.len(), 2);
@@ -2885,7 +3106,11 @@ fn builtin_take_range_more_than_size() {
 
 // sort() tests per LANG.txt §11.9
 /// Test closure: subtraction comparator (a - b)
-extern "C" fn subtraction_comparator(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+extern "C" fn subtraction_comparator(
+    _env: *const ClosureObject,
+    argc: u32,
+    argv: *const Value,
+) -> Value {
     if argc != 2 || argv.is_null() {
         return Value::from_integer(0);
     }
@@ -2899,7 +3124,11 @@ extern "C" fn subtraction_comparator(_env: *const ClosureObject, argc: u32, argv
 }
 
 /// Test closure: greater-than comparator (a > b)
-extern "C" fn greater_comparator(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+extern "C" fn greater_comparator(
+    _env: *const ClosureObject,
+    argc: u32,
+    argv: *const Value,
+) -> Value {
     if argc != 2 || argv.is_null() {
         return Value::from_bool(false);
     }
@@ -2929,11 +3158,15 @@ extern "C" fn less_comparator(_env: *const ClosureObject, argc: u32, argv: *cons
 #[test]
 fn builtin_sort_ascending() {
     // sort(<, [3, 2, 1]) → [1, 2, 3]
-    let list = Value::from_list(vec![
-        Value::from_integer(3),
-        Value::from_integer(2),
-        Value::from_integer(1),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(3),
+            Value::from_integer(2),
+            Value::from_integer(1),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let comparator = make_test_closure(less_comparator, 2);
     let result = rt_sort(comparator, list);
     let sorted = result.as_list().expect("should be a list");
@@ -2946,11 +3179,15 @@ fn builtin_sort_ascending() {
 #[test]
 fn builtin_sort_descending() {
     // sort(>, [3, 2, 1]) → [3, 2, 1] (already descending)
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let comparator = make_test_closure(greater_comparator, 2);
     let result = rt_sort(comparator, list);
     let sorted = result.as_list().expect("should be a list");
@@ -2963,11 +3200,15 @@ fn builtin_sort_descending() {
 #[test]
 fn builtin_sort_with_subtraction() {
     // sort(-, [3, 2, 1]) → [1, 2, 3]
-    let list = Value::from_list(vec![
-        Value::from_integer(3),
-        Value::from_integer(2),
-        Value::from_integer(1),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(3),
+            Value::from_integer(2),
+            Value::from_integer(1),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let comparator = make_test_closure(subtraction_comparator, 2);
     let result = rt_sort(comparator, list);
     let sorted = result.as_list().expect("should be a list");
@@ -2997,11 +3238,15 @@ fn builtin_sort_range() {
 #[test]
 fn builtin_reverse_list() {
     // reverse([1, 2, 3]) → [3, 2, 1]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_reverse(list);
     let reversed = result.as_list().expect("should be a list");
     assert_eq!(reversed.len(), 3);
@@ -3047,11 +3292,15 @@ fn builtin_reverse_range() {
 #[test]
 fn builtin_rotate_positive() {
     // rotate(1, [1, 2, 3]) → [3, 1, 2]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_rotate(Value::from_integer(1), list);
     let rotated = result.as_list().expect("should be a list");
     assert_eq!(rotated.len(), 3);
@@ -3063,11 +3312,15 @@ fn builtin_rotate_positive() {
 #[test]
 fn builtin_rotate_negative() {
     // rotate(-1, [1, 2, 3]) → [2, 3, 1]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_rotate(Value::from_integer(-1), list);
     let rotated = result.as_list().expect("should be a list");
     assert_eq!(rotated.len(), 3);
@@ -3079,12 +3332,16 @@ fn builtin_rotate_negative() {
 #[test]
 fn builtin_rotate_multiple() {
     // rotate(2, [1, 2, 3, 4]) → [3, 4, 1, 2]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+            Value::from_integer(4),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_rotate(Value::from_integer(2), list);
     let rotated = result.as_list().expect("should be a list");
     assert_eq!(rotated.len(), 4);
@@ -3098,12 +3355,16 @@ fn builtin_rotate_multiple() {
 #[test]
 fn builtin_chunk_even() {
     // chunk(2, [1, 2, 3, 4]) → [[1, 2], [3, 4]]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+            Value::from_integer(4),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_chunk(Value::from_integer(2), list);
     let chunks = result.as_list().expect("should be a list");
     assert_eq!(chunks.len(), 2);
@@ -3122,11 +3383,15 @@ fn builtin_chunk_even() {
 #[test]
 fn builtin_chunk_uneven() {
     // chunk(2, [1, 2, 3]) → [[1, 2], [3]]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_chunk(Value::from_integer(2), list);
     let chunks = result.as_list().expect("should be a list");
     assert_eq!(chunks.len(), 2);
@@ -3150,20 +3415,22 @@ fn builtin_chunk_empty() {
 
 // ===== Set Operations (§11.10) =====
 
-use crate::builtins::{rt_union, rt_intersection};
+use crate::builtins::{rt_intersection, rt_union};
 
 // union() tests per LANG.txt §11.10
 #[test]
 fn builtin_union_sets() {
     // union({1, 2}, {2, 3}) → {1, 2, 3}
-    let set1 = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
-    let set2 = Value::from_set(vec![
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let set1 = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
+    let set2 = Value::from_set(
+        vec![Value::from_integer(2), Value::from_integer(3)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_union(set1, set2);
     let union_set = result.as_set().expect("should be a set");
     assert_eq!(union_set.len(), 3);
@@ -3175,14 +3442,16 @@ fn builtin_union_sets() {
 #[test]
 fn builtin_union_list_and_set() {
     // union([1, 2], {2, 3}) → {1, 2, 3}
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
-    let set = Value::from_set(vec![
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
+    let set = Value::from_set(
+        vec![Value::from_integer(2), Value::from_integer(3)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_union(list, set);
     let union_set = result.as_set().expect("should be a set");
     assert_eq!(union_set.len(), 3);
@@ -3192,14 +3461,16 @@ fn builtin_union_list_and_set() {
 #[test]
 fn builtin_intersection_sets() {
     // intersection({1, 2}, {2, 3}) → {2}
-    let set1 = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
-    let set2 = Value::from_set(vec![
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let set1 = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
+    let set2 = Value::from_set(
+        vec![Value::from_integer(2), Value::from_integer(3)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_intersection(set1, set2);
     let isect = result.as_set().expect("should be a set");
     assert_eq!(isect.len(), 1);
@@ -3209,14 +3480,16 @@ fn builtin_intersection_sets() {
 #[test]
 fn builtin_intersection_no_common() {
     // intersection({1, 2}, {3, 4}) → {}
-    let set1 = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
-    let set2 = Value::from_set(vec![
-        Value::from_integer(3),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let set1 = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
+    let set2 = Value::from_set(
+        vec![Value::from_integer(3), Value::from_integer(4)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_intersection(set1, set2);
     let isect = result.as_set().expect("should be a set");
     assert!(isect.is_empty());
@@ -3228,10 +3501,11 @@ fn builtin_union_with_range() {
     // union({1, 2}, 1..4) → {1, 2, 3}
     // Per LANG.txt: union({1, 2}, [2, 3], 1..4, "abc") → {1, 2, 3, "a", "b", "c"}
     use crate::heap::LazySequenceObject;
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let range = Value::from_lazy_sequence(LazySequenceObject::range(1, Some(4), false, 1));
     let result = rt_union(set, range);
     let union_set = result.as_set().expect("should be a set");
@@ -3245,10 +3519,11 @@ fn builtin_union_with_range() {
 #[test]
 fn builtin_union_with_string() {
     // union({1, 2}, "ab") → {1, 2, "a", "b"}
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let string = Value::from_string("ab");
     let result = rt_union(set, string);
     let union_set = result.as_set().expect("should be a set");
@@ -3264,11 +3539,15 @@ fn builtin_union_with_string() {
 fn builtin_intersection_with_range() {
     // intersection({1, 2, 3}, 2..5) → {2, 3}
     use crate::heap::LazySequenceObject;
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let range = Value::from_lazy_sequence(LazySequenceObject::range(2, Some(5), false, 1));
     let result = rt_intersection(set, range);
     let isect = result.as_set().expect("should be a set");
@@ -3279,16 +3558,17 @@ fn builtin_intersection_with_range() {
 
 // ===== Predicates (§11.11) =====
 
-use crate::builtins::{rt_includes, rt_excludes, rt_any, rt_all};
+use crate::builtins::{rt_all, rt_any, rt_excludes, rt_includes};
 
 // includes?() tests per LANG.txt §11.11
 #[test]
 fn builtin_includes_list() {
     // includes?([1, 2], 1) → true
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_includes(list, Value::from_integer(1));
     assert_eq!(result.as_bool(), Some(true));
 }
@@ -3296,10 +3576,11 @@ fn builtin_includes_list() {
 #[test]
 fn builtin_includes_list_false() {
     // includes?([1, 2], 3) → false
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_includes(list, Value::from_integer(3));
     assert_eq!(result.as_bool(), Some(false));
 }
@@ -3307,10 +3588,11 @@ fn builtin_includes_list_false() {
 #[test]
 fn builtin_includes_set() {
     // includes?({1, 2}, 1) → true
-    let set = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let set = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_includes(set, Value::from_integer(1));
     assert_eq!(result.as_bool(), Some(true));
 }
@@ -3357,10 +3639,11 @@ fn builtin_includes_range_false() {
 #[test]
 fn builtin_excludes_list() {
     // excludes?([1, 2], 3) → true
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_excludes(list, Value::from_integer(3));
     assert_eq!(result.as_bool(), Some(true));
 }
@@ -3368,10 +3651,11 @@ fn builtin_excludes_list() {
 #[test]
 fn builtin_excludes_list_false() {
     // excludes?([1, 2], 1) → false
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_excludes(list, Value::from_integer(1));
     assert_eq!(result.as_bool(), Some(false));
 }
@@ -3380,10 +3664,11 @@ fn builtin_excludes_list_false() {
 #[test]
 fn builtin_any_list_true() {
     // any?(_ == 1, [1, 2]) → true
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let predicate = make_test_closure(equals_one_closure, 1);
     let result = rt_any(predicate, list);
     assert_eq!(result.as_bool(), Some(true));
@@ -3392,10 +3677,11 @@ fn builtin_any_list_true() {
 #[test]
 fn builtin_any_list_false() {
     // any?(_ == 1, [2, 3]) → false
-    let list = Value::from_list(vec![
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(2), Value::from_integer(3)]
+            .into_iter()
+            .collect(),
+    );
     let predicate = make_test_closure(equals_one_closure, 1);
     let result = rt_any(predicate, list);
     assert_eq!(result.as_bool(), Some(false));
@@ -3436,7 +3722,11 @@ fn builtin_any_range_true() {
 fn builtin_any_range_false() {
     // any?(_ > 10, 1..5) → false
     use crate::heap::LazySequenceObject;
-    extern "C" fn greater_than_10(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+    extern "C" fn greater_than_10(
+        _env: *const ClosureObject,
+        argc: u32,
+        argv: *const Value,
+    ) -> Value {
         if argc != 1 || argv.is_null() {
             return Value::from_bool(false);
         }
@@ -3471,10 +3761,11 @@ extern "C" fn positive_closure(_env: *const ClosureObject, argc: u32, argv: *con
 #[test]
 fn builtin_all_list_true() {
     // all?(_ > 0, [1, 2]) → true
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let predicate = make_test_closure(positive_closure, 1);
     let result = rt_all(predicate, list);
     assert_eq!(result.as_bool(), Some(true));
@@ -3483,10 +3774,11 @@ fn builtin_all_list_true() {
 #[test]
 fn builtin_all_list_false() {
     // all?(_ > 0, [-1, 2]) → false
-    let list = Value::from_list(vec![
-        Value::from_integer(-1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(-1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let predicate = make_test_closure(positive_closure, 1);
     let result = rt_all(predicate, list);
     assert_eq!(result.as_bool(), Some(false));
@@ -3525,7 +3817,7 @@ fn builtin_all_range_false() {
 
 // ===== Lazy Sequence Functions (§11.12-11.13) =====
 
-use crate::builtins::{rt_repeat, rt_cycle, rt_iterate, rt_combinations, rt_range_fn};
+use crate::builtins::{rt_combinations, rt_cycle, rt_iterate, rt_range_fn, rt_repeat};
 
 #[test]
 fn builtin_repeat_generates_lazy_sequence() {
@@ -3562,11 +3854,15 @@ fn builtin_repeat_string() {
 #[test]
 fn builtin_cycle_generates_lazy_sequence() {
     // cycle([1, 2, 3]) returns a LazySequence
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_cycle(list);
     assert!(result.is_lazy_sequence());
 }
@@ -3574,11 +3870,15 @@ fn builtin_cycle_generates_lazy_sequence() {
 #[test]
 fn builtin_cycle_take_produces_list() {
     // cycle([1, 2, 3]) |> take(7) → [1, 2, 3, 1, 2, 3, 1]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let lazy = rt_cycle(list);
     let result = rt_take(Value::from_integer(7), lazy);
     let out = result.as_list().expect("should be a list");
@@ -3662,11 +3962,15 @@ fn builtin_iterate_doubling() {
 #[test]
 fn builtin_combinations_generates_lazy_sequence() {
     // combinations(2, [1, 2, 3]) returns a LazySequence
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_combinations(Value::from_integer(2), list);
     assert!(result.is_lazy_sequence());
 }
@@ -3674,13 +3978,17 @@ fn builtin_combinations_generates_lazy_sequence() {
 #[test]
 fn builtin_combinations_produces_correct_combinations() {
     // combinations(2, [1, 2, 3]) → [[1, 2], [1, 3], [2, 3]]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let lazy = rt_combinations(Value::from_integer(2), list);
-    let result = rt_take(Value::from_integer(10), lazy);  // Take more than exists
+    let result = rt_take(Value::from_integer(10), lazy); // Take more than exists
     let out = result.as_list().expect("should be a list");
     assert_eq!(out.len(), 3);
 
@@ -3779,6 +4087,7 @@ fn lazy_map_on_repeat() {
 }
 
 /// Test closure: checks if a value is even
+#[allow(dead_code)]
 extern "C" fn is_even_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
     if argc != 1 || argv.is_null() {
         return Value::from_bool(false);
@@ -3795,15 +4104,23 @@ extern "C" fn is_even_closure(_env: *const ClosureObject, argc: u32, argv: *cons
 fn lazy_filter_on_cycle() {
     // filter(_ != 2, cycle([1, 2, 3])) |> take(3) → [1, 3, 1]
     // Create cycle([1, 2, 3])
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let cycle_lazy = rt_cycle(list);
 
     // Create a filter that removes 2s
-    extern "C" fn not_two_closure(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+    extern "C" fn not_two_closure(
+        _env: *const ClosureObject,
+        argc: u32,
+        argv: *const Value,
+    ) -> Value {
         if argc != 1 || argv.is_null() {
             return Value::from_bool(false);
         }
@@ -3829,7 +4146,7 @@ fn lazy_filter_on_cycle() {
 
 // ===== Phase 14: String Functions (§11.14) =====
 
-use crate::builtins::{rt_lines, rt_split, rt_md5, rt_upper, rt_lower, rt_replace, rt_join};
+use crate::builtins::{rt_join, rt_lines, rt_lower, rt_md5, rt_replace, rt_split, rt_upper};
 
 // lines() function tests per LANG.txt §11.14
 #[test]
@@ -3997,11 +4314,15 @@ fn builtin_replace_word() {
 fn builtin_join_list() {
     // join(", ", [1, 2, 3]) → "1, 2, 3"
     let sep = Value::from_string(", ");
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_join(sep, list);
     assert_eq!(result.as_string(), Some("1, 2, 3"));
 }
@@ -4010,11 +4331,15 @@ fn builtin_join_list() {
 fn builtin_join_strings() {
     // join("-", ["a", "b", "c"]) → "a-b-c"
     let sep = Value::from_string("-");
-    let list = Value::from_list(vec![
-        Value::from_string("a".to_string()),
-        Value::from_string("b".to_string()),
-        Value::from_string("c".to_string()),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_string("a".to_string()),
+            Value::from_string("b".to_string()),
+            Value::from_string("c".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_join(sep, list);
     assert_eq!(result.as_string(), Some("a-b-c"));
 }
@@ -4198,14 +4523,16 @@ fn builtin_signum_negative_decimal() {
 #[test]
 fn builtin_vec_add_basic() {
     // vec_add([1, 2], [3, 4]) → [4, 6]
-    let a = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
-    let b = Value::from_list(vec![
-        Value::from_integer(3),
-        Value::from_integer(4),
-    ].into_iter().collect());
+    let a = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
+    let b = Value::from_list(
+        vec![Value::from_integer(3), Value::from_integer(4)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_vec_add(a, b);
     let list = result.as_list().expect("should be a list");
     assert_eq!(list.len(), 2);
@@ -4216,16 +4543,24 @@ fn builtin_vec_add_basic() {
 #[test]
 fn builtin_vec_add_three_elements() {
     // vec_add([1, 2, 3], [4, 5, 6]) → [5, 7, 9]
-    let a = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
-    let b = Value::from_list(vec![
-        Value::from_integer(4),
-        Value::from_integer(5),
-        Value::from_integer(6),
-    ].into_iter().collect());
+    let a = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let b = Value::from_list(
+        vec![
+            Value::from_integer(4),
+            Value::from_integer(5),
+            Value::from_integer(6),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let result = rt_vec_add(a, b);
     let list = result.as_list().expect("should be a list");
     assert_eq!(list.len(), 3);
@@ -4237,15 +4572,20 @@ fn builtin_vec_add_three_elements() {
 #[test]
 fn builtin_vec_add_shorter_list() {
     // vec_add([1, 2, 3], [10, 20]) → [11, 22] (shorter list determines length)
-    let a = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
-    let b = Value::from_list(vec![
-        Value::from_integer(10),
-        Value::from_integer(20),
-    ].into_iter().collect());
+    let a = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let b = Value::from_list(
+        vec![Value::from_integer(10), Value::from_integer(20)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_vec_add(a, b);
     let list = result.as_list().expect("should be a list");
     assert_eq!(list.len(), 2);
@@ -4255,7 +4595,9 @@ fn builtin_vec_add_shorter_list() {
 
 // ===== Phase 14: Bitwise Functions (§4.5) =====
 
-use crate::builtins::{rt_bit_and, rt_bit_or, rt_bit_xor, rt_bit_not, rt_bit_shift_left, rt_bit_shift_right};
+use crate::builtins::{
+    rt_bit_and, rt_bit_not, rt_bit_or, rt_bit_shift_left, rt_bit_shift_right, rt_bit_xor,
+};
 
 // bit_and() tests per LANG.txt §4.5
 #[test]
@@ -4344,7 +4686,7 @@ fn builtin_bit_shift_right_multiple() {
 
 // ===== Phase 14: Utility Functions (§11.16) =====
 
-use crate::builtins::{rt_id, rt_type, rt_or, rt_and};
+use crate::builtins::{rt_and, rt_id, rt_or, rt_type};
 
 // id() function tests per LANG.txt §11.16
 #[test]
@@ -4382,8 +4724,8 @@ fn builtin_type_integer() {
 
 #[test]
 fn builtin_type_decimal() {
-    // type(3.14) → "Decimal"
-    let v = Value::from_decimal(3.14);
+    // type(2.71) → "Decimal"
+    let v = Value::from_decimal(2.71);
     let result = rt_type(v);
     assert_eq!(result.as_string(), Some("Decimal"));
 }
@@ -4415,10 +4757,11 @@ fn builtin_type_nil() {
 #[test]
 fn builtin_type_list() {
     // type([1, 2, 3]) → "List"
-    let v = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let v = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_type(v);
     assert_eq!(result.as_string(), Some("List"));
 }
@@ -4426,10 +4769,11 @@ fn builtin_type_list() {
 #[test]
 fn builtin_type_set() {
     // type({1, 2, 3}) → "Set"
-    let v = Value::from_set(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let v = Value::from_set(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let result = rt_type(v);
     assert_eq!(result.as_string(), Some("Set"));
 }
@@ -4521,8 +4865,8 @@ fn format_value_integer() {
 
 #[test]
 fn format_value_decimal() {
-    let v = Value::from_decimal(3.14);
-    assert!(format_value(&v).starts_with("3.14"));
+    let v = Value::from_decimal(2.71);
+    assert!(format_value(&v).starts_with("2.71"));
 }
 
 #[test]
@@ -4700,7 +5044,7 @@ fn builtin_reduce_lazy_range_empty_panics() {
     let lazy = LazySequenceObject::range(5, Some(5), false, 1);
     let range_val = Value::from_lazy_sequence(lazy);
     let reducer = make_test_closure(sum_closure, 2);
-    let _result = rt_reduce(reducer, range_val);  // Should panic
+    let _result = rt_reduce(reducer, range_val); // Should panic
 }
 
 #[test]
@@ -4715,7 +5059,7 @@ fn builtin_scan_lazy_range() {
 
     let result_list = result.as_list().expect("should be a list");
     assert_eq!(result_list.len(), 5);
-    assert_eq!(result_list[0].as_integer(), Some(0));  // initial
+    assert_eq!(result_list[0].as_integer(), Some(0)); // initial
     assert_eq!(result_list[1].as_integer(), Some(1));
     assert_eq!(result_list[2].as_integer(), Some(3));
     assert_eq!(result_list[3].as_integer(), Some(6));
@@ -4740,14 +5084,17 @@ fn builtin_scan_lazy_range_empty() {
 // Memoize (§11.16)
 // ============================================================================
 
-use crate::builtins::{rt_memoize, rt_call_memoized};
+use crate::builtins::{rt_call_memoized, rt_memoize};
 
 #[test]
 fn builtin_memoize_returns_closure() {
     // memoize(|x| x + 1) should return a closure
     let func = make_test_closure(add_one_closure, 1);
     let memoized = rt_memoize(func);
-    assert!(memoized.is_closure() || memoized.is_memoized_closure(), "memoize should return a callable");
+    assert!(
+        memoized.is_closure() || memoized.is_memoized_closure(),
+        "memoize should return a callable"
+    );
 }
 
 #[test]
@@ -4783,16 +5130,24 @@ use crate::builtins::rt_zip;
 #[test]
 fn builtin_zip_two_lists() {
     // zip([1, 2, 3], ["a", "b", "c"]) → [[1, "a"], [2, "b"], [3, "c"]]
-    let list1 = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
-    let list2 = Value::from_list(vec![
-        Value::from_string("a"),
-        Value::from_string("b"),
-        Value::from_string("c"),
-    ].into_iter().collect());
+    let list1 = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let list2 = Value::from_list(
+        vec![
+            Value::from_string("a"),
+            Value::from_string("b"),
+            Value::from_string("c"),
+        ]
+        .into_iter()
+        .collect(),
+    );
 
     let result = rt_zip(2, [list1, list2].as_ptr());
     let out = result.as_list().expect("should be a list");
@@ -4818,37 +5173,45 @@ fn builtin_zip_two_lists() {
 #[test]
 fn builtin_zip_different_lengths_stops_at_shortest() {
     // zip([1, 2], ["a", "b", "c", "d"]) → [[1, "a"], [2, "b"]]
-    let list1 = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
-    let list2 = Value::from_list(vec![
-        Value::from_string("a"),
-        Value::from_string("b"),
-        Value::from_string("c"),
-        Value::from_string("d"),
-    ].into_iter().collect());
+    let list1 = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
+    let list2 = Value::from_list(
+        vec![
+            Value::from_string("a"),
+            Value::from_string("b"),
+            Value::from_string("c"),
+            Value::from_string("d"),
+        ]
+        .into_iter()
+        .collect(),
+    );
 
     let result = rt_zip(2, [list1, list2].as_ptr());
     let out = result.as_list().expect("should be a list");
-    assert_eq!(out.len(), 2);  // Stops at shortest (2 elements)
+    assert_eq!(out.len(), 2); // Stops at shortest (2 elements)
 }
 
 #[test]
 fn builtin_zip_three_collections() {
     // zip([1, 2], ["a", "b"], [10, 20]) → [[1, "a", 10], [2, "b", 20]]
-    let list1 = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
-    let list2 = Value::from_list(vec![
-        Value::from_string("a"),
-        Value::from_string("b"),
-    ].into_iter().collect());
-    let list3 = Value::from_list(vec![
-        Value::from_integer(10),
-        Value::from_integer(20),
-    ].into_iter().collect());
+    let list1 = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
+    let list2 = Value::from_list(
+        vec![Value::from_string("a"), Value::from_string("b")]
+            .into_iter()
+            .collect(),
+    );
+    let list3 = Value::from_list(
+        vec![Value::from_integer(10), Value::from_integer(20)]
+            .into_iter()
+            .collect(),
+    );
 
     let result = rt_zip(3, [list1, list2, list3].as_ptr());
     let out = result.as_list().expect("should be a list");
@@ -4865,11 +5228,15 @@ fn builtin_zip_three_collections() {
 #[test]
 fn builtin_zip_with_string() {
     // zip([1, 2, 3], "abc") → [[1, "a"], [2, "b"], [3, "c"]]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
     let string = Value::from_string("abc");
 
     let result = rt_zip(2, [list, string].as_ptr());
@@ -4885,15 +5252,21 @@ fn builtin_zip_with_string() {
 fn builtin_zip_with_range_and_finite() {
     // zip(0.., [1.5, 2.5, 3.5]) → [[0, 1.5], [1, 2.5], [2, 3.5]] (list, not lazy)
     let range = Value::from_lazy_sequence(LazySequenceObject::range(0, None, false, 1));
-    let list = Value::from_list(vec![
-        Value::from_decimal(1.5),
-        Value::from_decimal(2.5),
-        Value::from_decimal(3.5),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_decimal(1.5),
+            Value::from_decimal(2.5),
+            Value::from_decimal(3.5),
+        ]
+        .into_iter()
+        .collect(),
+    );
 
     let result = rt_zip(2, [range, list].as_ptr());
     // Since one collection is finite, result should be a List
-    let out = result.as_list().expect("should be a list when any input is finite");
+    let out = result
+        .as_list()
+        .expect("should be a list when any input is finite");
     assert_eq!(out.len(), 3);
 
     let first = out[0].as_list().expect("should be a list");
@@ -4913,7 +5286,10 @@ fn builtin_zip_two_infinite_returns_lazy() {
 
     let result = rt_zip(2, [range1, range2].as_ptr());
     // When all collections are infinite, result should be LazySequence
-    assert!(result.is_lazy_sequence(), "should return LazySequence when all inputs are infinite");
+    assert!(
+        result.is_lazy_sequence(),
+        "should return LazySequence when all inputs are infinite"
+    );
 }
 
 #[test]
@@ -4944,11 +5320,15 @@ fn builtin_zip_infinite_take() {
 fn builtin_zip_empty_list() {
     // zip([], [1, 2, 3]) → []
     let empty = Value::from_list(im::Vector::new());
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-        Value::from_integer(3),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
 
     let result = rt_zip(2, [empty, list].as_ptr());
     let out = result.as_list().expect("should be a list");
@@ -4964,10 +5344,11 @@ use super::builtins::rt_update;
 #[test]
 fn builtin_update_list_existing() {
     // update(0, _ + 1, [1, 2]) → [2, 2]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let updater = make_test_closure(add_one_closure, 1);
     let result = rt_update(Value::from_integer(0), updater, list);
     let new_list = result.as_list().expect("should be a list");
@@ -4977,7 +5358,11 @@ fn builtin_update_list_existing() {
 }
 
 /// Test closure: ignores argument, returns 1
-extern "C" fn constant_one_closure(_env: *const ClosureObject, _argc: u32, _argv: *const Value) -> Value {
+extern "C" fn constant_one_closure(
+    _env: *const ClosureObject,
+    _argc: u32,
+    _argv: *const Value,
+) -> Value {
     Value::from_integer(1)
 }
 
@@ -5001,7 +5386,12 @@ fn builtin_update_dict_new_key() {
     let result = rt_update(Value::from_integer(0), updater, dict);
     let new_dict = result.as_dict().expect("should be a dict");
     assert_eq!(new_dict.len(), 1);
-    assert_eq!(new_dict.get(&Value::from_integer(0)).map(|v| v.as_integer()), Some(Some(1)));
+    assert_eq!(
+        new_dict
+            .get(&Value::from_integer(0))
+            .map(|v| v.as_integer()),
+        Some(Some(1))
+    );
 }
 
 #[test]
@@ -5015,8 +5405,18 @@ fn builtin_update_dict_existing_key() {
     let result = rt_update(Value::from_integer(1), updater, dict);
     let new_dict = result.as_dict().expect("should be a dict");
     assert_eq!(new_dict.len(), 2);
-    assert_eq!(new_dict.get(&Value::from_integer(1)).map(|v| v.as_integer()), Some(Some(3)));
-    assert_eq!(new_dict.get(&Value::from_integer(3)).map(|v| v.as_integer()), Some(Some(4)));
+    assert_eq!(
+        new_dict
+            .get(&Value::from_integer(1))
+            .map(|v| v.as_integer()),
+        Some(Some(3))
+    );
+    assert_eq!(
+        new_dict
+            .get(&Value::from_integer(3))
+            .map(|v| v.as_integer()),
+        Some(Some(4))
+    );
 }
 
 // ============================================================================
@@ -5028,12 +5428,18 @@ use super::builtins::rt_update_d;
 #[test]
 fn builtin_update_d_list_existing() {
     // update_d(0, 0, _ + 1, [1, 2]) → [2, 2]
-    let list = Value::from_list(vec![
-        Value::from_integer(1),
-        Value::from_integer(2),
-    ].into_iter().collect());
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_integer(2)]
+            .into_iter()
+            .collect(),
+    );
     let updater = make_test_closure(add_one_closure, 1);
-    let result = rt_update_d(Value::from_integer(0), Value::from_integer(0), updater, list);
+    let result = rt_update_d(
+        Value::from_integer(0),
+        Value::from_integer(0),
+        updater,
+        list,
+    );
     let new_list = result.as_list().expect("should be a list");
     assert_eq!(new_list.len(), 2);
     assert_eq!(new_list[0].as_integer(), Some(2));
@@ -5045,7 +5451,12 @@ fn builtin_update_d_list_fills_with_nil_uses_default() {
     // update_d(1, 0, _ + 1, []) → [nil, 1]
     let list = Value::from_list(im::Vector::new());
     let updater = make_test_closure(add_one_closure, 1);
-    let result = rt_update_d(Value::from_integer(1), Value::from_integer(0), updater, list);
+    let result = rt_update_d(
+        Value::from_integer(1),
+        Value::from_integer(0),
+        updater,
+        list,
+    );
     let new_list = result.as_list().expect("should be a list");
     assert_eq!(new_list.len(), 2);
     assert!(new_list[0].is_nil());
@@ -5057,10 +5468,20 @@ fn builtin_update_d_dict_new_key_uses_default() {
     // update_d(0, 0, _ + 1, #{}) → #{0: 1}
     let dict = Value::from_dict(im::HashMap::new());
     let updater = make_test_closure(add_one_closure, 1);
-    let result = rt_update_d(Value::from_integer(0), Value::from_integer(0), updater, dict);
+    let result = rt_update_d(
+        Value::from_integer(0),
+        Value::from_integer(0),
+        updater,
+        dict,
+    );
     let new_dict = result.as_dict().expect("should be a dict");
     assert_eq!(new_dict.len(), 1);
-    assert_eq!(new_dict.get(&Value::from_integer(0)).map(|v| v.as_integer()), Some(Some(1))); // 0 + 1 = 1
+    assert_eq!(
+        new_dict
+            .get(&Value::from_integer(0))
+            .map(|v| v.as_integer()),
+        Some(Some(1))
+    ); // 0 + 1 = 1
 }
 
 #[test]
@@ -5071,11 +5492,26 @@ fn builtin_update_d_dict_existing_key() {
     dict_data.insert(Value::from_integer(3), Value::from_integer(4));
     let dict = Value::from_dict(dict_data);
     let updater = make_test_closure(add_one_closure, 1);
-    let result = rt_update_d(Value::from_integer(1), Value::from_integer(0), updater, dict);
+    let result = rt_update_d(
+        Value::from_integer(1),
+        Value::from_integer(0),
+        updater,
+        dict,
+    );
     let new_dict = result.as_dict().expect("should be a dict");
     assert_eq!(new_dict.len(), 2);
-    assert_eq!(new_dict.get(&Value::from_integer(1)).map(|v| v.as_integer()), Some(Some(3)));
-    assert_eq!(new_dict.get(&Value::from_integer(3)).map(|v| v.as_integer()), Some(Some(4)));
+    assert_eq!(
+        new_dict
+            .get(&Value::from_integer(1))
+            .map(|v| v.as_integer()),
+        Some(Some(3))
+    );
+    assert_eq!(
+        new_dict
+            .get(&Value::from_integer(3))
+            .map(|v| v.as_integer()),
+        Some(Some(4))
+    );
 }
 
 // ===== get() Range/LazySequence Tests (§11.2) =====
@@ -5293,7 +5729,7 @@ fn deep_equality_nested_lists() {
     // [[1, 2], [3, 4]] == [[1, 2], [3, 4]] should be true
     let inner1 = Value::from_list(im::vector![Value::from_integer(1), Value::from_integer(2)]);
     let inner2 = Value::from_list(im::vector![Value::from_integer(3), Value::from_integer(4)]);
-    let outer1 = Value::from_list(im::vector![inner1.clone(), inner2.clone()]);
+    let outer1 = Value::from_list(im::vector![inner1, inner2]);
 
     let inner3 = Value::from_list(im::vector![Value::from_integer(1), Value::from_integer(2)]);
     let inner4 = Value::from_list(im::vector![Value::from_integer(3), Value::from_integer(4)]);
@@ -5363,7 +5799,7 @@ fn deep_hash_lists_different_hash() {
 fn deep_hash_nested_lists() {
     // Equal nested lists should have equal hashes
     let inner1 = Value::from_list(im::vector![Value::from_integer(1), Value::from_integer(2)]);
-    let outer1 = Value::from_list(im::vector![inner1.clone(), Value::from_integer(3)]);
+    let outer1 = Value::from_list(im::vector![inner1, Value::from_integer(3)]);
 
     let inner2 = Value::from_list(im::vector![Value::from_integer(1), Value::from_integer(2)]);
     let outer2 = Value::from_list(im::vector![inner2, Value::from_integer(3)]);
@@ -5384,7 +5820,10 @@ fn read_https_url() {
     // Should return a non-nil string containing HTML
     assert!(!result.is_nil(), "HTTPS fetch should not return nil");
     let content = result.as_string().expect("Result should be a string");
-    assert!(content.contains("Example Domain"), "Should contain example.com content");
+    assert!(
+        content.contains("Example Domain"),
+        "Should contain example.com content"
+    );
 }
 
 #[test]
@@ -5401,7 +5840,9 @@ fn read_http_url() {
 #[test]
 fn read_invalid_url_returns_nil() {
     // Test that invalid URLs return nil gracefully
-    let url = Value::from_string("https://this-domain-definitely-does-not-exist-12345.invalid/".to_string());
+    let url = Value::from_string(
+        "https://this-domain-definitely-does-not-exist-12345.invalid/".to_string(),
+    );
     let result = rt_read(url);
 
     // Should return nil for network errors
@@ -5426,7 +5867,11 @@ extern "C" fn compose_test_inc(_env: *const ClosureObject, argc: u32, argv: *con
 }
 
 /// Test closure for composition: doubles its argument
-extern "C" fn compose_test_double(_env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
+extern "C" fn compose_test_double(
+    _env: *const ClosureObject,
+    argc: u32,
+    argv: *const Value,
+) -> Value {
     if argc != 1 || argv.is_null() {
         return Value::nil();
     }

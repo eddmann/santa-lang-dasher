@@ -1,7 +1,7 @@
 // Reference counting operations for heap-allocated values
 
-use super::value::Value;
 use super::heap::ObjectHeader;
+use super::value::Value;
 use std::sync::atomic::Ordering;
 
 /// Increment reference count for heap-allocated values
@@ -34,11 +34,9 @@ pub extern "C" fn rt_decref(value: Value) {
 /// Get current reference count (for testing)
 pub fn rt_get_refcount(value: Value) -> u32 {
     if let Some(header_ptr) = value.as_heap_ptr::<ObjectHeader>() {
-        unsafe {
-            (*header_ptr).refcount.load(Ordering::Relaxed)
-        }
+        unsafe { (*header_ptr).refcount.load(Ordering::Relaxed) }
     } else {
-        0  // Primitives don't have refcounts
+        0 // Primitives don't have refcounts
     }
 }
 

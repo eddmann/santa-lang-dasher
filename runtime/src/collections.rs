@@ -1,5 +1,5 @@
+use super::heap::{DictObject, ListObject, SetObject};
 use super::value::Value;
-use super::heap::{ListObject, SetObject, DictObject};
 use im;
 
 /// Create an empty list
@@ -93,11 +93,16 @@ pub extern "C" fn rt_dict_new() -> Value {
 /// # Safety
 /// The caller must ensure that `keys` and `values` both point to valid arrays of `count` Values.
 #[no_mangle]
-pub unsafe extern "C" fn rt_dict_from_entries(keys: *const Value, values: *const Value, count: usize) -> Value {
+pub unsafe extern "C" fn rt_dict_from_entries(
+    keys: *const Value,
+    values: *const Value,
+    count: usize,
+) -> Value {
     let keys_slice = std::slice::from_raw_parts(keys, count);
     let values_slice = std::slice::from_raw_parts(values, count);
 
-    let hashmap = keys_slice.iter()
+    let hashmap = keys_slice
+        .iter()
         .zip(values_slice.iter())
         .map(|(k, v)| (*k, *v))
         .collect();

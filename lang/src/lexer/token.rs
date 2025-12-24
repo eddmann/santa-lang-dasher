@@ -48,43 +48,43 @@ pub enum TokenKind {
     Identifier(String),
 
     // Operators
-    Plus,           // +
-    Minus,          // -
-    Star,           // *
-    Slash,          // /
-    Percent,        // %
-    EqualEqual,     // ==
-    NotEqual,       // !=
-    Less,           // <
-    LessEqual,      // <=
-    Greater,        // >
-    GreaterEqual,   // >=
-    AndAnd,         // &&
-    OrOr,           // ||
-    Bang,           // !
-    Pipe,           // |>
-    RightRight,     // >>
-    DotDot,         // ..
-    DotDotEqual,    // ..=
-    Equal,          // =
+    Plus,         // +
+    Minus,        // -
+    Star,         // *
+    Slash,        // /
+    Percent,      // %
+    EqualEqual,   // ==
+    NotEqual,     // !=
+    Less,         // <
+    LessEqual,    // <=
+    Greater,      // >
+    GreaterEqual, // >=
+    AndAnd,       // &&
+    OrOr,         // ||
+    Bang,         // !
+    Pipe,         // |>
+    RightRight,   // >>
+    DotDot,       // ..
+    DotDotEqual,  // ..=
+    Equal,        // =
 
     // Delimiters
-    LeftParen,      // (
-    RightParen,     // )
-    LeftBracket,    // [
-    RightBracket,   // ]
-    LeftBrace,      // {
-    RightBrace,     // }
-    HashBrace,      // #{
-    Comma,          // ,
-    Colon,          // :
-    Semicolon,      // ;
-    VerticalBar,    // |
-    Backtick,       // `
+    LeftParen,    // (
+    RightParen,   // )
+    LeftBracket,  // [
+    RightBracket, // ]
+    LeftBrace,    // {
+    RightBrace,   // }
+    HashBrace,    // #{
+    Comma,        // ,
+    Colon,        // :
+    Semicolon,    // ;
+    VerticalBar,  // |
+    Backtick,     // `
 
     // Special
-    Underscore,     // _ (placeholder/wildcard)
-    At,             // @ (attribute marker)
+    Underscore, // _ (placeholder/wildcard)
+    At,         // @ (attribute marker)
 
     // Comments (lexed but typically filtered during parsing)
     Comment(String),

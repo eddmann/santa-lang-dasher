@@ -8,16 +8,16 @@
 //! 5. Link with runtime library
 //! 6. Produce executable
 
+use inkwell::context::Context;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use inkwell::context::Context;
 
-use crate::lexer::lex;
-use crate::parser::Parser;
-use crate::parser::ast::{Program, Stmt, Expr};
-use crate::types::{TypedExpr, TypedProgram, Type, TypeInference};
-use crate::lexer::token::{Span, Position};
 use super::context::CodegenContext;
+use crate::lexer::lex;
+use crate::lexer::token::{Position, Span};
+use crate::parser::ast::{Expr, Program, Stmt};
+use crate::parser::Parser;
+use crate::types::{Type, TypeInference, TypedExpr, TypedProgram};
 
 /// Errors that can occur during compilation
 #[derive(Debug)]
@@ -62,9 +62,10 @@ impl Compiler {
             if path.exists() {
                 return Ok(path.clone());
             }
-            return Err(CompileError::LinkError(
-                format!("Runtime library not found at: {:?}", path)
-            ));
+            return Err(CompileError::LinkError(format!(
+                "Runtime library not found at: {:?}",
+                path
+            )));
         }
 
         // Try to find the project root from CARGO_MANIFEST_DIR
@@ -115,7 +116,10 @@ impl Compiler {
             .unwrap_or(0);
         let thread_id = std::thread::current().id();
         let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let obj_path = temp_dir.join(format!("santa_program_{:?}_{}_{}.o", thread_id, unique_id, counter));
+        let obj_path = temp_dir.join(format!(
+            "santa_program_{:?}_{}_{}.o",
+            thread_id, unique_id, counter
+        ));
 
         // Step 1: Compile to object file
         self.compile_to_object(source, &obj_path)?;
@@ -130,23 +134,20 @@ impl Compiler {
     }
 
     /// Compile source code to an object file
-    pub fn compile_to_object(
-        &self,
-        source: &str,
-        output_path: &Path,
-    ) -> Result<(), CompileError> {
+    pub fn compile_to_object(&self, source: &str, output_path: &Path) -> Result<(), CompileError> {
         // Step 1: Lex
-        let tokens = lex(source)
-            .map_err(|e| CompileError::LexError(format!("{:?}", e)))?;
+        let tokens = lex(source).map_err(|e| CompileError::LexError(format!("{:?}", e)))?;
 
         // Step 2: Parse
         let mut parser = Parser::new(tokens);
-        let program = parser.parse_program()
+        let program = parser
+            .parse_program()
             .map_err(|e| CompileError::ParseError(format!("{:?}", e)))?;
 
         // Step 3: Type inference
         let mut inference = TypeInference::new();
-        let typed_program = inference.infer_program(&program)
+        let typed_program = inference
+            .infer_program(&program)
             .map_err(|e| CompileError::CodegenError(format!("Type error: {}", e.message)))?;
 
         // Get the type environment for codegen to use
@@ -163,7 +164,8 @@ impl Compiler {
         self.generate_main_typed(&mut codegen, &typed_program, &program)?;
 
         // Step 5: Emit object file
-        codegen.write_object_file(output_path)
+        codegen
+            .write_object_file(output_path)
             .map_err(CompileError::CodegenError)?;
 
         Ok(())
@@ -195,12 +197,16 @@ impl Compiler {
             match stmt {
                 Stmt::Expr(expr) => {
                     let typed = self.type_expr(expr);
-                    last_value = Some(codegen.compile_expr(&typed)
-                        .map_err(|e| CompileError::CodegenError(format!("{:?}", e)))?);
+                    last_value = Some(
+                        codegen
+                            .compile_expr(&typed)
+                            .map_err(|e| CompileError::CodegenError(format!("{:?}", e)))?,
+                    );
                 }
                 Stmt::Let { .. } => {
                     // Use compile_stmt which properly handles self-referential functions
-                    codegen.compile_stmt(stmt)
+                    codegen
+                        .compile_stmt(stmt)
                         .map_err(|e| CompileError::CodegenError(format!("{:?}", e)))?;
                 }
                 _ => {
@@ -215,12 +221,10 @@ impl Compiler {
             Some(v) => {
                 // Unbox: (value >> 3) extracts the actual integer
                 let int_val = v.into_int_value();
-                codegen.builder.build_right_shift(
-                    int_val,
-                    i64_type.const_int(3, false),
-                    false,
-                    "unbox_return"
-                ).unwrap()
+                codegen
+                    .builder
+                    .build_right_shift(int_val, i64_type.const_int(3, false), false, "unbox_return")
+                    .unwrap()
             }
             None => i64_type.const_int(0, false),
         };
@@ -264,13 +268,17 @@ impl Compiler {
                         ty: typed_stmt.ty.clone(),
                         span: typed_stmt.span,
                     };
-                    last_value = Some(codegen.compile_expr(&typed_expr)
-                        .map_err(|e| CompileError::CodegenError(format!("{:?}", e)))?);
+                    last_value = Some(
+                        codegen
+                            .compile_expr(&typed_expr)
+                            .map_err(|e| CompileError::CodegenError(format!("{:?}", e)))?,
+                    );
                 }
                 Stmt::Let { .. } => {
                     // Use compile_stmt which properly handles self-referential functions
                     // Pass the original statement from program for compile_stmt
-                    codegen.compile_stmt(&program.statements[i])
+                    codegen
+                        .compile_stmt(&program.statements[i])
                         .map_err(|e| CompileError::CodegenError(format!("{:?}", e)))?;
                 }
                 _ => {
@@ -285,12 +293,10 @@ impl Compiler {
             Some(v) => {
                 // Unbox: (value >> 3) extracts the actual integer
                 let int_val = v.into_int_value();
-                codegen.builder.build_right_shift(
-                    int_val,
-                    i64_type.const_int(3, false),
-                    false,
-                    "unbox_return"
-                ).unwrap()
+                codegen
+                    .builder
+                    .build_right_shift(int_val, i64_type.const_int(3, false), false, "unbox_return")
+                    .unwrap()
             }
             None => i64_type.const_int(0, false),
         };
@@ -353,14 +359,23 @@ impl Compiler {
             .arg("-lSystem")
             .arg("-lc")
             .arg("-lm")
+            // Link frameworks required by native-tls on macOS
+            .arg("-framework")
+            .arg("Security")
+            .arg("-framework")
+            .arg("CoreFoundation")
             // Suppress duplicate library warnings (clang adds -lSystem automatically)
             .arg("-Wl,-no_warn_duplicate_libraries")
+            // Strip debug symbols and dead code
+            .arg("-Wl,-dead_strip")
+            .arg("-Wl,-x")
             .status()?;
 
         if !status.success() {
-            return Err(CompileError::LinkError(
-                format!("Linker failed with exit code: {:?}", status.code())
-            ));
+            return Err(CompileError::LinkError(format!(
+                "Linker failed with exit code: {:?}",
+                status.code()
+            )));
         }
 
         Ok(())
@@ -390,7 +405,10 @@ mod tests {
             .unwrap_or(0);
         let thread_id = std::thread::current().id();
         let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
-        temp_dir.join(format!("{}_{:?}_{}_{}_.{}", base, thread_id, unique_id, counter, ext))
+        temp_dir.join(format!(
+            "{}_{:?}_{}_{}_.{}",
+            base, thread_id, unique_id, counter, ext
+        ))
     }
 
     #[test]
@@ -456,7 +474,11 @@ mod tests {
             .expect("Failed to execute compiled program");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("42"), "Output should contain '42', got: {}", stdout);
+        assert!(
+            stdout.contains("42"),
+            "Output should contain '42', got: {}",
+            stdout
+        );
 
         // Clean up
         std::fs::remove_file(&exe_path).ok();
@@ -468,8 +490,13 @@ mod tests {
         let exe_path = unique_path("test_time_nanos_exec", "exe");
 
         // Compile __time_nanos() call and print it
-        let result = compiler.compile_to_executable("let t = __time_nanos()\nputs(t)\n0", &exe_path);
-        assert!(result.is_ok(), "Failed to compile __time_nanos: {:?}", result.err());
+        let result =
+            compiler.compile_to_executable("let t = __time_nanos()\nputs(t)\n0", &exe_path);
+        assert!(
+            result.is_ok(),
+            "Failed to compile __time_nanos: {:?}",
+            result.err()
+        );
 
         // Execute and capture stdout
         let output = Command::new(&exe_path)
@@ -481,7 +508,11 @@ mod tests {
         let nanos: i64 = nanos_str.parse().expect("Should output a number");
         // Elapsed time since program start should be small and non-negative
         assert!(nanos >= 0, "Time should be non-negative, got: {}", nanos);
-        assert!(nanos < 1_000_000_000, "Time should be less than 1 second, got: {}", nanos);
+        assert!(
+            nanos < 1_000_000_000,
+            "Time should be less than 1 second, got: {}",
+            nanos
+        );
 
         // Clean up
         std::fs::remove_file(&exe_path).ok();
@@ -499,7 +530,11 @@ mod tests {
             0
         "#;
         let result = compiler.compile_to_executable(source, &exe_path);
-        assert!(result.is_ok(), "Failed to compile match: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to compile match: {:?}",
+            result.err()
+        );
 
         // Execute and capture stdout
         let output = Command::new(&exe_path)
@@ -507,7 +542,11 @@ mod tests {
             .expect("Failed to execute compiled program");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("200"), "Output should contain '200', got: {}", stdout);
+        assert!(
+            stdout.contains("200"),
+            "Output should contain '200', got: {}",
+            stdout
+        );
 
         // Clean up
         std::fs::remove_file(&exe_path).ok();
@@ -525,7 +564,11 @@ mod tests {
             0
         "#;
         let result = compiler.compile_to_executable(source, &exe_path);
-        assert!(result.is_ok(), "Failed to compile update: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to compile update: {:?}",
+            result.err()
+        );
 
         // Execute and capture stdout
         let output = Command::new(&exe_path)
@@ -533,7 +576,11 @@ mod tests {
             .expect("Failed to execute compiled program");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("2"), "Output should contain '2', got: {}", stdout);
+        assert!(
+            stdout.contains("2"),
+            "Output should contain '2', got: {}",
+            stdout
+        );
 
         // Clean up
         std::fs::remove_file(&exe_path).ok();
@@ -552,7 +599,11 @@ mod tests {
             0
         "#;
         let result = compiler.compile_to_executable(source, &exe_path);
-        assert!(result.is_ok(), "Failed to compile update_d: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to compile update_d: {:?}",
+            result.err()
+        );
 
         // Execute and capture stdout
         let output = Command::new(&exe_path)
@@ -560,7 +611,11 @@ mod tests {
             .expect("Failed to execute compiled program");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("6"), "Output should contain '6', got: {}", stdout);
+        assert!(
+            stdout.contains("6"),
+            "Output should contain '6', got: {}",
+            stdout
+        );
 
         // Clean up
         std::fs::remove_file(&exe_path).ok();

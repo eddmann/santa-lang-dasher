@@ -1,8 +1,8 @@
 use crate::lexer::lex;
-use crate::parser::{parse, Parser};
 use crate::parser::ast::{Expr, Pattern};
-use crate::types::ty::{Type, TypedProgram};
+use crate::parser::{parse, Parser};
 use crate::types::infer::TypeInference;
+use crate::types::ty::{Type, TypedProgram};
 
 fn infer_type(source: &str) -> Type {
     let tokens = lex(source).unwrap();
@@ -194,10 +194,7 @@ fn infer_empty_set() {
 fn infer_dict_literal() {
     // #{1: "a", 2: "b"} → Dict<Int, String>
     let ty = infer_type("#{1: \"a\", 2: \"b\"}");
-    assert_eq!(
-        ty,
-        Type::Dict(Box::new(Type::Int), Box::new(Type::String))
-    );
+    assert_eq!(ty, Type::Dict(Box::new(Type::Int), Box::new(Type::String)));
 }
 
 #[test]
@@ -263,7 +260,6 @@ fn infer_block_single_expr() {
     let ty = infer_type("{ 42 }");
     assert_eq!(ty, Type::Int);
 }
-
 
 #[test]
 fn infer_block_multiple_exprs() {
@@ -462,15 +458,21 @@ fn infer_program_simple_statements() {
 #[test]
 fn infer_program_multiple_statements() {
     // Multiple statements, each gets a type
-    let program = infer_program(r#"
+    let program = infer_program(
+        r#"
 let x = 1
 let y = "hello"
 x + 2
-"#);
+"#,
+    );
     // 3 statements: let x, let y, expression x + 2
     assert_eq!(program.statements.len(), 3);
     // With proper let binding tracking, x should be Int, so x + 2 should be Int
-    assert_eq!(program.statements[2].ty, Type::Int, "x + 2 should be Int since x is bound to Int");
+    assert_eq!(
+        program.statements[2].ty,
+        Type::Int,
+        "x + 2 should be Int since x is bound to Int"
+    );
 }
 
 #[test]
@@ -523,7 +525,11 @@ fn infer_user_defined_function_call_int() {
     let program = infer_program("let add = |a, b| a + b\nadd(1, 2)");
     assert_eq!(program.statements.len(), 2);
     // The call add(1, 2) should return Int
-    assert_eq!(program.statements[1].ty, Type::Int, "add(1, 2) should be Int");
+    assert_eq!(
+        program.statements[1].ty,
+        Type::Int,
+        "add(1, 2) should be Int"
+    );
 }
 
 #[test]
@@ -532,7 +538,11 @@ fn infer_user_defined_function_call_string() {
     // greet("World")  → should infer as String
     let program = infer_program("let greet = |name| \"Hello, \" + name\ngreet(\"World\")");
     assert_eq!(program.statements.len(), 2);
-    assert_eq!(program.statements[1].ty, Type::String, "greet(\"World\") should be String");
+    assert_eq!(
+        program.statements[1].ty,
+        Type::String,
+        "greet(\"World\") should be String"
+    );
 }
 
 #[test]
@@ -541,7 +551,11 @@ fn infer_user_defined_function_call_with_comparison() {
     // is_positive(5)  → should infer as Bool
     let program = infer_program("let is_positive = |x| x > 0\nis_positive(5)");
     assert_eq!(program.statements.len(), 2);
-    assert_eq!(program.statements[1].ty, Type::Bool, "is_positive(5) should be Bool");
+    assert_eq!(
+        program.statements[1].ty,
+        Type::Bool,
+        "is_positive(5) should be Bool"
+    );
 }
 
 #[test]
@@ -549,7 +563,8 @@ fn infer_user_defined_function_nested_call() {
     // let double = |x| x * 2
     // let quad = |x| double(double(x))
     // quad(3)  → should infer as Int
-    let program = infer_program("let double = |x| x * 2\nlet quad = |x| double(double(x))\nquad(3)");
+    let program =
+        infer_program("let double = |x| x * 2\nlet quad = |x| double(double(x))\nquad(3)");
     assert_eq!(program.statements.len(), 3);
     assert_eq!(program.statements[2].ty, Type::Int, "quad(3) should be Int");
 }
@@ -560,7 +575,11 @@ fn infer_user_defined_function_used_in_map() {
     // map(double, [1, 2, 3])  → should infer as List<Int>
     let program = infer_program("let double = |x| x * 2\nmap(double, [1, 2, 3])");
     assert_eq!(program.statements.len(), 2);
-    assert_eq!(program.statements[1].ty, Type::List(Box::new(Type::Int)), "map(double, [1,2,3]) should be List<Int>");
+    assert_eq!(
+        program.statements[1].ty,
+        Type::List(Box::new(Type::Int)),
+        "map(double, [1,2,3]) should be List<Int>"
+    );
 }
 
 // ===== Match Expression Type Inference Tests =====
@@ -664,9 +683,11 @@ fn infer_if_let_list_destructure() {
 #[test]
 fn infer_program_with_input_section() {
     // Program with input section
-    let program = infer_program(r#"
+    let program = infer_program(
+        r#"
 input: "test data"
-"#);
+"#,
+    );
     assert_eq!(program.sections.len(), 1);
     assert_eq!(program.sections[0].ty, Type::String);
 }
@@ -674,10 +695,12 @@ input: "test data"
 #[test]
 fn infer_program_with_part_one() {
     // Program with part_one section
-    let program = infer_program(r#"
+    let program = infer_program(
+        r#"
 input: 42
 part_one: input * 2
-"#);
+"#,
+    );
     assert_eq!(program.sections.len(), 2);
     // input: 42 → Int
     assert_eq!(program.sections[0].ty, Type::Int);
@@ -725,8 +748,16 @@ fn infer_lambda_param_from_map_unknown_without_context() {
     let ty = infer_type("|x| x * 2");
     match ty {
         Type::Function { params, ret } => {
-            assert_eq!(params[0], Type::Unknown, "Without context, param should be Unknown");
-            assert_eq!(*ret, Type::Unknown, "Without context, Unknown * Int = Unknown");
+            assert_eq!(
+                params[0],
+                Type::Unknown,
+                "Without context, param should be Unknown"
+            );
+            assert_eq!(
+                *ret,
+                Type::Unknown,
+                "Without context, Unknown * Int = Unknown"
+            );
         }
         _ => panic!("Expected Function type"),
     }

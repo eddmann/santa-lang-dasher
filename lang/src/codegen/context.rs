@@ -1,15 +1,15 @@
+use crate::types::Type;
+use inkwell::basic_block::BasicBlock;
+use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::builder::Builder;
-use inkwell::basic_block::BasicBlock;
-use inkwell::values::PointerValue;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
+use inkwell::values::PointerValue;
 use inkwell::OptimizationLevel;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use crate::types::Type;
 
 /// Tracks state for tail-call optimization within a function
 #[derive(Clone)]
@@ -49,7 +49,11 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Create a new codegen context with a specific optimization level
-    pub fn with_optimization(context: &'ctx Context, module_name: &str, opt_level: OptimizationLevel) -> Self {
+    pub fn with_optimization(
+        context: &'ctx Context,
+        module_name: &str,
+        opt_level: OptimizationLevel,
+    ) -> Self {
         let module = context.create_module(module_name);
         let builder = context.create_builder();
 
@@ -77,13 +81,18 @@ impl<'ctx> CodegenContext<'ctx> {
     /// (outside of a block) to properly handle patterns like:
     ///   let fib = memoize |n| { fib(n-1) + fib(n-2) }
     pub fn pre_analyze_statements(&mut self, stmts: &[crate::parser::ast::Stmt]) {
-        use crate::parser::ast::{Stmt, Pattern};
+        use crate::parser::ast::{Pattern, Stmt};
         use std::collections::HashSet;
 
         // Collect all mutable variables
         let mut mutable_vars: HashSet<String> = HashSet::new();
         for stmt in stmts {
-            if let Stmt::Let { mutable: true, pattern: Pattern::Identifier(name), .. } = stmt {
+            if let Stmt::Let {
+                mutable: true,
+                pattern: Pattern::Identifier(name),
+                ..
+            } = stmt
+            {
                 mutable_vars.insert(name.clone());
             }
         }
@@ -93,11 +102,13 @@ impl<'ctx> CodegenContext<'ctx> {
         for stmt in stmts {
             match stmt {
                 Stmt::Let { value, .. } => {
-                    let captures = self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
+                    let captures =
+                        self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
                     self.cell_variables.extend(captures);
                 }
                 Stmt::Expr(expr) | Stmt::Return(expr) | Stmt::Break(expr) => {
-                    let captures = self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
+                    let captures =
+                        self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
                     self.cell_variables.extend(captures);
                 }
             }
@@ -147,9 +158,9 @@ impl<'ctx> CodegenContext<'ctx> {
         let target_machine = target
             .create_target_machine(
                 &triple,
-                "generic",  // CPU
-                "",         // Features
-                self.opt_level,  // Use configured optimization level
+                "generic",      // CPU
+                "",             // Features
+                self.opt_level, // Use configured optimization level
                 RelocMode::Default,
                 CodeModel::Default,
             )
@@ -175,7 +186,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 &triple,
                 "generic",
                 "",
-                self.opt_level,  // Use configured optimization level
+                self.opt_level, // Use configured optimization level
                 RelocMode::Default,
                 CodeModel::Default,
             )

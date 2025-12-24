@@ -1,7 +1,7 @@
-use inkwell::context::Context;
+use crate::lexer::token::{Position, Span};
 use crate::parser::ast::{Expr, InfixOp};
-use crate::lexer::token::{Span, Position};
-use crate::types::{TypedExpr, Type};
+use crate::types::{Type, TypedExpr};
+use inkwell::context::Context;
 
 #[test]
 fn codegen_context_creation() {
@@ -77,9 +77,9 @@ fn codegen_decimal_literal() {
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
 
-    // Create typed expression for decimal literal 3.14
+    // Create typed expression for decimal literal 2.71
     let expr = TypedExpr {
-        expr: Expr::Decimal(3.14),
+        expr: Expr::Decimal(2.71),
         ty: Type::Decimal,
         span: Span::new(Position::new(1, 1), Position::new(1, 4)),
     };
@@ -220,11 +220,7 @@ fn codegen_list_literal_with_integers() {
 
     // Create typed expression for: [1, 2, 3]
     let expr = TypedExpr {
-        expr: Expr::List(vec![
-            Expr::Integer(1),
-            Expr::Integer(2),
-            Expr::Integer(3),
-        ]),
+        expr: Expr::List(vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)]),
         ty: Type::List(Box::new(Type::Int)),
         span: Span::new(Position::new(1, 1), Position::new(1, 9)),
     };
@@ -262,11 +258,7 @@ fn codegen_set_literal_with_integers() {
 
     // Create typed expression for: #{1, 2, 3}
     let expr = TypedExpr {
-        expr: Expr::Set(vec![
-            Expr::Integer(1),
-            Expr::Integer(2),
-            Expr::Integer(3),
-        ]),
+        expr: Expr::Set(vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)]),
         ty: Type::Set(Box::new(Type::Int)),
         span: Span::new(Position::new(1, 1), Position::new(1, 11)),
     };
@@ -326,13 +318,13 @@ fn codegen_unknown_type_runtime_fallback() {
     // should trigger runtime fallback (call to rt_add)
     let left = TypedExpr {
         expr: Expr::Integer(10),
-        ty: Type::Unknown,  // Force Unknown type to test runtime fallback
+        ty: Type::Unknown, // Force Unknown type to test runtime fallback
         span: Span::new(Position::new(1, 1), Position::new(1, 2)),
     };
 
     let right = TypedExpr {
         expr: Expr::Integer(20),
-        ty: Type::Unknown,  // Force Unknown type to test runtime fallback
+        ty: Type::Unknown, // Force Unknown type to test runtime fallback
         span: Span::new(Position::new(1, 5), Position::new(1, 6)),
     };
 
@@ -428,7 +420,7 @@ fn codegen_prefix_not_bool() {
     // Compile the expression
     let result = codegen.compile_expr(&expr);
     assert!(result.is_ok());
-    assert!(result.unwrap().is_int_value());  // Booleans are stored as i64
+    assert!(result.unwrap().is_int_value()); // Booleans are stored as i64
 }
 
 #[test]
@@ -451,7 +443,7 @@ fn codegen_range_inclusive() {
     // Compile the expression
     let result = codegen.compile_expr(&expr);
     assert!(result.is_ok());
-    assert!(result.unwrap().is_int_value());  // Range objects are heap-allocated
+    assert!(result.unwrap().is_int_value()); // Range objects are heap-allocated
 }
 
 #[test]
@@ -507,11 +499,7 @@ fn codegen_index_list() {
     codegen.create_test_function();
 
     // Create typed expression for: [1, 2, 3][1]
-    let list_expr = Expr::List(vec![
-        Expr::Integer(1),
-        Expr::Integer(2),
-        Expr::Integer(3),
-    ]);
+    let list_expr = Expr::List(vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)]);
 
     let expr = TypedExpr {
         expr: Expr::Index {
@@ -532,7 +520,7 @@ fn codegen_index_list() {
 
 #[test]
 fn codegen_let_binding_simple() {
-    use crate::parser::ast::{Stmt, Pattern};
+    use crate::parser::ast::{Pattern, Stmt};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
@@ -555,7 +543,7 @@ fn codegen_let_binding_simple() {
 
 #[test]
 fn codegen_variable_lookup() {
-    use crate::parser::ast::{Stmt, Pattern};
+    use crate::parser::ast::{Pattern, Stmt};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
@@ -609,7 +597,7 @@ fn codegen_if_expression() {
 
 #[test]
 fn codegen_block_expression() {
-    use crate::parser::ast::{Stmt, Pattern};
+    use crate::parser::ast::{Pattern, Stmt};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
@@ -673,7 +661,11 @@ fn codegen_simple_function_expression() {
 
     // Compile the expression - should produce a closure value
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile function expression: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile function expression: {:?}",
+        result.err()
+    );
     // The result should be a heap object (closure)
     assert!(result.unwrap().is_int_value());
 }
@@ -705,7 +697,11 @@ fn codegen_function_call() {
 
     // Compile the expression
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile function call: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile function call: {:?}",
+        result.err()
+    );
     assert!(result.unwrap().is_int_value());
 }
 
@@ -739,7 +735,11 @@ fn codegen_function_with_multiple_params() {
 
     // Compile the expression
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile multi-param function: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile multi-param function: {:?}",
+        result.err()
+    );
     assert!(result.unwrap().is_int_value());
 }
 
@@ -764,7 +764,11 @@ fn codegen_zero_arg_function() {
 
     // Compile the expression
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile zero-arg function: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile zero-arg function: {:?}",
+        result.err()
+    );
     assert!(result.unwrap().is_int_value());
 }
 
@@ -789,13 +793,17 @@ fn codegen_zero_arg_function_call() {
 
     // Compile the expression
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile zero-arg function call: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile zero-arg function call: {:?}",
+        result.err()
+    );
     assert!(result.unwrap().is_int_value());
 }
 
 #[test]
 fn codegen_closure_captures_variable() {
-    use crate::parser::ast::{Param, Stmt, Pattern};
+    use crate::parser::ast::{Param, Pattern, Stmt};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
@@ -828,7 +836,11 @@ fn codegen_closure_captures_variable() {
 
     // Compile the closure
     let result = codegen.compile_expr(&closure_expr);
-    assert!(result.is_ok(), "Failed to compile closure with capture: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile closure with capture: {:?}",
+        result.err()
+    );
     assert!(result.unwrap().is_int_value());
 }
 
@@ -866,7 +878,11 @@ fn codegen_make_adder_pattern() {
 
     // Compile the function
     let result = codegen.compile_expr(&make_adder_expr);
-    assert!(result.is_ok(), "Failed to compile make_adder pattern: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile make_adder pattern: {:?}",
+        result.err()
+    );
     assert!(result.unwrap().is_int_value());
 }
 
@@ -874,7 +890,7 @@ fn codegen_make_adder_pattern() {
 
 #[test]
 fn codegen_tco_simple_recursion() {
-    use crate::parser::ast::{Param, Stmt, Pattern};
+    use crate::parser::ast::{Param, Pattern, Stmt};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
@@ -913,12 +929,16 @@ fn codegen_tco_simple_recursion() {
 
     // This should compile successfully
     let result = codegen.compile_stmt(&let_stmt);
-    assert!(result.is_ok(), "Failed to compile tail-recursive function: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile tail-recursive function: {:?}",
+        result.err()
+    );
 }
 
 #[test]
 fn codegen_tco_factorial_accumulator() {
-    use crate::parser::ast::{Param, Stmt, Pattern};
+    use crate::parser::ast::{Param, Pattern, Stmt};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
@@ -966,12 +986,16 @@ fn codegen_tco_factorial_accumulator() {
 
     // This should compile successfully
     let result = codegen.compile_stmt(&let_stmt);
-    assert!(result.is_ok(), "Failed to compile tail-recursive factorial: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile tail-recursive factorial: {:?}",
+        result.err()
+    );
 }
 
 #[test]
 fn codegen_tco_generates_branch_not_call() {
-    use crate::parser::ast::{Param, Stmt, Pattern};
+    use crate::parser::ast::{Param, Pattern, Stmt};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
@@ -1013,16 +1037,22 @@ fn codegen_tco_generates_branch_not_call() {
     // (There may be other rt_call invocations for helper functions)
 
     // Check that there's a closure function with a body block
-    assert!(ir.contains("define i64 @closure_"), "Should define a closure function");
+    assert!(
+        ir.contains("define i64 @closure_"),
+        "Should define a closure function"
+    );
 
     // Check that there's a branch back to body (the TCO jump)
     // The pattern should show "br label %body" inside the else branch
-    assert!(ir.contains("br label %body"), "TCO should generate a branch back to body block");
+    assert!(
+        ir.contains("br label %body"),
+        "TCO should generate a branch back to body block"
+    );
 }
 
 #[test]
 fn codegen_tco_non_tail_position_uses_call() {
-    use crate::parser::ast::{Param, Stmt, Pattern};
+    use crate::parser::ast::{Param, Pattern, Stmt};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
@@ -1066,12 +1096,15 @@ fn codegen_tco_non_tail_position_uses_call() {
 
     // This NON-tail-recursive version should use rt_call for the recursive call
     // because n * factorial(...) is not in tail position
-    assert!(ir.contains("call i64 @rt_call"), "Non-tail recursion should use rt_call");
+    assert!(
+        ir.contains("call i64 @rt_call"),
+        "Non-tail recursion should use rt_call"
+    );
 }
 
 #[test]
 fn codegen_tco_match_expression() {
-    use crate::parser::ast::{Param, Stmt, Pattern, MatchArm, Literal};
+    use crate::parser::ast::{Literal, MatchArm, Param, Pattern, Stmt};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
@@ -1116,18 +1149,24 @@ fn codegen_tco_match_expression() {
     let ir = codegen.module.print_to_string().to_string();
 
     // Check that there's a closure function with a body block
-    assert!(ir.contains("define i64 @closure_"), "Should define a closure function");
+    assert!(
+        ir.contains("define i64 @closure_"),
+        "Should define a closure function"
+    );
 
     // Check that there's a branch back to body (the TCO jump)
     // This shows that match expressions properly propagate tail position
-    assert!(ir.contains("br label %body"), "TCO in match should generate a branch back to body block");
+    assert!(
+        ir.contains("br label %body"),
+        "TCO in match should generate a branch back to body block"
+    );
 }
 
 // ===== Phase 16: Pattern Matching Tests =====
 
 #[test]
 fn codegen_match_literal_integer() {
-    use crate::parser::ast::{MatchArm, Pattern, Literal};
+    use crate::parser::ast::{Literal, MatchArm, Pattern};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
@@ -1161,7 +1200,11 @@ fn codegen_match_literal_integer() {
 
     // Compile the match expression
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile match expression: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile match expression: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -1176,20 +1219,22 @@ fn codegen_match_wildcard_captures_all() {
     let expr = TypedExpr {
         expr: Expr::Match {
             subject: Box::new(Expr::Integer(42)),
-            arms: vec![
-                MatchArm {
-                    pattern: Pattern::Wildcard,
-                    guard: None,
-                    body: Expr::Integer(100),
-                },
-            ],
+            arms: vec![MatchArm {
+                pattern: Pattern::Wildcard,
+                guard: None,
+                body: Expr::Integer(100),
+            }],
         },
         ty: Type::Int,
         span: Span::new(Position::new(1, 1), Position::new(1, 20)),
     };
 
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile wildcard match: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile wildcard match: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -1205,24 +1250,26 @@ fn codegen_match_identifier_binds_value() {
     let expr = TypedExpr {
         expr: Expr::Match {
             subject: Box::new(Expr::Integer(42)),
-            arms: vec![
-                MatchArm {
-                    pattern: Pattern::Identifier("x".to_string()),
-                    guard: None,
-                    body: Expr::Infix {
-                        left: Box::new(Expr::Identifier("x".to_string())),
-                        op: InfixOp::Add,
-                        right: Box::new(Expr::Integer(1)),
-                    },
+            arms: vec![MatchArm {
+                pattern: Pattern::Identifier("x".to_string()),
+                guard: None,
+                body: Expr::Infix {
+                    left: Box::new(Expr::Identifier("x".to_string())),
+                    op: InfixOp::Add,
+                    right: Box::new(Expr::Integer(1)),
                 },
-            ],
+            }],
         },
         ty: Type::Int,
         span: Span::new(Position::new(1, 1), Position::new(1, 25)),
     };
 
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile identifier binding match: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile identifier binding match: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -1259,7 +1306,11 @@ fn codegen_match_with_guard() {
     };
 
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile match with guard: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile match with guard: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -1305,7 +1356,11 @@ fn codegen_match_range_pattern() {
     };
 
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile match with range patterns: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile match with range patterns: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -1342,7 +1397,11 @@ fn codegen_match_unbounded_range() {
     };
 
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile match with unbounded range: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile match with unbounded range: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -1375,7 +1434,11 @@ fn codegen_match_empty_list_pattern() {
     };
 
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile match with empty list pattern: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile match with empty list pattern: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -1415,7 +1478,11 @@ fn codegen_match_list_with_elements() {
     };
 
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile match with list element pattern: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile match with list element pattern: {:?}",
+        result.err()
+    );
 }
 
 // ===== Nested Pattern Tests =====
@@ -1468,12 +1535,16 @@ fn codegen_match_nested_list_pattern() {
     };
 
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile match with nested list pattern: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile match with nested list pattern: {:?}",
+        result.err()
+    );
 }
 
 #[test]
 fn codegen_match_nested_list_with_literal() {
-    use crate::parser::ast::{MatchArm, Pattern, Literal};
+    use crate::parser::ast::{Literal, MatchArm, Pattern};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
@@ -1515,7 +1586,11 @@ fn codegen_match_nested_list_with_literal() {
     };
 
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile match with nested list pattern containing literal: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile match with nested list pattern containing literal: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -1558,7 +1633,11 @@ fn codegen_match_list_with_rest_at_beginning() {
     };
 
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile match with rest pattern at beginning: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile match with rest pattern at beginning: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -1607,7 +1686,11 @@ fn codegen_match_list_with_rest_in_middle() {
     };
 
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Failed to compile match with rest pattern in middle: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to compile match with rest pattern in middle: {:?}",
+        result.err()
+    );
 }
 
 // ===== Object File Emission Tests =====
@@ -1625,14 +1708,21 @@ fn codegen_emit_object_file() {
     let main_fn = codegen.module.add_function("main", fn_type, None);
     let entry = context.append_basic_block(main_fn, "entry");
     codegen.builder.position_at_end(entry);
-    codegen.builder.build_return(Some(&i64_type.const_int(42, false))).unwrap();
+    codegen
+        .builder
+        .build_return(Some(&i64_type.const_int(42, false)))
+        .unwrap();
 
     // Write to temp object file
     let temp_dir = std::env::temp_dir();
     let obj_path = temp_dir.join("test_emit.o");
 
     let result = codegen.write_object_file(&obj_path);
-    assert!(result.is_ok(), "Failed to emit object file: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to emit object file: {:?}",
+        result.err()
+    );
 
     // Verify the file exists and has content
     assert!(obj_path.exists(), "Object file was not created");
@@ -1654,13 +1744,19 @@ fn codegen_get_ir() {
     let main_fn = codegen.module.add_function("my_func", fn_type, None);
     let entry = context.append_basic_block(main_fn, "entry");
     codegen.builder.position_at_end(entry);
-    codegen.builder.build_return(Some(&i64_type.const_int(42, false))).unwrap();
+    codegen
+        .builder
+        .build_return(Some(&i64_type.const_int(42, false)))
+        .unwrap();
 
     let ir = codegen.get_ir();
 
     // Verify IR contains expected elements
     assert!(ir.contains("my_func"), "IR should contain function name");
-    assert!(ir.contains("ret i64 42"), "IR should contain return statement");
+    assert!(
+        ir.contains("ret i64 42"),
+        "IR should contain return statement"
+    );
 }
 
 // ===== Phase 7: Builtin Name Shadowing =====
@@ -1670,7 +1766,7 @@ fn codegen_get_ir() {
 
 #[test]
 fn codegen_builtin_name_shadowing_sum_succeeds() {
-    use crate::parser::ast::{Stmt, Pattern};
+    use crate::parser::ast::{Pattern, Stmt};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
@@ -1684,12 +1780,15 @@ fn codegen_builtin_name_shadowing_sum_succeeds() {
     };
 
     let result = codegen.compile_stmt(&let_stmt);
-    assert!(result.is_ok(), "Binding to builtin name 'sum' should succeed");
+    assert!(
+        result.is_ok(),
+        "Binding to builtin name 'sum' should succeed"
+    );
 }
 
 #[test]
 fn codegen_builtin_name_shadowing_map_succeeds() {
-    use crate::parser::ast::{Stmt, Pattern};
+    use crate::parser::ast::{Pattern, Stmt};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
@@ -1703,12 +1802,15 @@ fn codegen_builtin_name_shadowing_map_succeeds() {
     };
 
     let result = codegen.compile_stmt(&let_stmt);
-    assert!(result.is_ok(), "Binding to builtin name 'map' should succeed");
+    assert!(
+        result.is_ok(),
+        "Binding to builtin name 'map' should succeed"
+    );
 }
 
 #[test]
 fn codegen_non_protected_name_succeeds() {
-    use crate::parser::ast::{Stmt, Pattern};
+    use crate::parser::ast::{Pattern, Stmt};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
@@ -1722,14 +1824,18 @@ fn codegen_non_protected_name_succeeds() {
     };
 
     let result = codegen.compile_stmt(&let_stmt);
-    assert!(result.is_ok(), "Should succeed for non-protected name 'my_sum': {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Should succeed for non-protected name 'my_sum': {:?}",
+        result.err()
+    );
 }
 
 // ===== Phase 6: Pipeline Operator =====
 
 #[test]
 fn codegen_pipeline_operator() {
-    use crate::parser::ast::{Param, Stmt, Pattern};
+    use crate::parser::ast::{Param, Pattern, Stmt};
 
     // Test: 42 |> my_func
     // Pipeline operator: x |> f  is equivalent to f(x)
@@ -1763,11 +1869,18 @@ fn codegen_pipeline_operator() {
 
     // This should compile successfully
     let result = codegen.compile_expr(&expr);
-    assert!(result.is_ok(), "Pipeline operator should compile: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Pipeline operator should compile: {:?}",
+        result.err()
+    );
 
     // Verify the generated IR contains a call
     let ir = codegen.module.print_to_string().to_string();
-    assert!(ir.contains("rt_call"), "Pipeline should generate a function call");
+    assert!(
+        ir.contains("rt_call"),
+        "Pipeline should generate a function call"
+    );
 }
 
 // ===== Phase 20: Optimization Level Tests =====
@@ -1790,11 +1903,19 @@ fn codegen_configurable_optimization_level() {
     let context = Context::create();
 
     // Test creating context with O3 (Most aggressive optimization)
-    let codegen = super::context::CodegenContext::with_optimization(&context, "test_module", OptimizationLevel::Aggressive);
+    let codegen = super::context::CodegenContext::with_optimization(
+        &context,
+        "test_module",
+        OptimizationLevel::Aggressive,
+    );
     assert_eq!(codegen.optimization_level(), OptimizationLevel::Aggressive);
 
     // Test creating context with O0 (No optimization - for debugging)
-    let codegen_debug = super::context::CodegenContext::with_optimization(&context, "test_debug", OptimizationLevel::None);
+    let codegen_debug = super::context::CodegenContext::with_optimization(
+        &context,
+        "test_debug",
+        OptimizationLevel::None,
+    );
     assert_eq!(codegen_debug.optimization_level(), OptimizationLevel::None);
 }
 
@@ -1804,7 +1925,11 @@ fn codegen_object_file_uses_optimization_level() {
     use std::fs;
 
     let context = Context::create();
-    let codegen = super::context::CodegenContext::with_optimization(&context, "opt_test", OptimizationLevel::Aggressive);
+    let codegen = super::context::CodegenContext::with_optimization(
+        &context,
+        "opt_test",
+        OptimizationLevel::Aggressive,
+    );
 
     // Create a simple main function
     let i64_type = context.i64_type();
@@ -1812,14 +1937,21 @@ fn codegen_object_file_uses_optimization_level() {
     let main_fn = codegen.module.add_function("main", fn_type, None);
     let entry = context.append_basic_block(main_fn, "entry");
     codegen.builder.position_at_end(entry);
-    codegen.builder.build_return(Some(&i64_type.const_int(42, false))).unwrap();
+    codegen
+        .builder
+        .build_return(Some(&i64_type.const_int(42, false)))
+        .unwrap();
 
     // Write to temp object file - this should use O3 optimization
     let temp_dir = std::env::temp_dir();
     let obj_path = temp_dir.join("test_opt_level.o");
 
     let result = codegen.write_object_file(&obj_path);
-    assert!(result.is_ok(), "Should emit optimized object file: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Should emit optimized object file: {:?}",
+        result.err()
+    );
 
     // Verify the file exists
     assert!(obj_path.exists(), "Optimized object file was not created");

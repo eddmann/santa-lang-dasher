@@ -150,13 +150,17 @@ fn main() -> ExitCode {
 
                     // Check part_one
                     if let Some(passed) = result.part_one_passed {
-                        let actual = result.part_one_actual.as_ref()
+                        let actual = result
+                            .part_one_actual
+                            .as_ref()
                             .map(santa_lang::runtime::builtins::format_value)
                             .unwrap_or_else(|| "nil".to_string());
                         if passed {
                             println!("Part 1: {} \x1b[32m✔\x1b[0m", actual);
                         } else {
-                            let expected = result.part_one_expected.as_ref()
+                            let expected = result
+                                .part_one_expected
+                                .as_ref()
                                 .map(santa_lang::runtime::builtins::format_value)
                                 .unwrap_or_else(|| "nil".to_string());
                             println!(
@@ -169,13 +173,17 @@ fn main() -> ExitCode {
 
                     // Check part_two
                     if let Some(passed) = result.part_two_passed {
-                        let actual = result.part_two_actual.as_ref()
+                        let actual = result
+                            .part_two_actual
+                            .as_ref()
                             .map(santa_lang::runtime::builtins::format_value)
                             .unwrap_or_else(|| "nil".to_string());
                         if passed {
                             println!("Part 2: {} \x1b[32m✔\x1b[0m", actual);
                         } else {
-                            let expected = result.part_two_expected.as_ref()
+                            let expected = result
+                                .part_two_expected
+                                .as_ref()
                                 .map(santa_lang::runtime::builtins::format_value)
                                 .unwrap_or_else(|| "nil".to_string());
                             println!(
@@ -229,9 +237,7 @@ fn main() -> ExitCode {
             match runner.execute_solution(&program) {
                 Ok(result) => {
                     if let Some(ref part_one) = result.part_one {
-                        let time_ms = result.part_one_time
-                            .map(|d| d.as_millis())
-                            .unwrap_or(0);
+                        let time_ms = result.part_one_time.map(|d| d.as_millis()).unwrap_or(0);
                         println!(
                             "Part 1: \x1b[32m{}\x1b[0m \x1b[90m{}ms\x1b[0m",
                             santa_lang::runtime::builtins::format_value(part_one),
@@ -239,9 +245,7 @@ fn main() -> ExitCode {
                         );
                     }
                     if let Some(ref part_two) = result.part_two {
-                        let time_ms = result.part_two_time
-                            .map(|d| d.as_millis())
-                            .unwrap_or(0);
+                        let time_ms = result.part_two_time.map(|d| d.as_millis()).unwrap_or(0);
                         println!(
                             "Part 2: \x1b[32m{}\x1b[0m \x1b[90m{}ms\x1b[0m",
                             santa_lang::runtime::builtins::format_value(part_two),

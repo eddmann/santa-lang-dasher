@@ -1,5 +1,5 @@
-use std::sync::atomic::AtomicU32;
 use im;
+use std::sync::atomic::AtomicU32;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Type tag for heap-allocated objects
@@ -7,8 +7,8 @@ use unicode_segmentation::UnicodeSegmentation;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypeTag {
     String,
-    Decimal,       // Boxed decimal (for large values if needed)
-    BoxedInteger,  // For integers > 61 bits
+    Decimal,      // Boxed decimal (for large values if needed)
+    BoxedInteger, // For integers > 61 bits
     List,
     Set,
     Dict,
@@ -16,7 +16,7 @@ pub enum TypeTag {
     Closure,
     LazySequence,
     MutableCell,
-    MemoizedClosure,  // Closure with memoization cache
+    MemoizedClosure,    // Closure with memoization cache
     PartialApplication, // Closure with some args already applied
 }
 
@@ -39,7 +39,7 @@ impl Clone for ObjectHeader {
 impl ObjectHeader {
     pub fn new(type_tag: TypeTag) -> Self {
         ObjectHeader {
-            refcount: AtomicU32::new(1),  // Start with refcount of 1
+            refcount: AtomicU32::new(1), // Start with refcount of 1
             type_tag,
         }
     }
@@ -228,7 +228,9 @@ pub struct MemoizedClosureObject {
     pub arity: u32,
     /// Cache: arguments -> result
     /// We use RefCell for interior mutability since the cache updates on each call
-    pub cache: std::cell::RefCell<std::collections::HashMap<Vec<super::value::Value>, super::value::Value>>,
+    pub cache: std::cell::RefCell<
+        std::collections::HashMap<Vec<super::value::Value>, super::value::Value>,
+    >,
 }
 
 impl MemoizedClosureObject {
@@ -272,7 +274,11 @@ pub struct PartialApplicationObject {
 }
 
 impl PartialApplicationObject {
-    pub fn new(closure: super::value::Value, args: Vec<super::value::Value>, remaining_arity: u32) -> Box<Self> {
+    pub fn new(
+        closure: super::value::Value,
+        args: Vec<super::value::Value>,
+        remaining_arity: u32,
+    ) -> Box<Self> {
         Box::new(PartialApplicationObject {
             header: ObjectHeader::new(TypeTag::PartialApplication),
             closure,
@@ -289,9 +295,7 @@ impl PartialApplicationObject {
 #[derive(Clone)]
 pub enum LazySeqKind {
     /// repeat(value) - infinite repetition of a single value
-    Repeat {
-        value: super::value::Value,
-    },
+    Repeat { value: super::value::Value },
 
     /// cycle(collection) - infinite cycle through a collection
     Cycle {
@@ -301,7 +305,7 @@ pub enum LazySeqKind {
 
     /// iterate(generator, initial) - generated sequence
     Iterate {
-        generator: super::value::Value,  // Closure
+        generator: super::value::Value, // Closure
         current: super::value::Value,
     },
 
@@ -316,13 +320,13 @@ pub enum LazySeqKind {
     /// map(fn, lazy_seq) - lazy mapped sequence
     Map {
         source: Box<LazySequenceObject>,
-        mapper: super::value::Value,  // Closure
+        mapper: super::value::Value, // Closure
     },
 
     /// filter(fn, lazy_seq) - lazy filtered sequence
     Filter {
         source: Box<LazySequenceObject>,
-        predicate: super::value::Value,  // Closure
+        predicate: super::value::Value, // Closure
     },
 
     /// skip(n, lazy_seq) - skip first n elements
@@ -340,9 +344,7 @@ pub enum LazySeqKind {
     },
 
     /// zip(collections...) - zipped sequences
-    Zip {
-        sources: Vec<LazySequenceObject>,
-    },
+    Zip { sources: Vec<LazySequenceObject> },
 }
 
 /// Lazy sequence heap object (LANG.txt §11.12-11.13)
@@ -413,11 +415,20 @@ impl LazySequenceObject {
                 ))
             }
 
-            LazySeqKind::Range { current, end, inclusive, step } => {
+            LazySeqKind::Range {
+                current,
+                end,
+                inclusive,
+                step,
+            } => {
                 // Check if exhausted
                 if let Some(end_val) = end {
                     let at_end = if *inclusive {
-                        if *step > 0 { *current > *end_val } else { *current < *end_val }
+                        if *step > 0 {
+                            *current > *end_val
+                        } else {
+                            *current < *end_val
+                        }
                     } else if *step > 0 {
                         *current >= *end_val
                     } else {
@@ -458,10 +469,13 @@ impl LazySequenceObject {
                 if *remaining == 0 {
                     // No more skipping, delegate to source
                     source.next().map(|(val, new_source)| {
-                        (val, Self::new(LazySeqKind::Skip {
-                            source: new_source,
-                            remaining: 0,
-                        }))
+                        (
+                            val,
+                            Self::new(LazySeqKind::Skip {
+                                source: new_source,
+                                remaining: 0,
+                            }),
+                        )
                     })
                 } else {
                     // Skip this element, continue
@@ -469,21 +483,25 @@ impl LazySequenceObject {
                         Self::new(LazySeqKind::Skip {
                             source: new_source,
                             remaining: remaining - 1,
-                        }).next()
+                        })
+                        .next()
                     })
                 }
             }
 
-            LazySeqKind::Combinations { source, size, indices, done } => {
+            LazySeqKind::Combinations {
+                source,
+                size,
+                indices,
+                done,
+            } => {
                 if *done || source.is_empty() || *size == 0 || *size > source.len() {
                     return None;
                 }
 
                 // Get current combination
-                let combination: im::Vector<super::value::Value> = indices
-                    .iter()
-                    .map(|&i| source[i])
-                    .collect();
+                let combination: im::Vector<super::value::Value> =
+                    indices.iter().map(|&i| source[i]).collect();
                 let value = super::value::Value::from_list(combination);
 
                 // Advance to next combination

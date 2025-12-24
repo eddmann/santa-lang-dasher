@@ -10,9 +10,9 @@
 #[cfg(test)]
 mod tests;
 
-use crate::parser::ast::{Program, Section, Expr};
-use crate::runtime::value::Value;
 use crate::codegen::pipeline::Compiler;
+use crate::parser::ast::{Expr, Program, Section};
+use crate::runtime::value::Value;
 use std::process::Command;
 use std::time::Duration;
 
@@ -114,9 +114,10 @@ impl Runner {
 
     /// Check if the program is in script mode (no part sections)
     pub fn is_script_mode(&self, program: &Program) -> bool {
-        !program.sections.iter().any(|s| {
-            matches!(s, Section::PartOne(_) | Section::PartTwo(_))
-        })
+        !program
+            .sections
+            .iter()
+            .any(|s| matches!(s, Section::PartOne(_) | Section::PartTwo(_)))
     }
 
     /// Get all test sections from a program
@@ -161,7 +162,13 @@ impl Runner {
         let mut results = Vec::new();
 
         for test in filtered {
-            if let Section::Test { input, part_one: expected_one, part_two: expected_two, slow } = test {
+            if let Section::Test {
+                input,
+                part_one: expected_one,
+                part_two: expected_two,
+                slow,
+            } = test
+            {
                 let result = self.execute_single_test(
                     &program.statements,
                     input,
@@ -191,12 +198,8 @@ impl Runner {
         slow: bool,
     ) -> Result<TestResult, RunnerError> {
         // Generate source for this test: bind input from test section, evaluate parts
-        let source = self.generate_test_source(
-            statements,
-            test_input,
-            part_one_expr,
-            part_two_expr,
-        );
+        let source =
+            self.generate_test_source(statements, test_input, part_one_expr, part_two_expr);
 
         // Compile and execute
         let solution_result = self.compile_and_execute(&source)?;
@@ -210,14 +213,20 @@ impl Runner {
             .transpose()?;
 
         // Compare results with expected values
-        let part_one_passed = match (solution_result.part_one.as_ref(), part_one_expected.as_ref()) {
+        let part_one_passed = match (
+            solution_result.part_one.as_ref(),
+            part_one_expected.as_ref(),
+        ) {
             (Some(actual), Some(expected)) => Some(self.values_equal(actual, expected)),
             (None, None) => None,
-            (Some(_), None) => None,  // Has actual but no expected - not tested
-            (None, Some(_)) => Some(false),  // Expected but didn't produce - failure
+            (Some(_), None) => None, // Has actual but no expected - not tested
+            (None, Some(_)) => Some(false), // Expected but didn't produce - failure
         };
 
-        let part_two_passed = match (solution_result.part_two.as_ref(), part_two_expected.as_ref()) {
+        let part_two_passed = match (
+            solution_result.part_two.as_ref(),
+            part_two_expected.as_ref(),
+        ) {
             (Some(actual), Some(expected)) => Some(self.values_equal(actual, expected)),
             (None, None) => None,
             (Some(_), None) => None,
@@ -322,12 +331,13 @@ impl Runner {
                 let exe_path = temp_dir.join(format!("santa_eval_exec_{}", unique_id));
 
                 let compiler = Compiler::new();
-                compiler.compile_to_executable(&source, &exe_path)
+                compiler
+                    .compile_to_executable(&source, &exe_path)
                     .map_err(|e| RunnerError::RuntimeError(format!("Eval failed: {:?}", e)))?;
 
-                let output = Command::new(&exe_path)
-                    .output()
-                    .map_err(|e| RunnerError::RuntimeError(format!("Eval execution failed: {}", e)))?;
+                let output = Command::new(&exe_path).output().map_err(|e| {
+                    RunnerError::RuntimeError(format!("Eval execution failed: {}", e))
+                })?;
 
                 std::fs::remove_file(&exe_path).ok();
 
@@ -338,7 +348,9 @@ impl Runner {
                     }
                 }
 
-                Err(RunnerError::RuntimeError("Could not evaluate expected value".to_string()))
+                Err(RunnerError::RuntimeError(
+                    "Could not evaluate expected value".to_string(),
+                ))
             }
         }
     }
@@ -467,7 +479,11 @@ impl Runner {
     fn stmt_to_source(&self, stmt: &crate::parser::ast::Stmt) -> String {
         match stmt {
             crate::parser::ast::Stmt::Expr(expr) => self.expr_to_source(expr),
-            crate::parser::ast::Stmt::Let { mutable, pattern, value } => {
+            crate::parser::ast::Stmt::Let {
+                mutable,
+                pattern,
+                value,
+            } => {
                 let mut s = String::from("let ");
                 if *mutable {
                     s.push_str("mut ");
@@ -554,7 +570,11 @@ impl Runner {
                 let args_str: Vec<String> = args.iter().map(|e| self.expr_to_source(e)).collect();
                 format!("{}({})", self.expr_to_source(function), args_str.join(", "))
             }
-            Expr::If { condition, then_branch, else_branch } => {
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 // For if expressions, we need to serialize blocks without trailing semicolons
                 let then_str = self.block_or_expr_to_source(then_branch);
                 let mut s = format!("if {} {}", self.expr_to_source(condition), then_str);
@@ -576,7 +596,11 @@ impl Runner {
                     .collect();
                 format!("|{}| {}", params_str.join(", "), self.expr_to_source(body))
             }
-            Expr::Range { start, end, inclusive } => {
+            Expr::Range {
+                start,
+                end,
+                inclusive,
+            } => {
                 let start_str = self.expr_to_source(start);
                 match end {
                     Some(end_expr) => {
@@ -604,7 +628,11 @@ impl Runner {
                 format!("#{{{}}}", entries_str.join(", "))
             }
             Expr::Index { collection, index } => {
-                format!("{}[{}]", self.expr_to_source(collection), self.expr_to_source(index))
+                format!(
+                    "{}[{}]",
+                    self.expr_to_source(collection),
+                    self.expr_to_source(index)
+                )
             }
             Expr::Match { subject, arms } => {
                 let mut s = format!("match {} {{", self.expr_to_source(subject));
@@ -632,7 +660,11 @@ impl Runner {
             Expr::Spread(inner) => {
                 format!("..{}", self.expr_to_source(inner))
             }
-            Expr::InfixCall { function, left, right } => {
+            Expr::InfixCall {
+                function,
+                left,
+                right,
+            } => {
                 // Wrap in parentheses to preserve structure during re-parsing
                 // Without this, `a `f` b || c` might not parse correctly
                 format!(
@@ -642,7 +674,12 @@ impl Runner {
                     self.expr_to_source(right)
                 )
             }
-            Expr::IfLet { pattern, value, then_branch, else_branch } => {
+            Expr::IfLet {
+                pattern,
+                value,
+                then_branch,
+                else_branch,
+            } => {
                 let then_str = self.block_or_expr_to_source(then_branch);
                 let mut s = format!(
                     "if let {} = {} {}",
@@ -651,12 +688,13 @@ impl Runner {
                     then_str
                 );
                 if let Some(else_br) = else_branch {
-                    let else_str = if matches!(else_br.as_ref(), Expr::If { .. } | Expr::IfLet { .. }) {
-                        // else if / else if let chains
-                        self.expr_to_source(else_br)
-                    } else {
-                        self.block_or_expr_to_source(else_br)
-                    };
+                    let else_str =
+                        if matches!(else_br.as_ref(), Expr::If { .. } | Expr::IfLet { .. }) {
+                            // else if / else if let chains
+                            self.expr_to_source(else_br)
+                        } else {
+                            self.block_or_expr_to_source(else_br)
+                        };
                     s.push_str(&format!(" else {}", else_str));
                 }
                 s
@@ -713,7 +751,7 @@ impl Runner {
             InfixOp::Composition => ">>",
             InfixOp::Range => "..",
             InfixOp::RangeInclusive => "..=",
-            InfixOp::InfixCall => "`",  // Note: this won't produce valid source for function calls
+            InfixOp::InfixCall => "`", // Note: this won't produce valid source for function calls
         }
     }
 
@@ -735,10 +773,15 @@ impl Runner {
             Pattern::RestIdentifier(name) => format!("..{}", name),
             Pattern::Literal(lit) => self.literal_to_source(lit),
             Pattern::List(patterns) => {
-                let pats: Vec<String> = patterns.iter().map(|p| self.pattern_to_source(p)).collect();
+                let pats: Vec<String> =
+                    patterns.iter().map(|p| self.pattern_to_source(p)).collect();
                 format!("[{}]", pats.join(", "))
             }
-            Pattern::Range { start, end, inclusive } => {
+            Pattern::Range {
+                start,
+                end,
+                inclusive,
+            } => {
                 if let Some(e) = end {
                     if *inclusive {
                         format!("{}..={}", start, e)
@@ -776,7 +819,8 @@ impl Runner {
 
         // Compile
         let compiler = Compiler::new();
-        compiler.compile_to_executable(source, &exe_path)
+        compiler
+            .compile_to_executable(source, &exe_path)
             .map_err(|e| RunnerError::RuntimeError(format!("Compilation failed: {:?}", e)))?;
 
         // Execute and capture output
@@ -848,7 +892,12 @@ impl Runner {
             i += 1;
         }
 
-        Ok(SolutionResult { part_one, part_two, part_one_time, part_two_time })
+        Ok(SolutionResult {
+            part_one,
+            part_two,
+            part_one_time,
+            part_two_time,
+        })
     }
 
     /// Parse a string representation of a value
@@ -866,7 +915,7 @@ impl Runner {
             Ok(Value::nil())
         } else if s.starts_with('"') && s.ends_with('"') {
             // String value - strip quotes
-            let inner = &s[1..s.len()-1];
+            let inner = &s[1..s.len() - 1];
             Ok(Value::from_string(inner))
         } else {
             // Treat as string if no other type matches
@@ -932,7 +981,13 @@ impl Runner {
             source.push('\n');
 
             for (i, test) in tests.iter().enumerate() {
-                if let Section::Test { input, part_one: expected_one, part_two: expected_two, slow } = test {
+                if let Section::Test {
+                    input,
+                    part_one: expected_one,
+                    part_two: expected_two,
+                    slow,
+                } = test
+                {
                     // Add blank line between tests (not before first)
                     if i > 0 {
                         source.push_str("  __print_newline();\n");

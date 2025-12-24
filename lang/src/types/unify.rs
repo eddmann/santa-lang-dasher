@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::types::ty::Type;
+use std::collections::HashMap;
 
 /// Unification engine for type variables
 pub struct Unifier {
@@ -53,10 +53,7 @@ impl Unifier {
             }
 
             // Incompatible types
-            _ => Err(format!(
-                "Cannot unify {:?} and {:?}",
-                a, b
-            )),
+            _ => Err(format!("Cannot unify {:?} and {:?}", a, b)),
         }
     }
 
@@ -72,27 +69,19 @@ impl Unifier {
                     ty.clone()
                 }
             }
-            Type::List(elem) => {
-                Type::List(Box::new(self.apply_substitutions(elem)))
-            }
-            Type::Set(elem) => {
-                Type::Set(Box::new(self.apply_substitutions(elem)))
-            }
-            Type::Dict(k, v) => {
-                Type::Dict(
-                    Box::new(self.apply_substitutions(k)),
-                    Box::new(self.apply_substitutions(v)),
-                )
-            }
+            Type::List(elem) => Type::List(Box::new(self.apply_substitutions(elem))),
+            Type::Set(elem) => Type::Set(Box::new(self.apply_substitutions(elem))),
+            Type::Dict(k, v) => Type::Dict(
+                Box::new(self.apply_substitutions(k)),
+                Box::new(self.apply_substitutions(v)),
+            ),
             Type::LazySequence(elem) => {
                 Type::LazySequence(Box::new(self.apply_substitutions(elem)))
             }
-            Type::Function { params, ret } => {
-                Type::Function {
-                    params: params.iter().map(|p| self.apply_substitutions(p)).collect(),
-                    ret: Box::new(self.apply_substitutions(ret)),
-                }
-            }
+            Type::Function { params, ret } => Type::Function {
+                params: params.iter().map(|p| self.apply_substitutions(p)).collect(),
+                ret: Box::new(self.apply_substitutions(ret)),
+            },
             _ => ty.clone(),
         }
     }

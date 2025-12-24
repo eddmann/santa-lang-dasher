@@ -3,8 +3,8 @@
 //! Uses thread-local storage to signal break from within closures to their
 //! iteration context (fold, reduce, each, etc.).
 
-use std::cell::RefCell;
 use crate::value::Value;
+use std::cell::RefCell;
 
 thread_local! {
     /// Flag indicating whether a break has occurred

@@ -6,13 +6,13 @@
 //! - Codegen (LLVM IR generation)
 //! - Full compilation pipeline
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use inkwell::context::Context;
 use inkwell::OptimizationLevel;
 
+use santa_lang::codegen::context::CodegenContext;
 use santa_lang::lexer::lex;
 use santa_lang::parser::Parser;
-use santa_lang::codegen::context::CodegenContext;
 
 /// Simple arithmetic expression
 const SIMPLE_EXPR: &str = "1 + 2 * 3";
@@ -108,10 +108,7 @@ fn bench_codegen(c: &mut Criterion) {
     let mut group = c.benchmark_group("codegen");
 
     // Only benchmark simple cases for codegen as it involves LLVM
-    let test_cases = [
-        ("simple", SIMPLE_EXPR),
-        ("nested", NESTED_EXPR),
-    ];
+    let test_cases = [("simple", SIMPLE_EXPR), ("nested", NESTED_EXPR)];
 
     for (name, source) in test_cases {
         // Pre-parse for codegen-only benchmark
@@ -144,14 +141,19 @@ fn bench_optimization_levels(c: &mut Criterion) {
     ];
 
     for (name, opt_level) in opt_levels {
-        group.bench_with_input(BenchmarkId::new("context_creation", name), &opt_level, |b, opt_level| {
-            b.iter(|| {
-                let context = Context::create();
-                let codegen = CodegenContext::with_optimization(&context, "bench_module", *opt_level);
-                // Return something that doesn't hold a reference to context
-                black_box(codegen.optimization_level())
-            })
-        });
+        group.bench_with_input(
+            BenchmarkId::new("context_creation", name),
+            &opt_level,
+            |b, opt_level| {
+                b.iter(|| {
+                    let context = Context::create();
+                    let codegen =
+                        CodegenContext::with_optimization(&context, "bench_module", *opt_level);
+                    // Return something that doesn't hold a reference to context
+                    black_box(codegen.optimization_level())
+                })
+            },
+        );
     }
 
     group.finish();
@@ -160,10 +162,7 @@ fn bench_optimization_levels(c: &mut Criterion) {
 fn bench_full_pipeline(c: &mut Criterion) {
     let mut group = c.benchmark_group("full_pipeline");
 
-    let test_cases = [
-        ("simple", SIMPLE_EXPR),
-        ("nested", NESTED_EXPR),
-    ];
+    let test_cases = [("simple", SIMPLE_EXPR), ("nested", NESTED_EXPR)];
 
     for (name, source) in test_cases {
         group.bench_with_input(BenchmarkId::new("lex_parse", name), source, |b, source| {

@@ -16,22 +16,13 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq)]
 pub enum SantaError {
     /// Lexer error (tokenization failed)
-    LexError {
-        message: String,
-        position: Position,
-    },
+    LexError { message: String, position: Position },
 
     /// Parser error (syntax error)
-    ParseError {
-        message: String,
-        span: Span,
-    },
+    ParseError { message: String, span: Span },
 
     /// Compile error (code generation failed)
-    CompileError {
-        message: String,
-        span: Option<Span>,
-    },
+    CompileError { message: String, span: Option<Span> },
 
     /// Runtime error (execution failed)
     RuntimeError {
@@ -134,7 +125,11 @@ impl fmt::Display for SantaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SantaError::LexError { message, position } => {
-                write!(f, "LexError at {}:{}: {}", position.line, position.column, message)
+                write!(
+                    f,
+                    "LexError at {}:{}: {}",
+                    position.line, position.column, message
+                )
             }
             SantaError::ParseError { message, span } => {
                 write!(
@@ -154,7 +149,10 @@ impl fmt::Display for SantaError {
                     write!(f, "CompileError: {}", message)
                 }
             }
-            SantaError::RuntimeError { message, stack_trace } => {
+            SantaError::RuntimeError {
+                message,
+                stack_trace,
+            } => {
                 write!(f, "RuntimeError: {}", message)?;
                 if !stack_trace.is_empty() {
                     writeln!(f)?;

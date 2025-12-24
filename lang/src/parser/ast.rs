@@ -83,8 +83,8 @@ pub enum Expr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PrefixOp {
-    Not,     // !
-    Negate,  // -
+    Not,    // !
+    Negate, // -
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -109,11 +109,11 @@ pub enum InfixOp {
     Or,  // ||
 
     // Special
-    Pipeline,    // |>
-    Composition, // >>
-    Range,       // ..
+    Pipeline,       // |>
+    Composition,    // >>
+    Range,          // ..
     RangeInclusive, // ..=
-    InfixCall,   // ` (backtick for infix function calls)
+    InfixCall,      // ` (backtick for infix function calls)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -124,7 +124,9 @@ pub struct Param {
 impl Param {
     /// Create a simple identifier parameter
     pub fn simple(name: String) -> Self {
-        Param { pattern: Pattern::Identifier(name) }
+        Param {
+            pattern: Pattern::Identifier(name),
+        }
     }
 
     /// Get the name if this is a simple identifier parameter
@@ -145,11 +147,11 @@ pub struct MatchArm {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
-    Wildcard,                // _
-    Identifier(String),      // x
-    RestIdentifier(String),  // ..rest
-    Literal(Literal),        // 42, "hello", true
-    List(Vec<Pattern>),      // [a, b, ..rest]
+    Wildcard,               // _
+    Identifier(String),     // x
+    RestIdentifier(String), // ..rest
+    Literal(Literal),       // 42, "hello", true
+    List(Vec<Pattern>),     // [a, b, ..rest]
     Range {
         start: i64,
         end: Option<i64>,

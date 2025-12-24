@@ -1,5 +1,5 @@
-use crate::parser::ast::{Expr, Stmt, Section};
 use crate::lexer::token::Span;
+use crate::parser::ast::{Expr, Section, Stmt};
 
 /// Compile-time type information for specialization
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -15,18 +15,15 @@ pub enum Type {
     List(Box<Type>),
     Set(Box<Type>),
     Dict(Box<Type>, Box<Type>), // key type, value type
-    LazySequence(Box<Type>),     // element type
+    LazySequence(Box<Type>),    // element type
 
     // Function type
-    Function {
-        params: Vec<Type>,
-        ret: Box<Type>,
-    },
+    Function { params: Vec<Type>, ret: Box<Type> },
 
     // Inference helpers
-    Unknown,        // Cannot determine - fall back to runtime dispatch
-    TypeVar(u32),   // Unification variable (for polymorphic functions)
-    Never,          // Bottom type (return, break - doesn't produce value)
+    Unknown,      // Cannot determine - fall back to runtime dispatch
+    TypeVar(u32), // Unification variable (for polymorphic functions)
+    Never,        // Bottom type (return, break - doesn't produce value)
 }
 
 impl Type {

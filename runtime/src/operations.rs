@@ -190,10 +190,7 @@ pub extern "C" fn rt_sub(left: Value, right: Value) -> Value {
     // Handle Set - Set (difference) per LANG.txt §4
     // {1, 2, 3} - {2} → {1, 3}
     if let (Some(l), Some(r)) = (left.as_set(), right.as_set()) {
-        let result: im::HashSet<Value> = l.iter()
-            .filter(|v| !r.contains(*v))
-            .copied()
-            .collect();
+        let result: im::HashSet<Value> = l.iter().filter(|v| !r.contains(*v)).copied().collect();
         return Value::from_set(result);
     }
 
@@ -201,7 +198,8 @@ pub extern "C" fn rt_sub(left: Value, right: Value) -> Value {
     if let Some(set) = left.as_set() {
         if let Some(list) = right.as_list() {
             let to_remove: im::HashSet<Value> = list.iter().copied().collect();
-            let result: im::HashSet<Value> = set.iter()
+            let result: im::HashSet<Value> = set
+                .iter()
                 .filter(|v| !to_remove.contains(*v))
                 .copied()
                 .collect();
@@ -214,7 +212,8 @@ pub extern "C" fn rt_sub(left: Value, right: Value) -> Value {
         if let Some(lazy) = right.as_lazy_sequence() {
             let items = crate::builtins::collect_bounded_lazy(lazy);
             let to_remove: im::HashSet<Value> = items.iter().copied().collect();
-            let result: im::HashSet<Value> = set.iter()
+            let result: im::HashSet<Value> = set
+                .iter()
                 .filter(|v| !to_remove.contains(*v))
                 .copied()
                 .collect();
@@ -364,7 +363,11 @@ pub extern "C" fn rt_ne(left: Value, right: Value) -> Value {
 /// Per LANG.txt §6.2: false, nil, 0, 0.0, "", [], #{}, #{} are falsy; all other values are truthy.
 #[no_mangle]
 pub extern "C" fn rt_is_truthy(value: Value) -> i64 {
-    if value.is_truthy() { 1 } else { 0 }
+    if value.is_truthy() {
+        1
+    } else {
+        0
+    }
 }
 
 /// Logical NOT operation
@@ -676,10 +679,7 @@ pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -
     }
 
     // Non-callable value - produce RuntimeErr
-    runtime_error(&format!(
-        "{} is not callable",
-        type_name(&callee)
-    ));
+    runtime_error(&format!("{} is not callable", type_name(&callee)));
 }
 
 /// Apply a function to a collection, spreading the collection elements as arguments.
@@ -839,7 +839,7 @@ pub extern "C" fn rt_compose(f: Value, g: Value) -> Value {
     let captures = vec![f, g];
     let closure = ClosureObject::new(
         composed_closure_impl as *const (),
-        1,  // arity = 1
+        1, // arity = 1
         captures,
     );
 

@@ -1,4 +1,7 @@
-use super::heap::{StringObject, ListObject, SetObject, DictObject, MutableCellObject, ClosureObject, LazySequenceObject, MemoizedClosureObject, PartialApplicationObject, ObjectHeader, TypeTag};
+use super::heap::{
+    ClosureObject, DictObject, LazySequenceObject, ListObject, MemoizedClosureObject,
+    MutableCellObject, ObjectHeader, PartialApplicationObject, SetObject, StringObject, TypeTag,
+};
 
 /// 64-bit NaN-boxed value representation
 ///
@@ -65,9 +68,8 @@ impl PartialEq for Value {
                             return false;
                         }
                         // Check all key-value pairs in d1 match d2
-                        d1.iter().all(|(k, v1)| {
-                            d2.get(k).is_some_and(|v2| v1 == v2)
-                        })
+                        d1.iter()
+                            .all(|(k, v1)| d2.get(k).is_some_and(|v2| v1 == v2))
                     }
                     _ => false,
                 }
@@ -130,7 +132,7 @@ impl std::hash::Hash for Value {
 const TAG_INTEGER: u64 = 0b001;
 const TAG_NIL: u64 = 0b010;
 const TAG_BOOLEAN: u64 = 0b011;
-const TAG_MASK: u64 = 0b111;  // Lower 3 bits
+const TAG_MASK: u64 = 0b111; // Lower 3 bits
 
 // 61-bit integers fit when shifted left by 3 (we lose 3 bits to the tag)
 // This is 2^60 - 1 for positive, -2^60 for negative

@@ -1,8 +1,8 @@
-use crate::types::{TypedExpr, Type};
-use crate::parser::ast::{Expr, InfixOp, PrefixOp, Stmt, Pattern, Param, MatchArm, Literal};
+use super::context::CodegenContext;
+use crate::parser::ast::{Expr, InfixOp, Literal, MatchArm, Param, Pattern, PrefixOp, Stmt};
+use crate::types::{Type, TypedExpr};
 use inkwell::values::BasicValueEnum;
 use inkwell::IntPredicate;
-use super::context::CodegenContext;
 use std::collections::HashSet;
 
 #[derive(Debug)]
@@ -27,15 +27,17 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::Identifier(name) => {
                 // Look up the variable and load its value
                 if let Some(alloca) = self.variables.get(name) {
-                    let load = self.builder.build_load(self.context.i64_type(), *alloca, name).unwrap();
+                    let load = self
+                        .builder
+                        .build_load(self.context.i64_type(), *alloca, name)
+                        .unwrap();
                     // If this is a cell variable, unwrap the cell to get the actual value
                     if self.cell_variables.contains(name) {
                         let rt_cell_get = self.get_or_declare_rt_cell_get();
-                        let cell_val = self.builder.build_call(
-                            rt_cell_get,
-                            &[load.into()],
-                            &format!("{}_unwrap", name),
-                        ).unwrap();
+                        let cell_val = self
+                            .builder
+                            .build_call(rt_cell_get, &[load.into()], &format!("{}_unwrap", name))
+                            .unwrap();
                         Ok(cell_val.try_as_basic_value().left().unwrap())
                     } else {
                         Ok(load)
@@ -46,9 +48,10 @@ impl<'ctx> CodegenContext<'ctx> {
                     if let Some(result) = self.compile_partial_builtin(name, &[], arity)? {
                         Ok(result)
                     } else {
-                        Err(CompileError::UnsupportedExpression(
-                            format!("Failed to create function value for builtin: {}", name)
-                        ))
+                        Err(CompileError::UnsupportedExpression(format!(
+                            "Failed to create function value for builtin: {}",
+                            name
+                        )))
                     }
                 } else if Self::is_variadic_builtin_function(name) {
                     // Variadic builtins used as function values (e.g., union, intersection)
@@ -56,75 +59,74 @@ impl<'ctx> CodegenContext<'ctx> {
                     if let Some(result) = self.compile_partial_builtin(name, &[], 1)? {
                         Ok(result)
                     } else {
-                        Err(CompileError::UnsupportedExpression(
-                            format!("Failed to create function value for variadic builtin: {}", name)
-                        ))
+                        Err(CompileError::UnsupportedExpression(format!(
+                            "Failed to create function value for variadic builtin: {}",
+                            name
+                        )))
                     }
                 } else {
-                    Err(CompileError::UnsupportedExpression(
-                        format!("Undefined variable: {}", name)
-                    ))
+                    Err(CompileError::UnsupportedExpression(format!(
+                        "Undefined variable: {}",
+                        name
+                    )))
                 }
-            },
-            Expr::Prefix { op, right } => {
-                self.compile_prefix(op, right, &expr.ty)
-            },
-            Expr::Infix { left, op, right } => {
-                self.compile_binary(left, op, right, &expr.ty)
-            },
-            Expr::List(elements) => {
-                self.compile_list(elements)
-            },
-            Expr::Set(elements) => {
-                self.compile_set(elements)
-            },
-            Expr::Dict(entries) => {
-                self.compile_dict(entries)
-            },
-            Expr::Range { start, end, inclusive } => {
-                self.compile_range(start, end.as_deref(), *inclusive)
-            },
-            Expr::Index { collection, index } => {
-                self.compile_index(collection, index)
-            },
-            Expr::If { condition, then_branch, else_branch } => {
-                self.compile_if(condition, then_branch, else_branch.as_deref())
-            },
-            Expr::IfLet { pattern, value, then_branch, else_branch } => {
-                self.compile_if_let(pattern, value, then_branch, else_branch.as_deref())
-            },
-            Expr::Block(stmts) => {
-                self.compile_block(stmts)
-            },
-            Expr::Function { params, body } => {
-                self.compile_function(params, body)
-            },
-            Expr::Call { function, args } => {
-                self.compile_call(function, args)
-            },
-            Expr::InfixCall { function, left, right } => {
+            }
+            Expr::Prefix { op, right } => self.compile_prefix(op, right, &expr.ty),
+            Expr::Infix { left, op, right } => self.compile_binary(left, op, right, &expr.ty),
+            Expr::List(elements) => self.compile_list(elements),
+            Expr::Set(elements) => self.compile_set(elements),
+            Expr::Dict(entries) => self.compile_dict(entries),
+            Expr::Range {
+                start,
+                end,
+                inclusive,
+            } => self.compile_range(start, end.as_deref(), *inclusive),
+            Expr::Index { collection, index } => self.compile_index(collection, index),
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => self.compile_if(condition, then_branch, else_branch.as_deref()),
+            Expr::IfLet {
+                pattern,
+                value,
+                then_branch,
+                else_branch,
+            } => self.compile_if_let(pattern, value, then_branch, else_branch.as_deref()),
+            Expr::Block(stmts) => self.compile_block(stmts),
+            Expr::Function { params, body } => self.compile_function(params, body),
+            Expr::Call { function, args } => self.compile_call(function, args),
+            Expr::InfixCall {
+                function,
+                left,
+                right,
+            } => {
                 // a `f` b transforms to f(a, b)
                 let fn_expr = Expr::Identifier(function.clone());
                 let args = vec![(**left).clone(), (**right).clone()];
                 self.compile_call(&fn_expr, &args)
-            },
-            Expr::Match { subject, arms } => {
-                self.compile_match(subject, arms)
-            },
-            Expr::Assignment { name, value } => {
-                self.compile_assignment(name, value)
-            },
-            _ => Err(CompileError::UnsupportedExpression(
-                format!("Expression type not yet implemented: {:?}", expr.expr)
-            )),
+            }
+            Expr::Match { subject, arms } => self.compile_match(subject, arms),
+            Expr::Assignment { name, value } => self.compile_assignment(name, value),
+            _ => Err(CompileError::UnsupportedExpression(format!(
+                "Expression type not yet implemented: {:?}",
+                expr.expr
+            ))),
         }
     }
 
     /// Compile an assignment expression (for mutable variables)
-    fn compile_assignment(&mut self, name: &str, value: &Expr) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_assignment(
+        &mut self,
+        name: &str,
+        value: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Look up the variable
         let alloca = self.variables.get(name).cloned().ok_or_else(|| {
-            CompileError::UnsupportedExpression(format!("Undefined variable for assignment: {}", name))
+            CompileError::UnsupportedExpression(format!(
+                "Undefined variable for assignment: {}",
+                name
+            ))
         })?;
 
         // Compile the value expression
@@ -142,13 +144,19 @@ impl<'ctx> CodegenContext<'ctx> {
         // If this is a cell variable, use rt_cell_set instead of direct store
         if self.cell_variables.contains(name) {
             // Load the cell, then set its value
-            let cell = self.builder.build_load(self.context.i64_type(), alloca, &format!("{}_cell", name)).unwrap();
+            let cell = self
+                .builder
+                .build_load(self.context.i64_type(), alloca, &format!("{}_cell", name))
+                .unwrap();
             let rt_cell_set = self.get_or_declare_rt_cell_set();
-            let result = self.builder.build_call(
-                rt_cell_set,
-                &[cell.into(), compiled_value.into()],
-                &format!("{}_set", name),
-            ).unwrap();
+            let result = self
+                .builder
+                .build_call(
+                    rt_cell_set,
+                    &[cell.into(), compiled_value.into()],
+                    &format!("{}_set", name),
+                )
+                .unwrap();
             Ok(result.try_as_basic_value().left().unwrap())
         } else {
             // Direct store for non-cell variables
@@ -205,22 +213,24 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Get pointer to the string data
         let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
-        let string_ptr = self.builder.build_pointer_cast(
-            global.as_pointer_value(),
-            ptr_type,
-            "str_ptr"
-        ).unwrap();
+        let string_ptr = self
+            .builder
+            .build_pointer_cast(global.as_pointer_value(), ptr_type, "str_ptr")
+            .unwrap();
 
         // Get or declare rt_string_from_cstr function
         let rt_string_fn = self.get_or_declare_rt_string_from_cstr();
 
         // Call rt_string_from_cstr(ptr, len)
         let len = self.context.i64_type().const_int(value.len() as u64, false);
-        let call_result = self.builder.build_call(
-            rt_string_fn,
-            &[string_ptr.into(), len.into()],
-            "string_value"
-        ).unwrap();
+        let call_result = self
+            .builder
+            .build_call(
+                rt_string_fn,
+                &[string_ptr.into(), len.into()],
+                "string_value",
+            )
+            .unwrap();
 
         Ok(call_result.try_as_basic_value().left().unwrap())
     }
@@ -284,36 +294,43 @@ impl<'ctx> CodegenContext<'ctx> {
             (PrefixOp::Not, Type::Bool) => {
                 // Unbox bool: (value >> 3) & 1
                 let val = right_val.into_int_value();
-                let shifted = self.builder.build_right_shift(
-                    val,
-                    self.context.i64_type().const_int(3, false),
-                    false,
-                    "shift"
-                ).unwrap();
-                let bool_val = self.builder.build_and(
-                    shifted,
-                    self.context.i64_type().const_int(1, false),
-                    "mask"
-                ).unwrap();
+                let shifted = self
+                    .builder
+                    .build_right_shift(
+                        val,
+                        self.context.i64_type().const_int(3, false),
+                        false,
+                        "shift",
+                    )
+                    .unwrap();
+                let bool_val = self
+                    .builder
+                    .build_and(shifted, self.context.i64_type().const_int(1, false), "mask")
+                    .unwrap();
 
                 // XOR with 1 to flip the bit
-                let flipped = self.builder.build_xor(
-                    bool_val,
-                    self.context.i64_type().const_int(1, false),
-                    "not"
-                ).unwrap();
+                let flipped = self
+                    .builder
+                    .build_xor(bool_val, self.context.i64_type().const_int(1, false), "not")
+                    .unwrap();
 
                 // Re-box as boolean
-                let shifted_back = self.builder.build_left_shift(
-                    flipped,
-                    self.context.i64_type().const_int(3, false),
-                    "shift_back"
-                ).unwrap();
-                let tagged = self.builder.build_or(
-                    shifted_back,
-                    self.context.i64_type().const_int(0b011, false),
-                    "tag"
-                ).unwrap();
+                let shifted_back = self
+                    .builder
+                    .build_left_shift(
+                        flipped,
+                        self.context.i64_type().const_int(3, false),
+                        "shift_back",
+                    )
+                    .unwrap();
+                let tagged = self
+                    .builder
+                    .build_or(
+                        shifted_back,
+                        self.context.i64_type().const_int(0b011, false),
+                        "tag",
+                    )
+                    .unwrap();
                 Ok(tagged.into())
             }
 
@@ -324,11 +341,10 @@ impl<'ctx> CodegenContext<'ctx> {
                     PrefixOp::Not => self.get_or_declare_rt_not(),
                 };
 
-                let call_result = self.builder.build_call(
-                    rt_fn,
-                    &[right_val.into()],
-                    "rt_prefix"
-                ).unwrap();
+                let call_result = self
+                    .builder
+                    .build_call(rt_fn, &[right_val.into()], "rt_prefix")
+                    .unwrap();
 
                 Ok(call_result.try_as_basic_value().left().unwrap())
             }
@@ -416,7 +432,10 @@ impl<'ctx> CodegenContext<'ctx> {
             (Type::Int, InfixOp::LessThan, Type::Int) => {
                 let l = self.unbox_int(left_val);
                 let r = self.unbox_int(right_val);
-                let cmp = self.builder.build_int_compare(IntPredicate::SLT, l, r, "lt").unwrap();
+                let cmp = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, l, r, "lt")
+                    .unwrap();
                 Ok(self.box_bool(cmp))
             }
 
@@ -456,7 +475,10 @@ impl<'ctx> CodegenContext<'ctx> {
             (Type::Decimal, InfixOp::LessThan, Type::Decimal) => {
                 let l = left_val.into_float_value();
                 let r = right_val.into_float_value();
-                let cmp = self.builder.build_float_compare(inkwell::FloatPredicate::OLT, l, r, "flt").unwrap();
+                let cmp = self
+                    .builder
+                    .build_float_compare(inkwell::FloatPredicate::OLT, l, r, "flt")
+                    .unwrap();
                 Ok(self.box_bool(cmp))
             }
 
@@ -476,16 +498,18 @@ impl<'ctx> CodegenContext<'ctx> {
                     InfixOp::GreaterThan => self.get_or_declare_rt_gt(),
                     InfixOp::GreaterThanOrEqual => self.get_or_declare_rt_ge(),
                     InfixOp::Composition => self.get_or_declare_rt_compose(),
-                    _ => return Err(CompileError::UnsupportedExpression(
-                        format!("Binary operation {:?} not yet supported in runtime fallback", op)
-                    )),
+                    _ => {
+                        return Err(CompileError::UnsupportedExpression(format!(
+                            "Binary operation {:?} not yet supported in runtime fallback",
+                            op
+                        )))
+                    }
                 };
 
-                let call_result = self.builder.build_call(
-                    rt_fn,
-                    &[left_val.into(), right_val.into()],
-                    "rt_binop"
-                ).unwrap();
+                let call_result = self
+                    .builder
+                    .build_call(rt_fn, &[left_val.into(), right_val.into()], "rt_binop")
+                    .unwrap();
 
                 Ok(call_result.try_as_basic_value().left().unwrap())
             }
@@ -512,22 +536,78 @@ impl<'ctx> CodegenContext<'ctx> {
         function: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // If function is already a Call expression, check if it's a builtin
-        if let Expr::Call { function: inner_fn, args } = function {
+        if let Expr::Call {
+            function: inner_fn,
+            args,
+        } = function
+        {
             // Check if the inner function is a builtin that takes a collection as last arg
             let is_known_builtin = if let Expr::Identifier(name) = inner_fn.as_ref() {
-                matches!(name.as_str(),
-                    "map" | "filter" | "fold" | "reduce" | "find" | "any?" | "all?" |
-                    "each" | "scan" | "take" | "skip" | "zip" | "count" | "sum" |
-                    "max" | "min" | "first" | "second" | "last" | "rest" | "push" |
-                    "assoc" | "update" | "update_d" | "get" | "keys" | "values" |
-                    "filter_map" | "find_map" | "includes?" | "excludes?" |
-                    "sort" | "reverse" | "list" | "set" | "dict" | "size" |
-                    "split" | "join" | "rotate" | "combinations" | "flat_map" |
-                    "collect" | "flat" | "flatten" | "chunk" | "windows" |
-                    "group_by" | "partition" | "take_while" | "drop_while" |
-                    "zip_with" | "interleave" | "intersperse" | "transpose" |
-                    "unique" | "frequencies" | "index_of" | "find_index" |
-                    "sorted" | "group" | "nth" | "range"
+                matches!(
+                    name.as_str(),
+                    "map"
+                        | "filter"
+                        | "fold"
+                        | "reduce"
+                        | "find"
+                        | "any?"
+                        | "all?"
+                        | "each"
+                        | "scan"
+                        | "take"
+                        | "skip"
+                        | "zip"
+                        | "count"
+                        | "sum"
+                        | "max"
+                        | "min"
+                        | "first"
+                        | "second"
+                        | "last"
+                        | "rest"
+                        | "push"
+                        | "assoc"
+                        | "update"
+                        | "update_d"
+                        | "get"
+                        | "keys"
+                        | "values"
+                        | "filter_map"
+                        | "find_map"
+                        | "includes?"
+                        | "excludes?"
+                        | "sort"
+                        | "reverse"
+                        | "list"
+                        | "set"
+                        | "dict"
+                        | "size"
+                        | "split"
+                        | "join"
+                        | "rotate"
+                        | "combinations"
+                        | "flat_map"
+                        | "collect"
+                        | "flat"
+                        | "flatten"
+                        | "chunk"
+                        | "windows"
+                        | "group_by"
+                        | "partition"
+                        | "take_while"
+                        | "drop_while"
+                        | "zip_with"
+                        | "interleave"
+                        | "intersperse"
+                        | "transpose"
+                        | "unique"
+                        | "frequencies"
+                        | "index_of"
+                        | "find_index"
+                        | "sorted"
+                        | "group"
+                        | "nth"
+                        | "range"
                 )
             } else {
                 false
@@ -557,34 +637,34 @@ impl<'ctx> CodegenContext<'ctx> {
 
                 // Allocate array for the single argument
                 let i64_type = self.context.i64_type();
-                let argv_alloca = self.builder.build_alloca(
-                    i64_type.array_type(1),
-                    "pipeline_argv"
-                ).unwrap();
+                let argv_alloca = self
+                    .builder
+                    .build_alloca(i64_type.array_type(1), "pipeline_argv")
+                    .unwrap();
 
                 // Store the value argument
                 let zero = self.context.i32_type().const_int(0, false);
                 let gep = unsafe {
-                    self.builder.build_gep(
-                        i64_type.array_type(1),
-                        argv_alloca,
-                        &[zero, zero],
-                        "argv_0"
-                    ).unwrap()
+                    self.builder
+                        .build_gep(i64_type.array_type(1), argv_alloca, &[zero, zero], "argv_0")
+                        .unwrap()
                 };
                 self.builder.build_store(gep, value_compiled).unwrap();
 
                 // Call the function result with the value
                 let rt_call = self.get_or_declare_rt_call();
-                let result = self.builder.build_call(
-                    rt_call,
-                    &[
-                        func_result.into(),
-                        self.context.i32_type().const_int(1, false).into(),
-                        argv_alloca.into(),
-                    ],
-                    "pipeline_call"
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_call,
+                        &[
+                            func_result.into(),
+                            self.context.i32_type().const_int(1, false).into(),
+                            argv_alloca.into(),
+                        ],
+                        "pipeline_call",
+                    )
+                    .unwrap();
                 return Ok(result.try_as_basic_value().left().unwrap());
             }
         }
@@ -602,7 +682,12 @@ impl<'ctx> CodegenContext<'ctx> {
         right: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Get the current function
-        let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+        let function = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
 
         // Create basic blocks for the short-circuit evaluation
         let eval_right_bb = self.context.append_basic_block(function, "and_eval_right");
@@ -622,25 +707,32 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Test truthiness of left value using rt_is_truthy
         let rt_is_truthy = self.get_or_declare_rt_is_truthy();
-        let is_truthy = self.builder.build_call(
-            rt_is_truthy,
-            &[left_val.into()],
-            "left_truthy",
-        ).unwrap().try_as_basic_value().left().unwrap();
+        let is_truthy = self
+            .builder
+            .build_call(rt_is_truthy, &[left_val.into()], "left_truthy")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap();
 
         // Convert i64 result to i1 for conditional branch
-        let i1_truthy = self.builder.build_int_compare(
-            inkwell::IntPredicate::NE,
-            is_truthy.into_int_value(),
-            self.context.i64_type().const_zero(),
-            "truthy_bool",
-        ).unwrap();
+        let i1_truthy = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                is_truthy.into_int_value(),
+                self.context.i64_type().const_zero(),
+                "truthy_bool",
+            )
+            .unwrap();
 
         // Save the block where we evaluated left
         let left_bb = self.builder.get_insert_block().unwrap();
 
         // Branch: if truthy, evaluate right; otherwise skip to merge
-        self.builder.build_conditional_branch(i1_truthy, eval_right_bb, merge_bb).unwrap();
+        self.builder
+            .build_conditional_branch(i1_truthy, eval_right_bb, merge_bb)
+            .unwrap();
 
         // Evaluate right operand
         self.builder.position_at_end(eval_right_bb);
@@ -659,7 +751,10 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Merge block: phi node selects between left_val (if short-circuited) and right_val
         self.builder.position_at_end(merge_bb);
-        let phi = self.builder.build_phi(self.context.i64_type(), "and_result").unwrap();
+        let phi = self
+            .builder
+            .build_phi(self.context.i64_type(), "and_result")
+            .unwrap();
         phi.add_incoming(&[(&left_val, left_bb), (&right_val, right_bb)]);
 
         Ok(phi.as_basic_value())
@@ -674,7 +769,12 @@ impl<'ctx> CodegenContext<'ctx> {
         right: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Get the current function
-        let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+        let function = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
 
         // Create basic blocks for the short-circuit evaluation
         let eval_right_bb = self.context.append_basic_block(function, "or_eval_right");
@@ -694,25 +794,32 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Test truthiness of left value using rt_is_truthy
         let rt_is_truthy = self.get_or_declare_rt_is_truthy();
-        let is_truthy = self.builder.build_call(
-            rt_is_truthy,
-            &[left_val.into()],
-            "left_truthy",
-        ).unwrap().try_as_basic_value().left().unwrap();
+        let is_truthy = self
+            .builder
+            .build_call(rt_is_truthy, &[left_val.into()], "left_truthy")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap();
 
         // Convert i64 result to i1 for conditional branch
-        let i1_truthy = self.builder.build_int_compare(
-            inkwell::IntPredicate::NE,
-            is_truthy.into_int_value(),
-            self.context.i64_type().const_zero(),
-            "truthy_bool",
-        ).unwrap();
+        let i1_truthy = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                is_truthy.into_int_value(),
+                self.context.i64_type().const_zero(),
+                "truthy_bool",
+            )
+            .unwrap();
 
         // Save the block where we evaluated left
         let left_bb = self.builder.get_insert_block().unwrap();
 
         // Branch: if truthy, skip to merge (return left); otherwise evaluate right
-        self.builder.build_conditional_branch(i1_truthy, merge_bb, eval_right_bb).unwrap();
+        self.builder
+            .build_conditional_branch(i1_truthy, merge_bb, eval_right_bb)
+            .unwrap();
 
         // Evaluate right operand
         self.builder.position_at_end(eval_right_bb);
@@ -731,7 +838,10 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Merge block: phi node selects between left_val (if truthy) and right_val
         self.builder.position_at_end(merge_bb);
-        let phi = self.builder.build_phi(self.context.i64_type(), "or_result").unwrap();
+        let phi = self
+            .builder
+            .build_phi(self.context.i64_type(), "or_result")
+            .unwrap();
         phi.add_incoming(&[(&left_val, left_bb), (&right_val, right_bb)]);
 
         Ok(phi.as_basic_value())
@@ -857,9 +967,7 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::Boolean(_) => Type::Bool,
             Expr::Nil => Type::Nil,
             // Look up variable types from the type environment
-            Expr::Identifier(name) => {
-                self.type_env.get(name).cloned().unwrap_or(Type::Unknown)
-            }
+            Expr::Identifier(name) => self.type_env.get(name).cloned().unwrap_or(Type::Unknown),
             // For binary operations, infer from operands
             Expr::Infix { left, op, right } => {
                 let left_ty = self.infer_expr_type(left);
@@ -892,13 +1000,19 @@ impl<'ctx> CodegenContext<'ctx> {
             (Type::Int, Add | Subtract | Multiply | Divide | Modulo, Type::Int) => Type::Int,
             (Type::Decimal, Add | Subtract | Multiply | Divide, Type::Decimal) => Type::Decimal,
             // Comparisons always return Bool
-            (_, LessThan | LessThanOrEqual | GreaterThan | GreaterThanOrEqual | Equal | NotEqual, _) => Type::Bool,
+            (
+                _,
+                LessThan | LessThanOrEqual | GreaterThan | GreaterThanOrEqual | Equal | NotEqual,
+                _,
+            ) => Type::Bool,
             // Logical operations
             (Type::Bool, And | Or, Type::Bool) => Type::Bool,
             // String concatenation
             (Type::String, Add, _) => Type::String,
             // Ranges
-            (Type::Int, Range | RangeInclusive, Type::Int) => Type::LazySequence(Box::new(Type::Int)),
+            (Type::Int, Range | RangeInclusive, Type::Int) => {
+                Type::LazySequence(Box::new(Type::Int))
+            }
             _ => Type::Unknown,
         }
     }
@@ -917,23 +1031,57 @@ impl<'ctx> CodegenContext<'ctx> {
     fn unbox_int(&self, value: BasicValueEnum<'ctx>) -> inkwell::values::IntValue<'ctx> {
         // Arithmetic right shift by 3 to remove tag bits and restore sign
         let val = value.into_int_value();
-        self.builder.build_right_shift(val, self.context.i64_type().const_int(3, false), true, "unbox_int").unwrap()
+        self.builder
+            .build_right_shift(
+                val,
+                self.context.i64_type().const_int(3, false),
+                true,
+                "unbox_int",
+            )
+            .unwrap()
     }
 
     /// Box raw i64 into NaN-boxed integer
     fn box_int(&self, value: inkwell::values::IntValue<'ctx>) -> BasicValueEnum<'ctx> {
         // Shift left by 3 and OR with tag 0b001
-        let shifted = self.builder.build_left_shift(value, self.context.i64_type().const_int(3, false), "shift").unwrap();
-        let tagged = self.builder.build_or(shifted, self.context.i64_type().const_int(0b001, false), "tag").unwrap();
+        let shifted = self
+            .builder
+            .build_left_shift(value, self.context.i64_type().const_int(3, false), "shift")
+            .unwrap();
+        let tagged = self
+            .builder
+            .build_or(
+                shifted,
+                self.context.i64_type().const_int(0b001, false),
+                "tag",
+            )
+            .unwrap();
         tagged.into()
     }
 
     /// Box boolean into NaN-boxed value
     fn box_bool(&self, value: inkwell::values::IntValue<'ctx>) -> BasicValueEnum<'ctx> {
         // Extend i1 to i64, shift to bit 3, OR with tag 0b011
-        let extended = self.builder.build_int_z_extend(value, self.context.i64_type(), "ext").unwrap();
-        let shifted = self.builder.build_left_shift(extended, self.context.i64_type().const_int(3, false), "shift").unwrap();
-        let tagged = self.builder.build_or(shifted, self.context.i64_type().const_int(0b011, false), "tag").unwrap();
+        let extended = self
+            .builder
+            .build_int_z_extend(value, self.context.i64_type(), "ext")
+            .unwrap();
+        let shifted = self
+            .builder
+            .build_left_shift(
+                extended,
+                self.context.i64_type().const_int(3, false),
+                "shift",
+            )
+            .unwrap();
+        let tagged = self
+            .builder
+            .build_or(
+                shifted,
+                self.context.i64_type().const_int(0b011, false),
+                "tag",
+            )
+            .unwrap();
         tagged.into()
     }
 
@@ -945,14 +1093,22 @@ impl<'ctx> CodegenContext<'ctx> {
         if elements.is_empty() {
             // Empty list: call rt_list_new()
             let rt_list_new = self.get_or_declare_rt_list_new();
-            let call_result = self.builder.build_call(rt_list_new, &[], "empty_list").unwrap();
+            let call_result = self
+                .builder
+                .build_call(rt_list_new, &[], "empty_list")
+                .unwrap();
             Ok(call_result.try_as_basic_value().left().unwrap())
         } else if has_spread {
             // List with spread elements: build incrementally
             // Start with empty list
             let rt_list_new = self.get_or_declare_rt_list_new();
-            let mut result = self.builder.build_call(rt_list_new, &[], "spread_list").unwrap()
-                .try_as_basic_value().left().unwrap();
+            let mut result = self
+                .builder
+                .build_call(rt_list_new, &[], "spread_list")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap();
 
             for element in elements {
                 match element {
@@ -969,11 +1125,17 @@ impl<'ctx> CodegenContext<'ctx> {
                         };
                         let spread_val = self.compile_expr(&typed_elem)?;
                         let rt_list_concat = self.get_or_declare_rt_list_concat();
-                        result = self.builder.build_call(
-                            rt_list_concat,
-                            &[result.into(), spread_val.into()],
-                            "spread_concat",
-                        ).unwrap().try_as_basic_value().left().unwrap();
+                        result = self
+                            .builder
+                            .build_call(
+                                rt_list_concat,
+                                &[result.into(), spread_val.into()],
+                                "spread_concat",
+                            )
+                            .unwrap()
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap();
                     }
                     _ => {
                         // Regular element: push to list
@@ -988,11 +1150,17 @@ impl<'ctx> CodegenContext<'ctx> {
                         };
                         let elem_val = self.compile_expr(&typed_elem)?;
                         let rt_list_push = self.get_or_declare_rt_list_push();
-                        result = self.builder.build_call(
-                            rt_list_push,
-                            &[result.into(), elem_val.into()],
-                            "list_push",
-                        ).unwrap().try_as_basic_value().left().unwrap();
+                        result = self
+                            .builder
+                            .build_call(
+                                rt_list_push,
+                                &[result.into(), elem_val.into()],
+                                "list_push",
+                            )
+                            .unwrap()
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap();
                     }
                 }
             }
@@ -1019,34 +1187,48 @@ impl<'ctx> CodegenContext<'ctx> {
             // Allocate an array on the stack to hold the elements
             let i64_type = self.context.i64_type();
             let array_type = i64_type.array_type(elements.len() as u32);
-            let array_alloca = self.builder.build_alloca(array_type, "list_elements").unwrap();
+            let array_alloca = self
+                .builder
+                .build_alloca(array_type, "list_elements")
+                .unwrap();
 
             // Store each element in the array
             for (i, elem) in compiled_elements.iter().enumerate() {
                 let index = self.context.i64_type().const_int(i as u64, false);
                 let elem_ptr = unsafe {
-                    self.builder.build_in_bounds_gep(
-                        array_type,
-                        array_alloca,
-                        &[self.context.i64_type().const_zero(), index],
-                        &format!("elem_ptr_{}", i)
-                    ).unwrap()
+                    self.builder
+                        .build_in_bounds_gep(
+                            array_type,
+                            array_alloca,
+                            &[self.context.i64_type().const_zero(), index],
+                            &format!("elem_ptr_{}", i),
+                        )
+                        .unwrap()
                 };
                 self.builder.build_store(elem_ptr, *elem).unwrap();
             }
 
             // Cast array pointer to *const Value (i64*)
             let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
-            let values_ptr = self.builder.build_pointer_cast(array_alloca, ptr_type, "values_ptr").unwrap();
+            let values_ptr = self
+                .builder
+                .build_pointer_cast(array_alloca, ptr_type, "values_ptr")
+                .unwrap();
 
             // Call rt_list_from_values(values, count)
             let rt_list_from_values = self.get_or_declare_rt_list_from_values();
-            let count = self.context.i64_type().const_int(elements.len() as u64, false);
-            let call_result = self.builder.build_call(
-                rt_list_from_values,
-                &[values_ptr.into(), count.into()],
-                "list"
-            ).unwrap();
+            let count = self
+                .context
+                .i64_type()
+                .const_int(elements.len() as u64, false);
+            let call_result = self
+                .builder
+                .build_call(
+                    rt_list_from_values,
+                    &[values_ptr.into(), count.into()],
+                    "list",
+                )
+                .unwrap();
 
             Ok(call_result.try_as_basic_value().left().unwrap())
         }
@@ -1110,7 +1292,10 @@ impl<'ctx> CodegenContext<'ctx> {
         if elements.is_empty() {
             // Empty set: call rt_set_new()
             let rt_set_new = self.get_or_declare_rt_set_new();
-            let call_result = self.builder.build_call(rt_set_new, &[], "empty_set").unwrap();
+            let call_result = self
+                .builder
+                .build_call(rt_set_new, &[], "empty_set")
+                .unwrap();
             Ok(call_result.try_as_basic_value().left().unwrap())
         } else {
             // Non-empty set: compile elements and call rt_set_from_values(values, count)
@@ -1132,34 +1317,48 @@ impl<'ctx> CodegenContext<'ctx> {
             // Allocate an array on the stack
             let i64_type = self.context.i64_type();
             let array_type = i64_type.array_type(elements.len() as u32);
-            let array_alloca = self.builder.build_alloca(array_type, "set_elements").unwrap();
+            let array_alloca = self
+                .builder
+                .build_alloca(array_type, "set_elements")
+                .unwrap();
 
             // Store each element in the array
             for (i, elem) in compiled_elements.iter().enumerate() {
                 let index = self.context.i64_type().const_int(i as u64, false);
                 let elem_ptr = unsafe {
-                    self.builder.build_in_bounds_gep(
-                        array_type,
-                        array_alloca,
-                        &[self.context.i64_type().const_zero(), index],
-                        &format!("elem_ptr_{}", i)
-                    ).unwrap()
+                    self.builder
+                        .build_in_bounds_gep(
+                            array_type,
+                            array_alloca,
+                            &[self.context.i64_type().const_zero(), index],
+                            &format!("elem_ptr_{}", i),
+                        )
+                        .unwrap()
                 };
                 self.builder.build_store(elem_ptr, *elem).unwrap();
             }
 
             // Cast array pointer to *const Value
             let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
-            let values_ptr = self.builder.build_pointer_cast(array_alloca, ptr_type, "values_ptr").unwrap();
+            let values_ptr = self
+                .builder
+                .build_pointer_cast(array_alloca, ptr_type, "values_ptr")
+                .unwrap();
 
             // Call rt_set_from_values(values, count)
             let rt_set_from_values = self.get_or_declare_rt_set_from_values();
-            let count = self.context.i64_type().const_int(elements.len() as u64, false);
-            let call_result = self.builder.build_call(
-                rt_set_from_values,
-                &[values_ptr.into(), count.into()],
-                "set"
-            ).unwrap();
+            let count = self
+                .context
+                .i64_type()
+                .const_int(elements.len() as u64, false);
+            let call_result = self
+                .builder
+                .build_call(
+                    rt_set_from_values,
+                    &[values_ptr.into(), count.into()],
+                    "set",
+                )
+                .unwrap();
 
             Ok(call_result.try_as_basic_value().left().unwrap())
         }
@@ -1191,11 +1390,17 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Compile a dict literal
-    fn compile_dict(&mut self, entries: &[(Expr, Expr)]) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_dict(
+        &mut self,
+        entries: &[(Expr, Expr)],
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         if entries.is_empty() {
             // Empty dict: call rt_dict_new()
             let rt_dict_new = self.get_or_declare_rt_dict_new();
-            let call_result = self.builder.build_call(rt_dict_new, &[], "empty_dict").unwrap();
+            let call_result = self
+                .builder
+                .build_call(rt_dict_new, &[], "empty_dict")
+                .unwrap();
             Ok(call_result.try_as_basic_value().left().unwrap())
         } else {
             // Non-empty dict: compile keys and values separately
@@ -1235,7 +1440,10 @@ impl<'ctx> CodegenContext<'ctx> {
             let array_type = i64_type.array_type(entries.len() as u32);
 
             let keys_alloca = self.builder.build_alloca(array_type, "dict_keys").unwrap();
-            let values_alloca = self.builder.build_alloca(array_type, "dict_values").unwrap();
+            let values_alloca = self
+                .builder
+                .build_alloca(array_type, "dict_values")
+                .unwrap();
 
             // Store keys and values
             for (i, (key, value)) in compiled_keys.iter().zip(compiled_values.iter()).enumerate() {
@@ -1243,40 +1451,56 @@ impl<'ctx> CodegenContext<'ctx> {
 
                 // Store key
                 let key_ptr = unsafe {
-                    self.builder.build_in_bounds_gep(
-                        array_type,
-                        keys_alloca,
-                        &[self.context.i64_type().const_zero(), index],
-                        &format!("key_ptr_{}", i)
-                    ).unwrap()
+                    self.builder
+                        .build_in_bounds_gep(
+                            array_type,
+                            keys_alloca,
+                            &[self.context.i64_type().const_zero(), index],
+                            &format!("key_ptr_{}", i),
+                        )
+                        .unwrap()
                 };
                 self.builder.build_store(key_ptr, *key).unwrap();
 
                 // Store value
                 let value_ptr = unsafe {
-                    self.builder.build_in_bounds_gep(
-                        array_type,
-                        values_alloca,
-                        &[self.context.i64_type().const_zero(), index],
-                        &format!("value_ptr_{}", i)
-                    ).unwrap()
+                    self.builder
+                        .build_in_bounds_gep(
+                            array_type,
+                            values_alloca,
+                            &[self.context.i64_type().const_zero(), index],
+                            &format!("value_ptr_{}", i),
+                        )
+                        .unwrap()
                 };
                 self.builder.build_store(value_ptr, *value).unwrap();
             }
 
             // Cast pointers
             let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
-            let keys_ptr = self.builder.build_pointer_cast(keys_alloca, ptr_type, "keys_ptr").unwrap();
-            let values_ptr = self.builder.build_pointer_cast(values_alloca, ptr_type, "values_ptr").unwrap();
+            let keys_ptr = self
+                .builder
+                .build_pointer_cast(keys_alloca, ptr_type, "keys_ptr")
+                .unwrap();
+            let values_ptr = self
+                .builder
+                .build_pointer_cast(values_alloca, ptr_type, "values_ptr")
+                .unwrap();
 
             // Call rt_dict_from_entries(keys, values, count)
             let rt_dict_from_entries = self.get_or_declare_rt_dict_from_entries();
-            let count = self.context.i64_type().const_int(entries.len() as u64, false);
-            let call_result = self.builder.build_call(
-                rt_dict_from_entries,
-                &[keys_ptr.into(), values_ptr.into(), count.into()],
-                "dict"
-            ).unwrap();
+            let count = self
+                .context
+                .i64_type()
+                .const_int(entries.len() as u64, false);
+            let call_result = self
+                .builder
+                .build_call(
+                    rt_dict_from_entries,
+                    &[keys_ptr.into(), values_ptr.into(), count.into()],
+                    "dict",
+                )
+                .unwrap();
 
             Ok(call_result.try_as_basic_value().left().unwrap())
         }
@@ -1434,11 +1658,10 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Call rt_get(index, collection)
         let rt_get = self.get_or_declare_rt_get();
-        let call_result = self.builder.build_call(
-            rt_get,
-            &[index_val.into(), collection_val.into()],
-            "index"
-        ).unwrap();
+        let call_result = self
+            .builder
+            .build_call(rt_get, &[index_val.into(), collection_val.into()], "index")
+            .unwrap();
 
         Ok(call_result.try_as_basic_value().left().unwrap())
     }
@@ -1451,11 +1674,15 @@ impl<'ctx> CodegenContext<'ctx> {
         else_branch: Option<&Expr>,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Get the current function (required for creating basic blocks)
-        let current_fn = self.builder.get_insert_block()
+        let current_fn = self
+            .builder
+            .get_insert_block()
             .and_then(|bb| bb.get_parent())
-            .ok_or_else(|| CompileError::UnsupportedExpression(
-                "if expression requires a function context".to_string()
-            ))?;
+            .ok_or_else(|| {
+                CompileError::UnsupportedExpression(
+                    "if expression requires a function context".to_string(),
+                )
+            })?;
 
         // Compile the condition
         let cond_ty = self.infer_expr_type(condition);
@@ -1471,19 +1698,24 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Call rt_is_truthy to handle all value types (not just booleans)
         let rt_is_truthy = self.get_or_declare_rt_is_truthy();
-        let is_truthy = self.builder.build_call(
-            rt_is_truthy,
-            &[cond_val.into()],
-            "is_truthy",
-        ).unwrap().try_as_basic_value().left().unwrap();
+        let is_truthy = self
+            .builder
+            .build_call(rt_is_truthy, &[cond_val.into()], "is_truthy")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap();
 
         // Convert i64 result to i1 for conditional branch
-        let cond_bool = self.builder.build_int_compare(
-            inkwell::IntPredicate::NE,
-            is_truthy.into_int_value(),
-            self.context.i64_type().const_zero(),
-            "truthy_bool",
-        ).unwrap();
+        let cond_bool = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                is_truthy.into_int_value(),
+                self.context.i64_type().const_zero(),
+                "truthy_bool",
+            )
+            .unwrap();
 
         // Create basic blocks for then, else, and merge
         let then_bb = self.context.append_basic_block(current_fn, "then");
@@ -1491,7 +1723,9 @@ impl<'ctx> CodegenContext<'ctx> {
         let merge_bb = self.context.append_basic_block(current_fn, "merge");
 
         // Build conditional branch
-        self.builder.build_conditional_branch(cond_bool, then_bb, else_bb).unwrap();
+        self.builder
+            .build_conditional_branch(cond_bool, then_bb, else_bb)
+            .unwrap();
 
         // Compile then branch
         self.builder.position_at_end(then_bb);
@@ -1529,7 +1763,10 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Merge block with phi node
         self.builder.position_at_end(merge_bb);
-        let phi = self.builder.build_phi(self.context.i64_type(), "if_result").unwrap();
+        let phi = self
+            .builder
+            .build_phi(self.context.i64_type(), "if_result")
+            .unwrap();
         phi.add_incoming(&[(&then_val, then_end_bb), (&else_val, else_end_bb)]);
 
         Ok(phi.as_basic_value())
@@ -1547,11 +1784,15 @@ impl<'ctx> CodegenContext<'ctx> {
         else_branch: Option<&Expr>,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Get the current function
-        let current_fn = self.builder.get_insert_block()
+        let current_fn = self
+            .builder
+            .get_insert_block()
             .and_then(|bb| bb.get_parent())
-            .ok_or_else(|| CompileError::UnsupportedExpression(
-                "if-let expression requires a function context".to_string()
-            ))?;
+            .ok_or_else(|| {
+                CompileError::UnsupportedExpression(
+                    "if-let expression requires a function context".to_string(),
+                )
+            })?;
 
         // Compile the value expression
         let value_ty = self.infer_expr_type(value);
@@ -1567,19 +1808,24 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Call rt_is_truthy to check if value is truthy
         let rt_is_truthy = self.get_or_declare_rt_is_truthy();
-        let is_truthy = self.builder.build_call(
-            rt_is_truthy,
-            &[value_val.into()],
-            "is_truthy",
-        ).unwrap().try_as_basic_value().left().unwrap();
+        let is_truthy = self
+            .builder
+            .build_call(rt_is_truthy, &[value_val.into()], "is_truthy")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap();
 
         // Convert to bool
-        let cond_bool = self.builder.build_int_compare(
-            inkwell::IntPredicate::NE,
-            is_truthy.into_int_value(),
-            self.context.i64_type().const_zero(),
-            "truthy_bool",
-        ).unwrap();
+        let cond_bool = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                is_truthy.into_int_value(),
+                self.context.i64_type().const_zero(),
+                "truthy_bool",
+            )
+            .unwrap();
 
         // Create basic blocks
         let then_bb = self.context.append_basic_block(current_fn, "if_let_then");
@@ -1587,7 +1833,9 @@ impl<'ctx> CodegenContext<'ctx> {
         let merge_bb = self.context.append_basic_block(current_fn, "if_let_merge");
 
         // Branch based on truthiness
-        self.builder.build_conditional_branch(cond_bool, then_bb, else_bb).unwrap();
+        self.builder
+            .build_conditional_branch(cond_bool, then_bb, else_bb)
+            .unwrap();
 
         // Compile then branch (with pattern binding)
         self.builder.position_at_end(then_bb);
@@ -1636,7 +1884,10 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Merge with phi
         self.builder.position_at_end(merge_bb);
-        let phi = self.builder.build_phi(self.context.i64_type(), "if_let_result").unwrap();
+        let phi = self
+            .builder
+            .build_phi(self.context.i64_type(), "if_let_result")
+            .unwrap();
         phi.add_incoming(&[(&then_val, then_end_bb), (&else_val, else_end_bb)]);
 
         Ok(phi.as_basic_value())
@@ -1658,7 +1909,12 @@ impl<'ctx> CodegenContext<'ctx> {
         // First, collect all mutable variables that will be declared in this block
         let mut mutable_vars: HashSet<String> = HashSet::new();
         for stmt in stmts {
-            if let Stmt::Let { mutable: true, pattern: Pattern::Identifier(name), .. } = stmt {
+            if let Stmt::Let {
+                mutable: true,
+                pattern: Pattern::Identifier(name),
+                ..
+            } = stmt
+            {
                 mutable_vars.insert(name.clone());
             }
         }
@@ -1668,11 +1924,13 @@ impl<'ctx> CodegenContext<'ctx> {
         for stmt in stmts {
             match stmt {
                 Stmt::Let { value, .. } => {
-                    let captures = self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
+                    let captures =
+                        self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
                     self.cell_variables.extend(captures);
                 }
                 Stmt::Expr(expr) | Stmt::Return(expr) | Stmt::Break(expr) => {
-                    let captures = self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
+                    let captures =
+                        self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
                     self.cell_variables.extend(captures);
                 }
             }
@@ -1726,7 +1984,12 @@ impl<'ctx> CodegenContext<'ctx> {
                     self.builder.build_return(Some(&return_val)).unwrap();
 
                     // Create a new basic block for any code after return (unreachable)
-                    let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let func = self
+                        .builder
+                        .get_insert_block()
+                        .unwrap()
+                        .get_parent()
+                        .unwrap();
                     let unreachable_block = self.context.append_basic_block(func, "after_return");
                     self.builder.position_at_end(unreachable_block);
                 }
@@ -1745,17 +2008,23 @@ impl<'ctx> CodegenContext<'ctx> {
 
                     // Call rt_break to signal break and store the value
                     let rt_break = self.get_or_declare_rt_break();
-                    let result = self.builder.build_call(
-                        rt_break,
-                        &[break_val.into()],
-                        "break_result",
-                    ).unwrap();
+                    let result = self
+                        .builder
+                        .build_call(rt_break, &[break_val.into()], "break_result")
+                        .unwrap();
 
                     // Return from the current function with the break value
-                    self.builder.build_return(Some(&result.try_as_basic_value().left().unwrap())).unwrap();
+                    self.builder
+                        .build_return(Some(&result.try_as_basic_value().left().unwrap()))
+                        .unwrap();
 
                     // Create a new basic block for any code after break (unreachable)
-                    let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let func = self
+                        .builder
+                        .get_insert_block()
+                        .unwrap()
+                        .get_parent()
+                        .unwrap();
                     let unreachable_block = self.context.append_basic_block(func, "after_break");
                     self.builder.position_at_end(unreachable_block);
                 }
@@ -1832,11 +2101,15 @@ impl<'ctx> CodegenContext<'ctx> {
         arms: &[MatchArm],
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Get the current function
-        let current_fn = self.builder.get_insert_block()
+        let current_fn = self
+            .builder
+            .get_insert_block()
             .and_then(|bb| bb.get_parent())
-            .ok_or_else(|| CompileError::UnsupportedExpression(
-                "match expression requires a function context".to_string()
-            ))?;
+            .ok_or_else(|| {
+                CompileError::UnsupportedExpression(
+                    "match expression requires a function context".to_string(),
+                )
+            })?;
 
         // Compile the subject expression
         let subject_ty = self.infer_expr_type(subject);
@@ -1854,24 +2127,39 @@ impl<'ctx> CodegenContext<'ctx> {
         let merge_bb = self.context.append_basic_block(current_fn, "match_merge");
 
         // Track incoming values for the phi node
-        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
+        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+            Vec::new();
 
         // Create blocks for each arm
-        let arm_blocks: Vec<_> = arms.iter().enumerate()
-            .map(|(i, _)| self.context.append_basic_block(current_fn, &format!("match_arm_{}", i)))
+        let arm_blocks: Vec<_> = arms
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                self.context
+                    .append_basic_block(current_fn, &format!("match_arm_{}", i))
+            })
             .collect();
 
         // Create a fallthrough block for when no pattern matches (returns nil)
-        let no_match_bb = self.context.append_basic_block(current_fn, "match_no_match");
+        let no_match_bb = self
+            .context
+            .append_basic_block(current_fn, "match_no_match");
 
         // Generate pattern tests - each test branches to arm body on match, or continues to next test
         // We need to create test blocks for each arm (separate from body blocks)
-        let test_blocks: Vec<_> = arms.iter().enumerate()
-            .map(|(i, _)| self.context.append_basic_block(current_fn, &format!("match_test_{}", i)))
+        let test_blocks: Vec<_> = arms
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                self.context
+                    .append_basic_block(current_fn, &format!("match_test_{}", i))
+            })
             .collect();
 
         // Branch from current position to first test block
-        self.builder.build_unconditional_branch(test_blocks[0]).unwrap();
+        self.builder
+            .build_unconditional_branch(test_blocks[0])
+            .unwrap();
 
         // Generate pattern tests and branches for each arm
         for (i, arm) in arms.iter().enumerate() {
@@ -1930,7 +2218,10 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Merge block with phi
         self.builder.position_at_end(merge_bb);
-        let phi = self.builder.build_phi(self.context.i64_type(), "match_result").unwrap();
+        let phi = self
+            .builder
+            .build_phi(self.context.i64_type(), "match_result")
+            .unwrap();
         for (val, bb) in incoming {
             phi.add_incoming(&[(&val, bb)]);
         }
@@ -1963,7 +2254,9 @@ impl<'ctx> CodegenContext<'ctx> {
                     };
                     let guard_val = self.compile_expr(&guard_typed)?;
                     let guard_bool = self.value_to_bool(guard_val);
-                    self.builder.build_conditional_branch(guard_bool, match_bb, no_match_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(guard_bool, match_bb, no_match_bb)
+                        .unwrap();
                 } else {
                     self.builder.build_unconditional_branch(match_bb).unwrap();
                 }
@@ -1990,7 +2283,9 @@ impl<'ctx> CodegenContext<'ctx> {
                     // Restore variables (they'll be re-bound in the arm body)
                     self.variables = saved_variables;
 
-                    self.builder.build_conditional_branch(guard_bool, match_bb, no_match_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(guard_bool, match_bb, no_match_bb)
+                        .unwrap();
                 } else {
                     self.builder.build_unconditional_branch(match_bb).unwrap();
                 }
@@ -1999,21 +2294,27 @@ impl<'ctx> CodegenContext<'ctx> {
                 // Compare subject to literal
                 let lit_val = self.compile_literal(lit);
                 let rt_eq = self.get_or_declare_rt_eq();
-                let eq_result = self.builder.build_call(
-                    rt_eq,
-                    &[subject.into(), lit_val.into()],
-                    "eq_result",
-                ).unwrap();
+                let eq_result = self
+                    .builder
+                    .build_call(rt_eq, &[subject.into(), lit_val.into()], "eq_result")
+                    .unwrap();
                 let eq_val = eq_result.try_as_basic_value().left().unwrap();
                 let eq_bool = self.value_to_bool(eq_val);
 
                 if let Some(guard_expr) = guard {
                     // Create a guard test block
-                    let current_fn = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let current_fn = self
+                        .builder
+                        .get_insert_block()
+                        .unwrap()
+                        .get_parent()
+                        .unwrap();
                     let guard_bb = self.context.append_basic_block(current_fn, "guard_test");
 
                     // Branch to guard test if pattern matches, else to no_match
-                    self.builder.build_conditional_branch(eq_bool, guard_bb, no_match_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(eq_bool, guard_bb, no_match_bb)
+                        .unwrap();
 
                     // In guard block, test the guard
                     self.builder.position_at_end(guard_bb);
@@ -2028,24 +2329,30 @@ impl<'ctx> CodegenContext<'ctx> {
                     };
                     let guard_val = self.compile_expr(&guard_typed)?;
                     let guard_bool = self.value_to_bool(guard_val);
-                    self.builder.build_conditional_branch(guard_bool, match_bb, no_match_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(guard_bool, match_bb, no_match_bb)
+                        .unwrap();
                 } else {
-                    self.builder.build_conditional_branch(eq_bool, match_bb, no_match_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(eq_bool, match_bb, no_match_bb)
+                        .unwrap();
                 }
             }
-            Pattern::Range { start, end, inclusive } => {
+            Pattern::Range {
+                start,
+                end,
+                inclusive,
+            } => {
                 // Check if subject is >= start and (< end or <= end depending on inclusive)
                 let start_val = self.compile_integer(*start);
                 let subject_int = subject.into_int_value();
                 let start_int = start_val.into_int_value();
 
                 // subject >= start
-                let ge_start = self.builder.build_int_compare(
-                    IntPredicate::SGE,
-                    subject_int,
-                    start_int,
-                    "ge_start"
-                ).unwrap();
+                let ge_start = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGE, subject_int, start_int, "ge_start")
+                    .unwrap();
 
                 let in_range = if let Some(e) = end {
                     let end_val = self.compile_integer(*e);
@@ -2053,10 +2360,14 @@ impl<'ctx> CodegenContext<'ctx> {
 
                     let cmp = if *inclusive {
                         // subject <= end
-                        self.builder.build_int_compare(IntPredicate::SLE, subject_int, end_int, "le_end").unwrap()
+                        self.builder
+                            .build_int_compare(IntPredicate::SLE, subject_int, end_int, "le_end")
+                            .unwrap()
                     } else {
                         // subject < end
-                        self.builder.build_int_compare(IntPredicate::SLT, subject_int, end_int, "lt_end").unwrap()
+                        self.builder
+                            .build_int_compare(IntPredicate::SLT, subject_int, end_int, "lt_end")
+                            .unwrap()
                     };
 
                     // Combine: subject >= start AND subject </<=end
@@ -2067,9 +2378,16 @@ impl<'ctx> CodegenContext<'ctx> {
                 };
 
                 if let Some(guard_expr) = guard {
-                    let current_fn = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let current_fn = self
+                        .builder
+                        .get_insert_block()
+                        .unwrap()
+                        .get_parent()
+                        .unwrap();
                     let guard_bb = self.context.append_basic_block(current_fn, "guard_test");
-                    self.builder.build_conditional_branch(in_range, guard_bb, no_match_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(in_range, guard_bb, no_match_bb)
+                        .unwrap();
 
                     self.builder.position_at_end(guard_bb);
                     let guard_ty = self.infer_expr_type(guard_expr);
@@ -2083,9 +2401,13 @@ impl<'ctx> CodegenContext<'ctx> {
                     };
                     let guard_val = self.compile_expr(&guard_typed)?;
                     let guard_bool = self.value_to_bool(guard_val);
-                    self.builder.build_conditional_branch(guard_bool, match_bb, no_match_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(guard_bool, match_bb, no_match_bb)
+                        .unwrap();
                 } else {
-                    self.builder.build_conditional_branch(in_range, match_bb, no_match_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(in_range, match_bb, no_match_bb)
+                        .unwrap();
                 }
             }
             Pattern::List(patterns) => {
@@ -2109,47 +2431,52 @@ impl<'ctx> CodegenContext<'ctx> {
 
                 // Get subject's length
                 let rt_size = self.get_or_declare_rt_size();
-                let size_result = self.builder.build_call(
-                    rt_size,
-                    &[subject.into()],
-                    "list_size",
-                ).unwrap();
+                let size_result = self
+                    .builder
+                    .build_call(rt_size, &[subject.into()], "list_size")
+                    .unwrap();
                 let size_val = size_result.try_as_basic_value().left().unwrap();
 
                 // Extract the integer value from tagged result (shift right by 3)
                 let size_int = size_val.into_int_value();
-                let actual_len = self.builder.build_right_shift(
-                    size_int,
-                    self.context.i64_type().const_int(3, false),
-                    false,
-                    "actual_len"
-                ).unwrap();
+                let actual_len = self
+                    .builder
+                    .build_right_shift(
+                        size_int,
+                        self.context.i64_type().const_int(3, false),
+                        false,
+                        "actual_len",
+                    )
+                    .unwrap();
 
                 let expected_len = self.context.i64_type().const_int(fixed_count as u64, false);
 
                 // Check length
                 let len_ok = if has_rest {
                     // With rest pattern: actual_len >= fixed_count
-                    self.builder.build_int_compare(
-                        IntPredicate::UGE,
-                        actual_len,
-                        expected_len,
-                        "len_ge"
-                    ).unwrap()
+                    self.builder
+                        .build_int_compare(IntPredicate::UGE, actual_len, expected_len, "len_ge")
+                        .unwrap()
                 } else {
                     // Without rest: actual_len == patterns.len()
-                    self.builder.build_int_compare(
-                        IntPredicate::EQ,
-                        actual_len,
-                        expected_len,
-                        "len_eq"
-                    ).unwrap()
+                    self.builder
+                        .build_int_compare(IntPredicate::EQ, actual_len, expected_len, "len_eq")
+                        .unwrap()
                 };
 
                 // If length doesn't match, go to no_match
-                let current_fn = self.builder.get_insert_block().unwrap().get_parent().unwrap();
-                let check_elements_bb = self.context.append_basic_block(current_fn, "check_elements");
-                self.builder.build_conditional_branch(len_ok, check_elements_bb, no_match_bb).unwrap();
+                let current_fn = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap();
+                let check_elements_bb = self
+                    .context
+                    .append_basic_block(current_fn, "check_elements");
+                self.builder
+                    .build_conditional_branch(len_ok, check_elements_bb, no_match_bb)
+                    .unwrap();
 
                 // Check each element pattern
                 self.builder.position_at_end(check_elements_bb);
@@ -2188,41 +2515,56 @@ impl<'ctx> CodegenContext<'ctx> {
                         // Element after rest: compute index from end
                         // index = actual_len - (patterns_after_rest - after_rest_offset)
                         let offset_from_end = (patterns_after_rest - after_rest_offset) as u64;
-                        let idx_from_end = self.builder.build_int_sub(
-                            actual_len,
-                            self.context.i64_type().const_int(offset_from_end, false),
-                            "idx_from_end"
-                        ).unwrap();
+                        let idx_from_end = self
+                            .builder
+                            .build_int_sub(
+                                actual_len,
+                                self.context.i64_type().const_int(offset_from_end, false),
+                                "idx_from_end",
+                            )
+                            .unwrap();
 
                         let rt_get = self.get_or_declare_rt_get();
                         // Convert to tagged integer for rt_get
-                        let tagged_idx = self.builder.build_left_shift(
-                            idx_from_end,
-                            self.context.i64_type().const_int(3, false),
-                            "shift_idx"
-                        ).unwrap();
-                        let tagged_idx = self.builder.build_or(
-                            tagged_idx,
-                            self.context.i64_type().const_int(0b001, false),
-                            "tag_idx"
-                        ).unwrap();
+                        let tagged_idx = self
+                            .builder
+                            .build_left_shift(
+                                idx_from_end,
+                                self.context.i64_type().const_int(3, false),
+                                "shift_idx",
+                            )
+                            .unwrap();
+                        let tagged_idx = self
+                            .builder
+                            .build_or(
+                                tagged_idx,
+                                self.context.i64_type().const_int(0b001, false),
+                                "tag_idx",
+                            )
+                            .unwrap();
 
-                        let elem_result = self.builder.build_call(
-                            rt_get,
-                            &[tagged_idx.into(), subject.into()],
-                            &format!("elem_from_end_{}", after_rest_offset),
-                        ).unwrap();
+                        let elem_result = self
+                            .builder
+                            .build_call(
+                                rt_get,
+                                &[tagged_idx.into(), subject.into()],
+                                &format!("elem_from_end_{}", after_rest_offset),
+                            )
+                            .unwrap();
                         after_rest_offset += 1;
                         elem_result.try_as_basic_value().left().unwrap()
                     } else {
                         // Element before rest (or no rest): use direct index
                         let idx_val = self.compile_integer(i as i64);
                         let rt_get = self.get_or_declare_rt_get();
-                        let elem_result = self.builder.build_call(
-                            rt_get,
-                            &[idx_val.into(), subject.into()],
-                            &format!("elem_{}", i),
-                        ).unwrap();
+                        let elem_result = self
+                            .builder
+                            .build_call(
+                                rt_get,
+                                &[idx_val.into(), subject.into()],
+                                &format!("elem_{}", i),
+                            )
+                            .unwrap();
                         elem_result.try_as_basic_value().left().unwrap()
                     };
 
@@ -2235,17 +2577,21 @@ impl<'ctx> CodegenContext<'ctx> {
                             // Compare element to literal
                             let lit_val = self.compile_literal(lit);
                             let rt_eq = self.get_or_declare_rt_eq();
-                            let eq_result = self.builder.build_call(
-                                rt_eq,
-                                &[elem_val.into(), lit_val.into()],
-                                "elem_eq",
-                            ).unwrap();
+                            let eq_result = self
+                                .builder
+                                .build_call(rt_eq, &[elem_val.into(), lit_val.into()], "elem_eq")
+                                .unwrap();
                             let eq_val = eq_result.try_as_basic_value().left().unwrap();
                             let eq_bool = self.value_to_bool(eq_val);
 
                             // If element doesn't match, fail
-                            let next_bb = self.context.append_basic_block(current_fn, &format!("check_elem_{}", elem_idx + 1));
-                            self.builder.build_conditional_branch(eq_bool, next_bb, no_match_bb).unwrap();
+                            let next_bb = self.context.append_basic_block(
+                                current_fn,
+                                &format!("check_elem_{}", elem_idx + 1),
+                            );
+                            self.builder
+                                .build_conditional_branch(eq_bool, next_bb, no_match_bb)
+                                .unwrap();
                             self.builder.position_at_end(next_bb);
                         }
                         Pattern::List(nested_patterns) => {
@@ -2253,19 +2599,22 @@ impl<'ctx> CodegenContext<'ctx> {
                             // We already have elem_val from above
 
                             // Check the nested list's length
-                            let nested_size_result = self.builder.build_call(
-                                rt_size,
-                                &[elem_val.into()],
-                                "nested_size",
-                            ).unwrap();
-                            let nested_size_val = nested_size_result.try_as_basic_value().left().unwrap();
+                            let nested_size_result = self
+                                .builder
+                                .build_call(rt_size, &[elem_val.into()], "nested_size")
+                                .unwrap();
+                            let nested_size_val =
+                                nested_size_result.try_as_basic_value().left().unwrap();
                             let nested_size_int = nested_size_val.into_int_value();
-                            let nested_actual_len = self.builder.build_right_shift(
-                                nested_size_int,
-                                self.context.i64_type().const_int(3, false),
-                                false,
-                                "nested_actual_len"
-                            ).unwrap();
+                            let nested_actual_len = self
+                                .builder
+                                .build_right_shift(
+                                    nested_size_int,
+                                    self.context.i64_type().const_int(3, false),
+                                    false,
+                                    "nested_actual_len",
+                                )
+                                .unwrap();
 
                             // Count fixed patterns in nested list (excluding rest patterns)
                             let mut nested_fixed_count = 0usize;
@@ -2278,26 +2627,41 @@ impl<'ctx> CodegenContext<'ctx> {
                                 }
                             }
 
-                            let nested_expected_len = self.context.i64_type().const_int(nested_fixed_count as u64, false);
+                            let nested_expected_len = self
+                                .context
+                                .i64_type()
+                                .const_int(nested_fixed_count as u64, false);
                             let nested_len_ok = if nested_has_rest {
-                                self.builder.build_int_compare(
-                                    IntPredicate::UGE,
-                                    nested_actual_len,
-                                    nested_expected_len,
-                                    "nested_len_ge"
-                                ).unwrap()
+                                self.builder
+                                    .build_int_compare(
+                                        IntPredicate::UGE,
+                                        nested_actual_len,
+                                        nested_expected_len,
+                                        "nested_len_ge",
+                                    )
+                                    .unwrap()
                             } else {
-                                self.builder.build_int_compare(
-                                    IntPredicate::EQ,
-                                    nested_actual_len,
-                                    nested_expected_len,
-                                    "nested_len_eq"
-                                ).unwrap()
+                                self.builder
+                                    .build_int_compare(
+                                        IntPredicate::EQ,
+                                        nested_actual_len,
+                                        nested_expected_len,
+                                        "nested_len_eq",
+                                    )
+                                    .unwrap()
                             };
 
                             // If nested length doesn't match, fail
-                            let nested_check_bb = self.context.append_basic_block(current_fn, &format!("check_nested_{}", i));
-                            self.builder.build_conditional_branch(nested_len_ok, nested_check_bb, no_match_bb).unwrap();
+                            let nested_check_bb = self
+                                .context
+                                .append_basic_block(current_fn, &format!("check_nested_{}", i));
+                            self.builder
+                                .build_conditional_branch(
+                                    nested_len_ok,
+                                    nested_check_bb,
+                                    no_match_bb,
+                                )
+                                .unwrap();
                             self.builder.position_at_end(nested_check_bb);
 
                             // Check each element in the nested pattern
@@ -2310,43 +2674,62 @@ impl<'ctx> CodegenContext<'ctx> {
                                     Pattern::Literal(lit) => {
                                         // Compare nested element to literal
                                         let nested_idx_val = self.compile_integer(ni as i64);
-                                        let nested_elem_result = self.builder.build_call(
-                                            rt_get_nested,
-                                            &[nested_idx_val.into(), elem_val.into()],
-                                            &format!("nested_elem_{}_{}", i, ni),
-                                        ).unwrap();
-                                        let nested_elem_val = nested_elem_result.try_as_basic_value().left().unwrap();
+                                        let nested_elem_result = self
+                                            .builder
+                                            .build_call(
+                                                rt_get_nested,
+                                                &[nested_idx_val.into(), elem_val.into()],
+                                                &format!("nested_elem_{}_{}", i, ni),
+                                            )
+                                            .unwrap();
+                                        let nested_elem_val =
+                                            nested_elem_result.try_as_basic_value().left().unwrap();
 
                                         let lit_val = self.compile_literal(lit);
                                         let rt_eq = self.get_or_declare_rt_eq();
-                                        let eq_result = self.builder.build_call(
-                                            rt_eq,
-                                            &[nested_elem_val.into(), lit_val.into()],
-                                            "nested_elem_eq",
-                                        ).unwrap();
-                                        let eq_val_cmp = eq_result.try_as_basic_value().left().unwrap();
+                                        let eq_result = self
+                                            .builder
+                                            .build_call(
+                                                rt_eq,
+                                                &[nested_elem_val.into(), lit_val.into()],
+                                                "nested_elem_eq",
+                                            )
+                                            .unwrap();
+                                        let eq_val_cmp =
+                                            eq_result.try_as_basic_value().left().unwrap();
                                         let eq_bool = self.value_to_bool(eq_val_cmp);
 
-                                        let next_nested_bb = self.context.append_basic_block(current_fn, &format!("check_nested_elem_{}_{}", i, ni + 1));
-                                        self.builder.build_conditional_branch(eq_bool, next_nested_bb, no_match_bb).unwrap();
+                                        let next_nested_bb = self.context.append_basic_block(
+                                            current_fn,
+                                            &format!("check_nested_elem_{}_{}", i, ni + 1),
+                                        );
+                                        self.builder
+                                            .build_conditional_branch(
+                                                eq_bool,
+                                                next_nested_bb,
+                                                no_match_bb,
+                                            )
+                                            .unwrap();
                                         self.builder.position_at_end(next_nested_bb);
                                     }
                                     Pattern::RestIdentifier(_) => {
                                         // Skip rest pattern in matching
                                     }
                                     _ => {
-                                        return Err(CompileError::UnsupportedPattern(
-                                            format!("Deeply nested pattern not yet supported: {:?}", np)
-                                        ));
+                                        return Err(CompileError::UnsupportedPattern(format!(
+                                            "Deeply nested pattern not yet supported: {:?}",
+                                            np
+                                        )));
                                     }
                                 }
                             }
                         }
                         _ => {
                             // Other patterns in list
-                            return Err(CompileError::UnsupportedPattern(
-                                format!("Pattern type not supported in list: {:?}", p)
-                            ));
+                            return Err(CompileError::UnsupportedPattern(format!(
+                                "Pattern type not supported in list: {:?}",
+                                p
+                            )));
                         }
                     }
 
@@ -2372,7 +2755,9 @@ impl<'ctx> CodegenContext<'ctx> {
                     let guard_bool = self.value_to_bool(guard_val);
 
                     self.variables = saved_variables;
-                    self.builder.build_conditional_branch(guard_bool, match_bb, no_match_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(guard_bool, match_bb, no_match_bb)
+                        .unwrap();
                 } else {
                     self.builder.build_unconditional_branch(match_bb).unwrap();
                 }
@@ -2380,7 +2765,7 @@ impl<'ctx> CodegenContext<'ctx> {
             Pattern::RestIdentifier(_) => {
                 // Rest pattern can only appear inside a list pattern
                 return Err(CompileError::UnsupportedPattern(
-                    "Rest pattern (..) can only appear inside list patterns".to_string()
+                    "Rest pattern (..) can only appear inside list patterns".to_string(),
                 ));
             }
         }
@@ -2400,7 +2785,10 @@ impl<'ctx> CodegenContext<'ctx> {
             }
             Pattern::Identifier(name) => {
                 // Bind the subject to this name
-                let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
+                let alloca = self
+                    .builder
+                    .build_alloca(self.context.i64_type(), name)
+                    .unwrap();
                 self.builder.build_store(alloca, subject).unwrap();
                 self.variables.insert(name.clone(), alloca);
                 Ok(())
@@ -2429,19 +2817,21 @@ impl<'ctx> CodegenContext<'ctx> {
 
                 // Get subject's length for computing indices from end
                 let rt_size = self.get_or_declare_rt_size();
-                let size_result = self.builder.build_call(
-                    rt_size,
-                    &[subject.into()],
-                    "subject_size",
-                ).unwrap();
+                let size_result = self
+                    .builder
+                    .build_call(rt_size, &[subject.into()], "subject_size")
+                    .unwrap();
                 let size_val = size_result.try_as_basic_value().left().unwrap();
                 let size_int = size_val.into_int_value();
-                let actual_len = self.builder.build_right_shift(
-                    size_int,
-                    self.context.i64_type().const_int(3, false),
-                    false,
-                    "actual_len"
-                ).unwrap();
+                let actual_len = self
+                    .builder
+                    .build_right_shift(
+                        size_int,
+                        self.context.i64_type().const_int(3, false),
+                        false,
+                        "actual_len",
+                    )
+                    .unwrap();
 
                 let mut after_rest_offset = 0usize;
                 for (i, p) in patterns.iter().enumerate() {
@@ -2452,46 +2842,65 @@ impl<'ctx> CodegenContext<'ctx> {
                             // Compute index based on position relative to rest
                             let elem_val = if is_after_rest {
                                 // Element after rest: compute index from end
-                                let offset_from_end = (patterns_after_rest - after_rest_offset) as u64;
-                                let idx_from_end = self.builder.build_int_sub(
-                                    actual_len,
-                                    self.context.i64_type().const_int(offset_from_end, false),
-                                    "idx_from_end"
-                                ).unwrap();
+                                let offset_from_end =
+                                    (patterns_after_rest - after_rest_offset) as u64;
+                                let idx_from_end = self
+                                    .builder
+                                    .build_int_sub(
+                                        actual_len,
+                                        self.context.i64_type().const_int(offset_from_end, false),
+                                        "idx_from_end",
+                                    )
+                                    .unwrap();
 
                                 // Convert to tagged integer
-                                let tagged_idx = self.builder.build_left_shift(
-                                    idx_from_end,
-                                    self.context.i64_type().const_int(3, false),
-                                    "shift_idx"
-                                ).unwrap();
-                                let tagged_idx = self.builder.build_or(
-                                    tagged_idx,
-                                    self.context.i64_type().const_int(0b001, false),
-                                    "tag_idx"
-                                ).unwrap();
+                                let tagged_idx = self
+                                    .builder
+                                    .build_left_shift(
+                                        idx_from_end,
+                                        self.context.i64_type().const_int(3, false),
+                                        "shift_idx",
+                                    )
+                                    .unwrap();
+                                let tagged_idx = self
+                                    .builder
+                                    .build_or(
+                                        tagged_idx,
+                                        self.context.i64_type().const_int(0b001, false),
+                                        "tag_idx",
+                                    )
+                                    .unwrap();
 
                                 let rt_get = self.get_or_declare_rt_get();
-                                let elem_result = self.builder.build_call(
-                                    rt_get,
-                                    &[tagged_idx.into(), subject.into()],
-                                    &format!("elem_from_end_{}", after_rest_offset),
-                                ).unwrap();
+                                let elem_result = self
+                                    .builder
+                                    .build_call(
+                                        rt_get,
+                                        &[tagged_idx.into(), subject.into()],
+                                        &format!("elem_from_end_{}", after_rest_offset),
+                                    )
+                                    .unwrap();
                                 after_rest_offset += 1;
                                 elem_result.try_as_basic_value().left().unwrap()
                             } else {
                                 // Element before rest (or no rest): use direct index
                                 let idx_val = self.compile_integer(i as i64);
                                 let rt_get = self.get_or_declare_rt_get();
-                                let elem_result = self.builder.build_call(
-                                    rt_get,
-                                    &[idx_val.into(), subject.into()],
-                                    &format!("elem_{}", i),
-                                ).unwrap();
+                                let elem_result = self
+                                    .builder
+                                    .build_call(
+                                        rt_get,
+                                        &[idx_val.into(), subject.into()],
+                                        &format!("elem_{}", i),
+                                    )
+                                    .unwrap();
                                 elem_result.try_as_basic_value().left().unwrap()
                             };
 
-                            let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
+                            let alloca = self
+                                .builder
+                                .build_alloca(self.context.i64_type(), name)
+                                .unwrap();
                             self.builder.build_store(alloca, elem_val).unwrap();
                             self.variables.insert(name.clone(), alloca);
                         }
@@ -2501,46 +2910,61 @@ impl<'ctx> CodegenContext<'ctx> {
                             // Use rt_skip to skip the first 'i' elements
                             let rt_skip = self.get_or_declare_rt_skip();
                             let skip_count = self.compile_integer(i as i64);
-                            let after_skip = self.builder.build_call(
-                                rt_skip,
-                                &[skip_count.into(), subject.into()],
-                                "after_skip",
-                            ).unwrap();
+                            let after_skip = self
+                                .builder
+                                .build_call(
+                                    rt_skip,
+                                    &[skip_count.into(), subject.into()],
+                                    "after_skip",
+                                )
+                                .unwrap();
                             let after_skip_val = after_skip.try_as_basic_value().left().unwrap();
 
                             // Now take (len - patterns_after_rest - i) elements from after_skip
                             // That's (actual_len - patterns_after_rest - i) elements
                             // But we can compute: we want actual_len - i - patterns_after_rest
-                            let total_skip = self.context.i64_type().const_int(
-                                (i + patterns_after_rest) as u64, false
-                            );
-                            let rest_len = self.builder.build_int_sub(
-                                actual_len,
-                                total_skip,
-                                "rest_len"
-                            ).unwrap();
+                            let total_skip = self
+                                .context
+                                .i64_type()
+                                .const_int((i + patterns_after_rest) as u64, false);
+                            let rest_len = self
+                                .builder
+                                .build_int_sub(actual_len, total_skip, "rest_len")
+                                .unwrap();
 
                             // Convert to tagged integer
-                            let tagged_rest_len = self.builder.build_left_shift(
-                                rest_len,
-                                self.context.i64_type().const_int(3, false),
-                                "shift_rest_len"
-                            ).unwrap();
-                            let tagged_rest_len = self.builder.build_or(
-                                tagged_rest_len,
-                                self.context.i64_type().const_int(0b001, false),
-                                "tag_rest_len"
-                            ).unwrap();
+                            let tagged_rest_len = self
+                                .builder
+                                .build_left_shift(
+                                    rest_len,
+                                    self.context.i64_type().const_int(3, false),
+                                    "shift_rest_len",
+                                )
+                                .unwrap();
+                            let tagged_rest_len = self
+                                .builder
+                                .build_or(
+                                    tagged_rest_len,
+                                    self.context.i64_type().const_int(0b001, false),
+                                    "tag_rest_len",
+                                )
+                                .unwrap();
 
                             let rt_take = self.get_or_declare_rt_take();
-                            let rest_result = self.builder.build_call(
-                                rt_take,
-                                &[tagged_rest_len.into(), after_skip_val.into()],
-                                "rest_val",
-                            ).unwrap();
+                            let rest_result = self
+                                .builder
+                                .build_call(
+                                    rt_take,
+                                    &[tagged_rest_len.into(), after_skip_val.into()],
+                                    "rest_val",
+                                )
+                                .unwrap();
                             let rest_val = rest_result.try_as_basic_value().left().unwrap();
 
-                            let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
+                            let alloca = self
+                                .builder
+                                .build_alloca(self.context.i64_type(), name)
+                                .unwrap();
                             self.builder.build_store(alloca, rest_val).unwrap();
                             self.variables.insert(name.clone(), alloca);
                         }
@@ -2554,40 +2978,56 @@ impl<'ctx> CodegenContext<'ctx> {
                             // Nested list - get the element first (considering rest position)
                             let nested_elem = if is_after_rest {
                                 // Element after rest: compute index from end
-                                let offset_from_end = (patterns_after_rest - after_rest_offset) as u64;
-                                let idx_from_end = self.builder.build_int_sub(
-                                    actual_len,
-                                    self.context.i64_type().const_int(offset_from_end, false),
-                                    "nested_idx_from_end"
-                                ).unwrap();
+                                let offset_from_end =
+                                    (patterns_after_rest - after_rest_offset) as u64;
+                                let idx_from_end = self
+                                    .builder
+                                    .build_int_sub(
+                                        actual_len,
+                                        self.context.i64_type().const_int(offset_from_end, false),
+                                        "nested_idx_from_end",
+                                    )
+                                    .unwrap();
 
-                                let tagged_idx = self.builder.build_left_shift(
-                                    idx_from_end,
-                                    self.context.i64_type().const_int(3, false),
-                                    "shift_nested_idx"
-                                ).unwrap();
-                                let tagged_idx = self.builder.build_or(
-                                    tagged_idx,
-                                    self.context.i64_type().const_int(0b001, false),
-                                    "tag_nested_idx"
-                                ).unwrap();
+                                let tagged_idx = self
+                                    .builder
+                                    .build_left_shift(
+                                        idx_from_end,
+                                        self.context.i64_type().const_int(3, false),
+                                        "shift_nested_idx",
+                                    )
+                                    .unwrap();
+                                let tagged_idx = self
+                                    .builder
+                                    .build_or(
+                                        tagged_idx,
+                                        self.context.i64_type().const_int(0b001, false),
+                                        "tag_nested_idx",
+                                    )
+                                    .unwrap();
 
                                 let rt_get = self.get_or_declare_rt_get();
-                                let nested_elem_result = self.builder.build_call(
-                                    rt_get,
-                                    &[tagged_idx.into(), subject.into()],
-                                    &format!("nested_elem_from_end_{}", after_rest_offset),
-                                ).unwrap();
+                                let nested_elem_result = self
+                                    .builder
+                                    .build_call(
+                                        rt_get,
+                                        &[tagged_idx.into(), subject.into()],
+                                        &format!("nested_elem_from_end_{}", after_rest_offset),
+                                    )
+                                    .unwrap();
                                 after_rest_offset += 1;
                                 nested_elem_result.try_as_basic_value().left().unwrap()
                             } else {
                                 let idx_val = self.compile_integer(i as i64);
                                 let rt_get = self.get_or_declare_rt_get();
-                                let nested_elem_result = self.builder.build_call(
-                                    rt_get,
-                                    &[idx_val.into(), subject.into()],
-                                    &format!("nested_elem_{}", i),
-                                ).unwrap();
+                                let nested_elem_result = self
+                                    .builder
+                                    .build_call(
+                                        rt_get,
+                                        &[idx_val.into(), subject.into()],
+                                        &format!("nested_elem_{}", i),
+                                    )
+                                    .unwrap();
                                 nested_elem_result.try_as_basic_value().left().unwrap()
                             };
 
@@ -2598,18 +3038,27 @@ impl<'ctx> CodegenContext<'ctx> {
                                     Pattern::Identifier(name) => {
                                         // Get element at index within nested list
                                         let nested_idx_val = self.compile_integer(ni as i64);
-                                        let elem_result = self.builder.build_call(
-                                            rt_get_inner,
-                                            &[nested_idx_val.into(), nested_elem.into()],
-                                            &format!("nested_elem_{}_{}", i, ni),
-                                        ).unwrap();
-                                        let elem_val = elem_result.try_as_basic_value().left().unwrap();
+                                        let elem_result = self
+                                            .builder
+                                            .build_call(
+                                                rt_get_inner,
+                                                &[nested_idx_val.into(), nested_elem.into()],
+                                                &format!("nested_elem_{}_{}", i, ni),
+                                            )
+                                            .unwrap();
+                                        let elem_val =
+                                            elem_result.try_as_basic_value().left().unwrap();
 
-                                        let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
+                                        let alloca = self
+                                            .builder
+                                            .build_alloca(self.context.i64_type(), name)
+                                            .unwrap();
                                         self.builder.build_store(alloca, elem_val).unwrap();
                                         self.variables.insert(name.clone(), alloca);
                                     }
-                                    Pattern::Wildcard | Pattern::Literal(_) | Pattern::RestIdentifier(_) => {
+                                    Pattern::Wildcard
+                                    | Pattern::Literal(_)
+                                    | Pattern::RestIdentifier(_) => {
                                         // No binding needed
                                     }
                                     Pattern::List(_) => {
@@ -2640,7 +3089,9 @@ impl<'ctx> CodegenContext<'ctx> {
             Literal::Integer(n) => self.compile_integer(*n),
             Literal::Decimal(f) => self.compile_decimal(*f),
             Literal::Boolean(b) => self.compile_boolean(*b),
-            Literal::String(s) => self.compile_string(s).unwrap_or_else(|_| self.compile_nil()),
+            Literal::String(s) => self
+                .compile_string(s)
+                .unwrap_or_else(|_| self.compile_nil()),
             Literal::Nil => self.compile_nil(),
         }
     }
@@ -2650,35 +3101,44 @@ impl<'ctx> CodegenContext<'ctx> {
         // Extract the boolean from NaN-boxed value
         // Boolean tag is 0b010, value is in upper bits
         let int_val = value.into_int_value();
-        let shifted = self.builder.build_right_shift(
-            int_val,
-            self.context.i64_type().const_int(3, false),
-            false,
-            "shift"
-        ).unwrap();
-        self.builder.build_int_truncate(
-            shifted,
-            self.context.bool_type(),
-            "to_bool"
-        ).unwrap()
+        let shifted = self
+            .builder
+            .build_right_shift(
+                int_val,
+                self.context.i64_type().const_int(3, false),
+                false,
+                "shift",
+            )
+            .unwrap();
+        self.builder
+            .build_int_truncate(shifted, self.context.bool_type(), "to_bool")
+            .unwrap()
     }
 
     /// Compile a statement
     pub fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), CompileError> {
         match stmt {
-            Stmt::Let { mutable, pattern, value } => {
-                self.compile_let(pattern, value, *mutable)
-            }
+            Stmt::Let {
+                mutable,
+                pattern,
+                value,
+            } => self.compile_let(pattern, value, *mutable),
             Stmt::Return(_) | Stmt::Break(_) | Stmt::Expr(_) => {
-                Err(CompileError::UnsupportedStatement(
-                    format!("Statement type not yet implemented: {:?}", stmt)
-                ))
+                Err(CompileError::UnsupportedStatement(format!(
+                    "Statement type not yet implemented: {:?}",
+                    stmt
+                )))
             }
         }
     }
 
     /// Compile a let binding
-    fn compile_let(&mut self, pattern: &Pattern, value: &Expr, _mutable: bool) -> Result<(), CompileError> {
+    fn compile_let(
+        &mut self,
+        pattern: &Pattern,
+        value: &Expr,
+        _mutable: bool,
+    ) -> Result<(), CompileError> {
         match pattern {
             Pattern::Identifier(name) => {
                 // For recursive function bindings, we need to pre-allocate the variable
@@ -2692,7 +3152,10 @@ impl<'ctx> CodegenContext<'ctx> {
                 let needs_cell = self.cell_variables.contains(name);
 
                 // Pre-allocate space for the variable (enables self-reference for closures)
-                let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
+                let alloca = self
+                    .builder
+                    .build_alloca(self.context.i64_type(), name)
+                    .unwrap();
 
                 // For self-referencing bindings (both functions and non-functions),
                 // we need to create the cell BEFORE compiling so the value expression
@@ -2701,13 +3164,18 @@ impl<'ctx> CodegenContext<'ctx> {
                     // Create a cell with nil initially
                     let rt_cell_new = self.get_or_declare_rt_cell_new();
                     let nil_val = self.compile_nil();
-                    let cell = self.builder.build_call(
-                        rt_cell_new,
-                        &[nil_val.into()],
-                        &format!("{}_cell_init", name),
-                    ).unwrap();
+                    let cell = self
+                        .builder
+                        .build_call(
+                            rt_cell_new,
+                            &[nil_val.into()],
+                            &format!("{}_cell_init", name),
+                        )
+                        .unwrap();
                     // Store the cell in the alloca
-                    self.builder.build_store(alloca, cell.try_as_basic_value().left().unwrap()).unwrap();
+                    self.builder
+                        .build_store(alloca, cell.try_as_basic_value().left().unwrap())
+                        .unwrap();
                     // Register the variable so nested closures can capture the cell
                     self.variables.insert(name.clone(), alloca);
                 } else if is_function {
@@ -2736,17 +3204,22 @@ impl<'ctx> CodegenContext<'ctx> {
                 // Handle the final value based on whether it's a cell variable
                 if needs_cell {
                     // Cell was already created - now set its value
-                    let cell = self.builder.build_load(
-                        self.context.i64_type(),
-                        alloca,
-                        &format!("{}_cell_load", name),
-                    ).unwrap();
+                    let cell = self
+                        .builder
+                        .build_load(
+                            self.context.i64_type(),
+                            alloca,
+                            &format!("{}_cell_load", name),
+                        )
+                        .unwrap();
                     let rt_cell_set = self.get_or_declare_rt_cell_set();
-                    self.builder.build_call(
-                        rt_cell_set,
-                        &[cell.into(), value_compiled.into()],
-                        &format!("{}_cell_set", name),
-                    ).unwrap();
+                    self.builder
+                        .build_call(
+                            rt_cell_set,
+                            &[cell.into(), value_compiled.into()],
+                            &format!("{}_cell_set", name),
+                        )
+                        .unwrap();
                 } else {
                     // Regular variable - just store the value
                     self.builder.build_store(alloca, value_compiled).unwrap();
@@ -2776,9 +3249,10 @@ impl<'ctx> CodegenContext<'ctx> {
                 // Bind patterns to the list value
                 self.compile_pattern_binding_list(patterns, list_val)
             }
-            _ => Err(CompileError::UnsupportedPattern(
-                format!("Pattern type not yet implemented: {:?}", pattern)
-            ))
+            _ => Err(CompileError::UnsupportedPattern(format!(
+                "Pattern type not yet implemented: {:?}",
+                pattern
+            ))),
         }
     }
 
@@ -2797,14 +3271,23 @@ impl<'ctx> CodegenContext<'ctx> {
                 Pattern::Identifier(name) => {
                     // Get element at index i
                     let index_val = self.compile_integer(i as i64);
-                    let elem = self.builder.build_call(
-                        rt_get,
-                        &[index_val.into(), list_val.into()],
-                        &format!("destructure_{}", name),
-                    ).unwrap().try_as_basic_value().left().unwrap();
+                    let elem = self
+                        .builder
+                        .build_call(
+                            rt_get,
+                            &[index_val.into(), list_val.into()],
+                            &format!("destructure_{}", name),
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap();
 
                     // Create alloca and store
-                    let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
+                    let alloca = self
+                        .builder
+                        .build_alloca(self.context.i64_type(), name)
+                        .unwrap();
                     self.builder.build_store(alloca, elem).unwrap();
                     self.variables.insert(name.clone(), alloca);
                 }
@@ -2814,11 +3297,17 @@ impl<'ctx> CodegenContext<'ctx> {
                 Pattern::List(nested_patterns) => {
                     // Get element at index i (which should be a list)
                     let index_val = self.compile_integer(i as i64);
-                    let nested_list = self.builder.build_call(
-                        rt_get,
-                        &[index_val.into(), list_val.into()],
-                        &format!("destructure_nested_{}", i),
-                    ).unwrap().try_as_basic_value().left().unwrap();
+                    let nested_list = self
+                        .builder
+                        .build_call(
+                            rt_get,
+                            &[index_val.into(), list_val.into()],
+                            &format!("destructure_nested_{}", i),
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap();
 
                     // Recursively bind the nested patterns
                     self.compile_pattern_binding_list(nested_patterns, nested_list)?;
@@ -2826,14 +3315,23 @@ impl<'ctx> CodegenContext<'ctx> {
                 Pattern::RestIdentifier(name) => {
                     // Get the rest of the list starting at index i
                     let skip_count = self.compile_integer(i as i64);
-                    let rest = self.builder.build_call(
-                        rt_skip,
-                        &[skip_count.into(), list_val.into()],
-                        &format!("destructure_rest_{}", name),
-                    ).unwrap().try_as_basic_value().left().unwrap();
+                    let rest = self
+                        .builder
+                        .build_call(
+                            rt_skip,
+                            &[skip_count.into(), list_val.into()],
+                            &format!("destructure_rest_{}", name),
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap();
 
                     // Create alloca and store
-                    let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
+                    let alloca = self
+                        .builder
+                        .build_alloca(self.context.i64_type(), name)
+                        .unwrap();
                     self.builder.build_store(alloca, rest).unwrap();
                     self.variables.insert(name.clone(), alloca);
 
@@ -2841,9 +3339,10 @@ impl<'ctx> CodegenContext<'ctx> {
                     break;
                 }
                 _ => {
-                    return Err(CompileError::UnsupportedPattern(
-                        format!("Pattern type not supported in list destructuring: {:?}", pat)
-                    ));
+                    return Err(CompileError::UnsupportedPattern(format!(
+                        "Pattern type not supported in list destructuring: {:?}",
+                        pat
+                    )));
                 }
             }
         }
@@ -2883,7 +3382,8 @@ impl<'ctx> CodegenContext<'ctx> {
         let closure_name = format!("closure_{}", closure_id);
 
         // Analyze what variables this closure captures from the enclosing scope
-        let captured_vars: Vec<String> = self.find_captured_variables(params, body)
+        let captured_vars: Vec<String> = self
+            .find_captured_variables(params, body)
             .into_iter()
             .collect();
 
@@ -2893,13 +3393,13 @@ impl<'ctx> CodegenContext<'ctx> {
         let i32_type = self.context.i32_type();
         let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
 
-        let closure_fn_type = i64_type.fn_type(
-            &[ptr_type.into(), i32_type.into(), ptr_type.into()],
-            false,
-        );
+        let closure_fn_type =
+            i64_type.fn_type(&[ptr_type.into(), i32_type.into(), ptr_type.into()], false);
 
         // Create the closure function
-        let closure_fn = self.module.add_function(&closure_name, closure_fn_type, None);
+        let closure_fn = self
+            .module
+            .add_function(&closure_name, closure_fn_type, None);
 
         // For TCO: Create a "start" block that loads parameters, then jumps to "body"
         // For tail calls, we jump back to "body" after updating parameter allocas
@@ -2928,7 +3428,8 @@ impl<'ctx> CodegenContext<'ctx> {
         // NOTE: We use the CURRENT cell_variables (not saved_cell_vars) because the outer
         // scope's block analysis may have added cell vars AFTER we saved the state.
         let outer_cell_vars = self.cell_variables.clone();
-        let captured_cell_vars: HashSet<String> = captured_vars.iter()
+        let captured_cell_vars: HashSet<String> = captured_vars
+            .iter()
             .filter(|name| outer_cell_vars.contains(*name))
             .cloned()
             .collect();
@@ -2942,16 +3443,16 @@ impl<'ctx> CodegenContext<'ctx> {
             // Calculate pointer to argv[i]
             let index = self.context.i64_type().const_int(i as u64, false);
             let arg_ptr = unsafe {
-                self.builder.build_in_bounds_gep(
-                    i64_type,
-                    argv,
-                    &[index],
-                    &format!("arg_ptr_{}", i),
-                ).unwrap()
+                self.builder
+                    .build_in_bounds_gep(i64_type, argv, &[index], &format!("arg_ptr_{}", i))
+                    .unwrap()
             };
 
             // Load the argument value
-            let arg_val = self.builder.build_load(i64_type, arg_ptr, &format!("arg_{}", i)).unwrap();
+            let arg_val = self
+                .builder
+                .build_load(i64_type, arg_ptr, &format!("arg_{}", i))
+                .unwrap();
 
             // Bind the parameter based on its pattern type
             if let Some(param_name) = param.name() {
@@ -2974,15 +3475,20 @@ impl<'ctx> CodegenContext<'ctx> {
             let rt_get_capture = self.get_or_declare_rt_get_capture();
             let capture_index = self.context.i64_type().const_int(i as u64, false);
 
-            let captured_val = self.builder.build_call(
-                rt_get_capture,
-                &[env_ptr.into(), capture_index.into()],
-                &format!("cap_{}", var_name),
-            ).unwrap();
+            let captured_val = self
+                .builder
+                .build_call(
+                    rt_get_capture,
+                    &[env_ptr.into(), capture_index.into()],
+                    &format!("cap_{}", var_name),
+                )
+                .unwrap();
 
             // Create an alloca for this captured variable
             let alloca = self.builder.build_alloca(i64_type, var_name).unwrap();
-            self.builder.build_store(alloca, captured_val.try_as_basic_value().left().unwrap()).unwrap();
+            self.builder
+                .build_store(alloca, captured_val.try_as_basic_value().left().unwrap())
+                .unwrap();
             self.variables.insert(var_name.clone(), alloca);
         }
 
@@ -2995,7 +3501,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Set up TCO state for compiling the body
         self.tco_state = Some(super::context::TcoState {
             self_name,
-            entry_block: body_block,  // Tail calls jump to body_block
+            entry_block: body_block, // Tail calls jump to body_block
             param_allocas,
         });
 
@@ -3014,12 +3520,17 @@ impl<'ctx> CodegenContext<'ctx> {
         // Now create the closure object by calling rt_make_closure
         // Note: We need to use saved_variables to get capture values BEFORE restoring self.variables
         let fn_ptr = closure_fn.as_global_value().as_pointer_value();
-        let arity = self.context.i32_type().const_int(params.len() as u64, false);
+        let arity = self
+            .context
+            .i32_type()
+            .const_int(params.len() as u64, false);
 
         // Create array of captured values
         let captures_count = captured_vars.len();
         let captures_ptr = if captures_count == 0 {
-            self.context.ptr_type(inkwell::AddressSpace::from(0)).const_null()
+            self.context
+                .ptr_type(inkwell::AddressSpace::from(0))
+                .const_null()
         } else {
             // Allocate stack space for captures array
             let array_type = i64_type.array_type(captures_count as u32);
@@ -3031,37 +3542,55 @@ impl<'ctx> CodegenContext<'ctx> {
                 let var_ptr = saved_variables.get(var_name).ok_or_else(|| {
                     CompileError::UnsupportedExpression(format!("Undefined capture: {}", var_name))
                 })?;
-                let var_val = self.builder.build_load(i64_type, *var_ptr, var_name).unwrap();
+                let var_val = self
+                    .builder
+                    .build_load(i64_type, *var_ptr, var_name)
+                    .unwrap();
 
                 // Store in captures array
                 let index = self.context.i64_type().const_int(i as u64, false);
                 let elem_ptr = unsafe {
-                    self.builder.build_in_bounds_gep(
-                        array_type,
-                        array_alloca,
-                        &[self.context.i64_type().const_zero(), index],
-                        &format!("cap_ptr_{}", i),
-                    ).unwrap()
+                    self.builder
+                        .build_in_bounds_gep(
+                            array_type,
+                            array_alloca,
+                            &[self.context.i64_type().const_zero(), index],
+                            &format!("cap_ptr_{}", i),
+                        )
+                        .unwrap()
                 };
                 self.builder.build_store(elem_ptr, var_val).unwrap();
             }
 
             // Cast to pointer
-            self.builder.build_pointer_cast(array_alloca, ptr_type, "captures_ptr").unwrap()
+            self.builder
+                .build_pointer_cast(array_alloca, ptr_type, "captures_ptr")
+                .unwrap()
         };
 
         // Now restore self.variables and cell_variables
         self.variables = saved_variables;
         self.cell_variables = saved_cell_vars;
 
-        let captures_count_val = self.context.i64_type().const_int(captures_count as u64, false);
+        let captures_count_val = self
+            .context
+            .i64_type()
+            .const_int(captures_count as u64, false);
 
         let rt_make_closure = self.get_or_declare_rt_make_closure();
-        let closure_result = self.builder.build_call(
-            rt_make_closure,
-            &[fn_ptr.into(), arity.into(), captures_ptr.into(), captures_count_val.into()],
-            "closure",
-        ).unwrap();
+        let closure_result = self
+            .builder
+            .build_call(
+                rt_make_closure,
+                &[
+                    fn_ptr.into(),
+                    arity.into(),
+                    captures_ptr.into(),
+                    captures_count_val.into(),
+                ],
+                "closure",
+            )
+            .unwrap();
 
         Ok(closure_result.try_as_basic_value().left().unwrap())
     }
@@ -3070,25 +3599,33 @@ impl<'ctx> CodegenContext<'ctx> {
     ///
     /// When in tail position and we encounter a self-recursive call,
     /// we can optimize it to a jump instead of a call.
-    fn compile_expr_in_tail_position(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_expr_in_tail_position(
+        &mut self,
+        expr: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         match expr {
             // If expressions: both branches are in tail position
-            Expr::If { condition, then_branch, else_branch } => {
-                self.compile_if_tail(condition, then_branch, else_branch.as_deref())
-            }
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => self.compile_if_tail(condition, then_branch, else_branch.as_deref()),
             // If-let expressions: both branches are in tail position
-            Expr::IfLet { pattern, value, then_branch, else_branch } => {
-                self.compile_if_let_tail(pattern, value, then_branch, else_branch.as_deref())
-            }
+            Expr::IfLet {
+                pattern,
+                value,
+                then_branch,
+                else_branch,
+            } => self.compile_if_let_tail(pattern, value, then_branch, else_branch.as_deref()),
             // Match expressions: arm bodies are in tail position
-            Expr::Match { subject, arms } => {
-                self.compile_match_tail(subject, arms)
-            }
+            Expr::Match { subject, arms } => self.compile_match_tail(subject, arms),
             // Function calls might be tail calls
             Expr::Call { function, args } => {
                 // Check if this is a self-recursive tail call
                 if let Some(ref tco) = self.tco_state {
-                    if let (Some(ref self_name), Expr::Identifier(name)) = (&tco.self_name, function.as_ref()) {
+                    if let (Some(ref self_name), Expr::Identifier(name)) =
+                        (&tco.self_name, function.as_ref())
+                    {
                         if name == self_name && args.len() == tco.param_allocas.len() {
                             // This is a self-recursive tail call! Optimize it.
                             return self.compile_tail_call(args);
@@ -3099,9 +3636,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 self.compile_call(function, args)
             }
             // Blocks: last expression is in tail position
-            Expr::Block(stmts) => {
-                self.compile_block_tail(stmts)
-            }
+            Expr::Block(stmts) => self.compile_block_tail(stmts),
             // All other expressions compile normally
             _ => {
                 let ty = self.infer_expr_type(expr);
@@ -3145,14 +3680,20 @@ impl<'ctx> CodegenContext<'ctx> {
         }
 
         // Jump to the body block
-        self.builder.build_unconditional_branch(tco.entry_block).unwrap();
+        self.builder
+            .build_unconditional_branch(tco.entry_block)
+            .unwrap();
 
         // Create a new block for any code after this (unreachable, but LLVM needs it)
-        let current_fn = self.builder.get_insert_block()
+        let current_fn = self
+            .builder
+            .get_insert_block()
             .and_then(|bb| bb.get_parent())
-            .ok_or_else(|| CompileError::UnsupportedExpression(
-                "tail call requires a function context".to_string()
-            ))?;
+            .ok_or_else(|| {
+                CompileError::UnsupportedExpression(
+                    "tail call requires a function context".to_string(),
+                )
+            })?;
         let unreachable_bb = self.context.append_basic_block(current_fn, "unreachable");
         self.builder.position_at_end(unreachable_bb);
 
@@ -3168,11 +3709,15 @@ impl<'ctx> CodegenContext<'ctx> {
         else_branch: Option<&Expr>,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Get the current function
-        let current_fn = self.builder.get_insert_block()
+        let current_fn = self
+            .builder
+            .get_insert_block()
             .and_then(|bb| bb.get_parent())
-            .ok_or_else(|| CompileError::UnsupportedExpression(
-                "if expression requires a function context".to_string()
-            ))?;
+            .ok_or_else(|| {
+                CompileError::UnsupportedExpression(
+                    "if expression requires a function context".to_string(),
+                )
+            })?;
 
         // Compile the condition
         let cond_ty = self.infer_expr_type(condition);
@@ -3188,19 +3733,24 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Call rt_is_truthy to handle all value types (not just booleans)
         let rt_is_truthy = self.get_or_declare_rt_is_truthy();
-        let is_truthy = self.builder.build_call(
-            rt_is_truthy,
-            &[cond_val.into()],
-            "is_truthy",
-        ).unwrap().try_as_basic_value().left().unwrap();
+        let is_truthy = self
+            .builder
+            .build_call(rt_is_truthy, &[cond_val.into()], "is_truthy")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap();
 
         // Convert i64 result to i1 for conditional branch
-        let cond_bool = self.builder.build_int_compare(
-            inkwell::IntPredicate::NE,
-            is_truthy.into_int_value(),
-            self.context.i64_type().const_zero(),
-            "truthy_bool",
-        ).unwrap();
+        let cond_bool = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                is_truthy.into_int_value(),
+                self.context.i64_type().const_zero(),
+                "truthy_bool",
+            )
+            .unwrap();
 
         // Create basic blocks
         let then_bb = self.context.append_basic_block(current_fn, "then");
@@ -3208,13 +3758,17 @@ impl<'ctx> CodegenContext<'ctx> {
         let merge_bb = self.context.append_basic_block(current_fn, "merge");
 
         // Branch based on condition
-        self.builder.build_conditional_branch(cond_bool, then_bb, else_bb).unwrap();
+        self.builder
+            .build_conditional_branch(cond_bool, then_bb, else_bb)
+            .unwrap();
 
         // Compile then branch (in tail position)
         self.builder.position_at_end(then_bb);
         let then_val = self.compile_expr_in_tail_position(then_branch)?;
         // Check if we need a branch to merge (tail calls don't)
-        let then_needs_branch = self.builder.get_insert_block()
+        let then_needs_branch = self
+            .builder
+            .get_insert_block()
             .map(|bb| bb.get_terminator().is_none())
             .unwrap_or(false);
         if then_needs_branch {
@@ -3229,7 +3783,9 @@ impl<'ctx> CodegenContext<'ctx> {
         } else {
             self.compile_nil()
         };
-        let else_needs_branch = self.builder.get_insert_block()
+        let else_needs_branch = self
+            .builder
+            .get_insert_block()
             .map(|bb| bb.get_terminator().is_none())
             .unwrap_or(false);
         if else_needs_branch {
@@ -3241,7 +3797,10 @@ impl<'ctx> CodegenContext<'ctx> {
         self.builder.position_at_end(merge_bb);
 
         // Only add phi incoming if the branch doesn't have a terminator (wasn't a tail call)
-        let phi = self.builder.build_phi(self.context.i64_type(), "if_result").unwrap();
+        let phi = self
+            .builder
+            .build_phi(self.context.i64_type(), "if_result")
+            .unwrap();
         if then_needs_branch {
             phi.add_incoming(&[(&then_val, then_end_bb)]);
         }
@@ -3261,11 +3820,15 @@ impl<'ctx> CodegenContext<'ctx> {
         else_branch: Option<&Expr>,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Get the current function
-        let current_fn = self.builder.get_insert_block()
+        let current_fn = self
+            .builder
+            .get_insert_block()
             .and_then(|bb| bb.get_parent())
-            .ok_or_else(|| CompileError::UnsupportedExpression(
-                "if-let expression requires a function context".to_string()
-            ))?;
+            .ok_or_else(|| {
+                CompileError::UnsupportedExpression(
+                    "if-let expression requires a function context".to_string(),
+                )
+            })?;
 
         // Compile the value expression
         let value_ty = self.infer_expr_type(value);
@@ -3281,19 +3844,24 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Call rt_is_truthy to check if value is truthy
         let rt_is_truthy = self.get_or_declare_rt_is_truthy();
-        let is_truthy = self.builder.build_call(
-            rt_is_truthy,
-            &[value_val.into()],
-            "is_truthy",
-        ).unwrap().try_as_basic_value().left().unwrap();
+        let is_truthy = self
+            .builder
+            .build_call(rt_is_truthy, &[value_val.into()], "is_truthy")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap();
 
         // Convert to bool
-        let cond_bool = self.builder.build_int_compare(
-            inkwell::IntPredicate::NE,
-            is_truthy.into_int_value(),
-            self.context.i64_type().const_zero(),
-            "truthy_bool",
-        ).unwrap();
+        let cond_bool = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                is_truthy.into_int_value(),
+                self.context.i64_type().const_zero(),
+                "truthy_bool",
+            )
+            .unwrap();
 
         // Create basic blocks
         let then_bb = self.context.append_basic_block(current_fn, "if_let_then");
@@ -3301,7 +3869,9 @@ impl<'ctx> CodegenContext<'ctx> {
         let merge_bb = self.context.append_basic_block(current_fn, "if_let_merge");
 
         // Branch based on truthiness
-        self.builder.build_conditional_branch(cond_bool, then_bb, else_bb).unwrap();
+        self.builder
+            .build_conditional_branch(cond_bool, then_bb, else_bb)
+            .unwrap();
 
         // Compile then branch (with pattern binding, in tail position)
         self.builder.position_at_end(then_bb);
@@ -3309,7 +3879,9 @@ impl<'ctx> CodegenContext<'ctx> {
         self.bind_pattern_variables(pattern, value_val)?;
         let then_val = self.compile_expr_in_tail_position(then_branch)?;
         self.variables = saved_variables;
-        let then_needs_branch = self.builder.get_insert_block()
+        let then_needs_branch = self
+            .builder
+            .get_insert_block()
             .map(|bb| bb.get_terminator().is_none())
             .unwrap_or(false);
         if then_needs_branch {
@@ -3324,7 +3896,9 @@ impl<'ctx> CodegenContext<'ctx> {
         } else {
             self.compile_nil()
         };
-        let else_needs_branch = self.builder.get_insert_block()
+        let else_needs_branch = self
+            .builder
+            .get_insert_block()
             .map(|bb| bb.get_terminator().is_none())
             .unwrap_or(false);
         if else_needs_branch {
@@ -3334,7 +3908,10 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Merge block with phi node
         self.builder.position_at_end(merge_bb);
-        let phi = self.builder.build_phi(self.context.i64_type(), "if_let_result").unwrap();
+        let phi = self
+            .builder
+            .build_phi(self.context.i64_type(), "if_let_result")
+            .unwrap();
         if then_needs_branch {
             phi.add_incoming(&[(&then_val, then_end_bb)]);
         }
@@ -3354,11 +3931,15 @@ impl<'ctx> CodegenContext<'ctx> {
         arms: &[MatchArm],
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Get the current function
-        let current_fn = self.builder.get_insert_block()
+        let current_fn = self
+            .builder
+            .get_insert_block()
             .and_then(|bb| bb.get_parent())
-            .ok_or_else(|| CompileError::UnsupportedExpression(
-                "match expression requires a function context".to_string()
-            ))?;
+            .ok_or_else(|| {
+                CompileError::UnsupportedExpression(
+                    "match expression requires a function context".to_string(),
+                )
+            })?;
 
         // Compile the subject expression
         let subject_ty = self.infer_expr_type(subject);
@@ -3376,23 +3957,38 @@ impl<'ctx> CodegenContext<'ctx> {
         let merge_bb = self.context.append_basic_block(current_fn, "match_merge");
 
         // Track incoming values for the phi node
-        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
+        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+            Vec::new();
 
         // Create blocks for each arm
-        let arm_blocks: Vec<_> = arms.iter().enumerate()
-            .map(|(i, _)| self.context.append_basic_block(current_fn, &format!("match_arm_{}", i)))
+        let arm_blocks: Vec<_> = arms
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                self.context
+                    .append_basic_block(current_fn, &format!("match_arm_{}", i))
+            })
             .collect();
 
         // Create a fallthrough block for when no pattern matches (returns nil)
-        let no_match_bb = self.context.append_basic_block(current_fn, "match_no_match");
+        let no_match_bb = self
+            .context
+            .append_basic_block(current_fn, "match_no_match");
 
         // Generate pattern tests
-        let test_blocks: Vec<_> = arms.iter().enumerate()
-            .map(|(i, _)| self.context.append_basic_block(current_fn, &format!("match_test_{}", i)))
+        let test_blocks: Vec<_> = arms
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                self.context
+                    .append_basic_block(current_fn, &format!("match_test_{}", i))
+            })
             .collect();
 
         // Branch from current position to first test block
-        self.builder.build_unconditional_branch(test_blocks[0]).unwrap();
+        self.builder
+            .build_unconditional_branch(test_blocks[0])
+            .unwrap();
 
         // Generate pattern tests and branches for each arm
         for (i, arm) in arms.iter().enumerate() {
@@ -3424,7 +4020,9 @@ impl<'ctx> CodegenContext<'ctx> {
             self.variables = saved_variables;
 
             // Check if we need a branch to merge (tail calls don't need it)
-            let needs_branch = self.builder.get_insert_block()
+            let needs_branch = self
+                .builder
+                .get_insert_block()
                 .map(|bb| bb.get_terminator().is_none())
                 .unwrap_or(false);
 
@@ -3443,7 +4041,10 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Merge block with phi
         self.builder.position_at_end(merge_bb);
-        let phi = self.builder.build_phi(self.context.i64_type(), "match_result").unwrap();
+        let phi = self
+            .builder
+            .build_phi(self.context.i64_type(), "match_result")
+            .unwrap();
         for (val, bb) in incoming {
             phi.add_incoming(&[(&val, bb)]);
         }
@@ -3465,7 +4066,12 @@ impl<'ctx> CodegenContext<'ctx> {
         // Pre-analyze block to find mutable variables that will be captured by nested closures
         let mut mutable_vars: HashSet<String> = HashSet::new();
         for stmt in stmts {
-            if let Stmt::Let { mutable: true, pattern: Pattern::Identifier(name), .. } = stmt {
+            if let Stmt::Let {
+                mutable: true,
+                pattern: Pattern::Identifier(name),
+                ..
+            } = stmt
+            {
                 mutable_vars.insert(name.clone());
             }
         }
@@ -3475,11 +4081,13 @@ impl<'ctx> CodegenContext<'ctx> {
         for stmt in stmts {
             match stmt {
                 Stmt::Let { value, .. } => {
-                    let captures = self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
+                    let captures =
+                        self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
                     self.cell_variables.extend(captures);
                 }
                 Stmt::Expr(expr) | Stmt::Return(expr) | Stmt::Break(expr) => {
-                    let captures = self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
+                    let captures =
+                        self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
                     self.cell_variables.extend(captures);
                 }
             }
@@ -3533,7 +4141,12 @@ impl<'ctx> CodegenContext<'ctx> {
                     self.builder.build_return(Some(&return_val)).unwrap();
 
                     // Create a new basic block for any code after return (unreachable)
-                    let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let func = self
+                        .builder
+                        .get_insert_block()
+                        .unwrap()
+                        .get_parent()
+                        .unwrap();
                     let unreachable_block = self.context.append_basic_block(func, "after_return");
                     self.builder.position_at_end(unreachable_block);
                 }
@@ -3552,18 +4165,25 @@ impl<'ctx> CodegenContext<'ctx> {
 
                     // Call rt_break to signal break and store the value
                     let rt_break = self.get_or_declare_rt_break();
-                    let result = self.builder.build_call(
-                        rt_break,
-                        &[break_val.into()],
-                        "break_result",
-                    ).unwrap();
+                    let result = self
+                        .builder
+                        .build_call(rt_break, &[break_val.into()], "break_result")
+                        .unwrap();
 
                     // Return from the current function with the break value
-                    self.builder.build_return(Some(&result.try_as_basic_value().left().unwrap())).unwrap();
+                    self.builder
+                        .build_return(Some(&result.try_as_basic_value().left().unwrap()))
+                        .unwrap();
 
                     // Create a new basic block for any code after break (unreachable)
-                    let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
-                    let unreachable_block = self.context.append_basic_block(func, "after_break_tail");
+                    let func = self
+                        .builder
+                        .get_insert_block()
+                        .unwrap()
+                        .get_parent()
+                        .unwrap();
+                    let unreachable_block =
+                        self.context.append_basic_block(func, "after_break_tail");
                     self.builder.position_at_end(unreachable_block);
                 }
             }
@@ -3613,11 +4233,7 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Recursively collect free variables in an expression
-    fn collect_free_variables(
-        expr: &Expr,
-        bound: &HashSet<String>,
-        free: &mut HashSet<String>,
-    ) {
+    fn collect_free_variables(expr: &Expr, bound: &HashSet<String>, free: &mut HashSet<String>) {
         match expr {
             Expr::Identifier(name) => {
                 if !bound.contains(name) {
@@ -3631,14 +4247,23 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::Prefix { right, .. } => {
                 Self::collect_free_variables(right, bound, free);
             }
-            Expr::If { condition, then_branch, else_branch } => {
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 Self::collect_free_variables(condition, bound, free);
                 Self::collect_free_variables(then_branch, bound, free);
                 if let Some(else_br) = else_branch {
                     Self::collect_free_variables(else_br, bound, free);
                 }
             }
-            Expr::IfLet { pattern, value, then_branch, else_branch } => {
+            Expr::IfLet {
+                pattern,
+                value,
+                then_branch,
+                else_branch,
+            } => {
                 Self::collect_free_variables(value, bound, free);
                 // Pattern bindings are in scope for then_branch
                 let mut new_bound = bound.clone();
@@ -3732,7 +4357,11 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
                 Self::collect_free_variables(value, bound, free);
             }
-            Expr::InfixCall { function, left, right } => {
+            Expr::InfixCall {
+                function,
+                left,
+                right,
+            } => {
                 // a `f` b - collect from function and both operands
                 // The function name is a string, so check if it's a free variable
                 if !bound.contains(function) {
@@ -3745,8 +4374,12 @@ impl<'ctx> CodegenContext<'ctx> {
                 Self::collect_free_variables(inner, bound, free);
             }
             // Literals and constants have no free variables
-            Expr::Integer(_) | Expr::Decimal(_) | Expr::String(_) |
-            Expr::Boolean(_) | Expr::Nil | Expr::Placeholder => {}
+            Expr::Integer(_)
+            | Expr::Decimal(_)
+            | Expr::String(_)
+            | Expr::Boolean(_)
+            | Expr::Nil
+            | Expr::Placeholder => {}
             // Other expressions - add as needed
             _ => {}
         }
@@ -3802,26 +4435,39 @@ impl<'ctx> CodegenContext<'ctx> {
                 Self::value_has_self_reference(name, left, bound)
                     || Self::value_has_self_reference(name, right, bound)
             }
-            Expr::Prefix { right, .. } => {
-                Self::value_has_self_reference(name, right, bound)
-            }
-            Expr::If { condition, then_branch, else_branch } => {
+            Expr::Prefix { right, .. } => Self::value_has_self_reference(name, right, bound),
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 Self::value_has_self_reference(name, condition, bound)
                     || Self::value_has_self_reference(name, then_branch, bound)
-                    || else_branch.as_ref().is_some_and(|e| Self::value_has_self_reference(name, e, bound))
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|e| Self::value_has_self_reference(name, e, bound))
             }
-            Expr::IfLet { pattern, value, then_branch, else_branch } => {
+            Expr::IfLet {
+                pattern,
+                value,
+                then_branch,
+                else_branch,
+            } => {
                 if Self::value_has_self_reference(name, value, bound) {
                     return true;
                 }
                 let mut inner_bound = bound.clone();
                 Self::collect_pattern_variables(pattern, &mut inner_bound);
                 Self::value_has_self_reference(name, then_branch, &inner_bound)
-                    || else_branch.as_ref().is_some_and(|e| Self::value_has_self_reference(name, e, bound))
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|e| Self::value_has_self_reference(name, e, bound))
             }
             Expr::Call { function, args } => {
                 Self::value_has_self_reference(name, function, bound)
-                    || args.iter().any(|arg| Self::value_has_self_reference(name, arg, bound))
+                    || args
+                        .iter()
+                        .any(|arg| Self::value_has_self_reference(name, arg, bound))
             }
             Expr::Block(stmts) => {
                 let mut new_bound = bound.clone();
@@ -3844,22 +4490,22 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
                 false
             }
-            Expr::List(elements) | Expr::Set(elements) => {
-                elements.iter().any(|e| Self::value_has_self_reference(name, e, bound))
-            }
-            Expr::Dict(entries) => {
-                entries.iter().any(|(k, v)| {
-                    Self::value_has_self_reference(name, k, bound)
-                        || Self::value_has_self_reference(name, v, bound)
-                })
-            }
+            Expr::List(elements) | Expr::Set(elements) => elements
+                .iter()
+                .any(|e| Self::value_has_self_reference(name, e, bound)),
+            Expr::Dict(entries) => entries.iter().any(|(k, v)| {
+                Self::value_has_self_reference(name, k, bound)
+                    || Self::value_has_self_reference(name, v, bound)
+            }),
             Expr::Index { collection, index } => {
                 Self::value_has_self_reference(name, collection, bound)
                     || Self::value_has_self_reference(name, index, bound)
             }
             Expr::Range { start, end, .. } => {
                 Self::value_has_self_reference(name, start, bound)
-                    || end.as_ref().is_some_and(|e| Self::value_has_self_reference(name, e, bound))
+                    || end
+                        .as_ref()
+                        .is_some_and(|e| Self::value_has_self_reference(name, e, bound))
             }
             Expr::Match { subject, arms } => {
                 if Self::value_has_self_reference(name, subject, bound) {
@@ -3879,12 +4525,8 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
                 false
             }
-            Expr::Assignment { value, .. } => {
-                Self::value_has_self_reference(name, value, bound)
-            }
-            Expr::Spread(inner) => {
-                Self::value_has_self_reference(name, inner, bound)
-            }
+            Expr::Assignment { value, .. } => Self::value_has_self_reference(name, value, bound),
+            Expr::Spread(inner) => Self::value_has_self_reference(name, inner, bound),
             // Terminals - no self-reference possible
             _ => false,
         }
@@ -3892,12 +4534,20 @@ impl<'ctx> CodegenContext<'ctx> {
 
     /// Find let bindings in a block that have self-referencing closures.
     /// These need cell indirection so the closure can access the final value.
-    pub fn find_self_referencing_bindings(stmts: &[Stmt], bound: &HashSet<String>) -> HashSet<String> {
+    pub fn find_self_referencing_bindings(
+        stmts: &[Stmt],
+        bound: &HashSet<String>,
+    ) -> HashSet<String> {
         let mut self_refs = HashSet::new();
         let mut current_bound = bound.clone();
 
         for stmt in stmts {
-            if let Stmt::Let { pattern: Pattern::Identifier(name), value, .. } = stmt {
+            if let Stmt::Let {
+                pattern: Pattern::Identifier(name),
+                value,
+                ..
+            } = stmt
+            {
                 // Check if the value expression has a nested closure that references `name`
                 if Self::value_has_self_reference(name, value, &current_bound) {
                     self_refs.insert(name.clone());
@@ -3952,7 +4602,12 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
 
                 // Also check for nested closures in the body
-                Self::collect_mutable_captures_recursive(body, mutable_vars, &inner_bound, captured);
+                Self::collect_mutable_captures_recursive(
+                    body,
+                    mutable_vars,
+                    &inner_bound,
+                    captured,
+                );
             }
 
             // Recurse into subexpressions
@@ -3963,20 +4618,49 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::Prefix { right, .. } => {
                 Self::collect_mutable_captures_recursive(right, mutable_vars, bound, captured);
             }
-            Expr::If { condition, then_branch, else_branch } => {
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 Self::collect_mutable_captures_recursive(condition, mutable_vars, bound, captured);
-                Self::collect_mutable_captures_recursive(then_branch, mutable_vars, bound, captured);
+                Self::collect_mutable_captures_recursive(
+                    then_branch,
+                    mutable_vars,
+                    bound,
+                    captured,
+                );
                 if let Some(else_br) = else_branch {
-                    Self::collect_mutable_captures_recursive(else_br, mutable_vars, bound, captured);
+                    Self::collect_mutable_captures_recursive(
+                        else_br,
+                        mutable_vars,
+                        bound,
+                        captured,
+                    );
                 }
             }
-            Expr::IfLet { pattern, value, then_branch, else_branch } => {
+            Expr::IfLet {
+                pattern,
+                value,
+                then_branch,
+                else_branch,
+            } => {
                 Self::collect_mutable_captures_recursive(value, mutable_vars, bound, captured);
                 let mut new_bound = bound.clone();
                 Self::collect_pattern_variables(pattern, &mut new_bound);
-                Self::collect_mutable_captures_recursive(then_branch, mutable_vars, &new_bound, captured);
+                Self::collect_mutable_captures_recursive(
+                    then_branch,
+                    mutable_vars,
+                    &new_bound,
+                    captured,
+                );
                 if let Some(else_br) = else_branch {
-                    Self::collect_mutable_captures_recursive(else_br, mutable_vars, bound, captured);
+                    Self::collect_mutable_captures_recursive(
+                        else_br,
+                        mutable_vars,
+                        bound,
+                        captured,
+                    );
                 }
             }
             Expr::Call { function, args } => {
@@ -3990,8 +4674,17 @@ impl<'ctx> CodegenContext<'ctx> {
                 let mut new_mutable = mutable_vars.clone();
                 for stmt in stmts {
                     match stmt {
-                        Stmt::Let { mutable, pattern, value } => {
-                            Self::collect_mutable_captures_recursive(value, &new_mutable, &new_bound, captured);
+                        Stmt::Let {
+                            mutable,
+                            pattern,
+                            value,
+                        } => {
+                            Self::collect_mutable_captures_recursive(
+                                value,
+                                &new_mutable,
+                                &new_bound,
+                                captured,
+                            );
                             if let Pattern::Identifier(name) = pattern {
                                 new_bound.insert(name.clone());
                                 if *mutable {
@@ -4000,7 +4693,12 @@ impl<'ctx> CodegenContext<'ctx> {
                             }
                         }
                         Stmt::Expr(e) | Stmt::Return(e) | Stmt::Break(e) => {
-                            Self::collect_mutable_captures_recursive(e, &new_mutable, &new_bound, captured);
+                            Self::collect_mutable_captures_recursive(
+                                e,
+                                &new_mutable,
+                                &new_bound,
+                                captured,
+                            );
                         }
                     }
                 }
@@ -4032,9 +4730,19 @@ impl<'ctx> CodegenContext<'ctx> {
                     let mut arm_bound = bound.clone();
                     Self::collect_pattern_bindings(&arm.pattern, &mut arm_bound);
                     if let Some(guard) = &arm.guard {
-                        Self::collect_mutable_captures_recursive(guard, mutable_vars, &arm_bound, captured);
+                        Self::collect_mutable_captures_recursive(
+                            guard,
+                            mutable_vars,
+                            &arm_bound,
+                            captured,
+                        );
                     }
-                    Self::collect_mutable_captures_recursive(&arm.body, mutable_vars, &arm_bound, captured);
+                    Self::collect_mutable_captures_recursive(
+                        &arm.body,
+                        mutable_vars,
+                        &arm_bound,
+                        captured,
+                    );
                 }
             }
             Expr::Assignment { name: _, value } => {
@@ -4088,11 +4796,14 @@ impl<'ctx> CodegenContext<'ctx> {
 
                 // Call rt_apply(fn, collection) which applies fn to collection elements as args
                 let rt_apply = self.get_or_declare_rt_apply();
-                let result = self.builder.build_call(
-                    rt_apply,
-                    &[fn_val.into(), collection_val.into()],
-                    "apply_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_apply,
+                        &[fn_val.into(), collection_val.into()],
+                        "apply_result",
+                    )
+                    .unwrap();
                 return Ok(result.try_as_basic_value().left().unwrap());
             }
         }
@@ -4138,7 +4849,9 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let argv_ptr = if argc == 0 {
             // No arguments, use null pointer
-            self.context.ptr_type(inkwell::AddressSpace::from(0)).const_null()
+            self.context
+                .ptr_type(inkwell::AddressSpace::from(0))
+                .const_null()
         } else {
             // Allocate stack space for arguments
             let array_type = i64_type.array_type(argc as u32);
@@ -4148,30 +4861,37 @@ impl<'ctx> CodegenContext<'ctx> {
             for (i, arg) in compiled_args.iter().enumerate() {
                 let index = self.context.i64_type().const_int(i as u64, false);
                 let elem_ptr = unsafe {
-                    self.builder.build_in_bounds_gep(
-                        array_type,
-                        array_alloca,
-                        &[self.context.i64_type().const_zero(), index],
-                        &format!("arg_ptr_{}", i),
-                    ).unwrap()
+                    self.builder
+                        .build_in_bounds_gep(
+                            array_type,
+                            array_alloca,
+                            &[self.context.i64_type().const_zero(), index],
+                            &format!("arg_ptr_{}", i),
+                        )
+                        .unwrap()
                 };
                 self.builder.build_store(elem_ptr, *arg).unwrap();
             }
 
             // Cast to pointer
             let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
-            self.builder.build_pointer_cast(array_alloca, ptr_type, "argv_ptr").unwrap()
+            self.builder
+                .build_pointer_cast(array_alloca, ptr_type, "argv_ptr")
+                .unwrap()
         };
 
         // Call rt_call(callee, argc, argv)
         let rt_call = self.get_or_declare_rt_call();
         let argc_val = self.context.i32_type().const_int(argc as u64, false);
 
-        let call_result = self.builder.build_call(
-            rt_call,
-            &[fn_val.into(), argc_val.into(), argv_ptr.into()],
-            "call_result",
-        ).unwrap();
+        let call_result = self
+            .builder
+            .build_call(
+                rt_call,
+                &[fn_val.into(), argc_val.into(), argv_ptr.into()],
+                "call_result",
+            )
+            .unwrap();
 
         Ok(call_result.try_as_basic_value().left().unwrap())
     }
@@ -4187,16 +4907,14 @@ impl<'ctx> CodegenContext<'ctx> {
     fn get_builtin_arity(name: &str) -> Option<usize> {
         match name {
             // 1-arg builtins
-            "size" | "int" | "ints" | "list" | "set" | "dict" | "type" | "str" | "sum"
-            | "max" | "min" | "reverse" | "keys" | "values" | "abs" | "floor" | "ceil"
-            | "sqrt" | "sin" | "cos" | "tan" | "first" | "second" | "last" | "rest"
-            | "lines" | "dec" | "ord" | "chr" | "upper" | "lower" | "trim" | "id"
-            | "repeat" | "cycle" => Some(1),
+            "size" | "int" | "ints" | "list" | "set" | "dict" | "type" | "str" | "sum" | "max"
+            | "min" | "reverse" | "keys" | "values" | "abs" | "floor" | "ceil" | "sqrt" | "sin"
+            | "cos" | "tan" | "first" | "second" | "last" | "rest" | "lines" | "dec" | "ord"
+            | "chr" | "upper" | "lower" | "trim" | "id" | "repeat" | "cycle" => Some(1),
             // 2-arg builtins
-            "split" | "join" | "map" | "filter" | "reduce" | "find" | "count" | "any"
-            | "all" | "take" | "skip" | "sort" | "rotate" | "chunk" | "includes" | "excludes"
-            | "get" | "push" | "flat_map"
-            | "filter_map" | "find_map" | "each" | "combinations"
+            "split" | "join" | "map" | "filter" | "reduce" | "find" | "count" | "any" | "all"
+            | "take" | "skip" | "sort" | "rotate" | "chunk" | "includes" | "excludes" | "get"
+            | "push" | "flat_map" | "filter_map" | "find_map" | "each" | "combinations"
             | "includes?" | "excludes?" | "any?" | "all?" => Some(2),
             // Variadic builtins (any number of args, handled specially)
             "union" | "intersection" => None,
@@ -4236,16 +4954,22 @@ impl<'ctx> CodegenContext<'ctx> {
         // Call the appropriate spread version of the builtin
         let rt_fn = match name {
             "zip" => self.get_or_declare_rt_zip_spread(),
-            _ => return Err(CompileError::UnsupportedExpression(
-                format!("Builtin {} does not support spread", name)
-            )),
+            _ => {
+                return Err(CompileError::UnsupportedExpression(format!(
+                    "Builtin {} does not support spread",
+                    name
+                )))
+            }
         };
 
-        let result = self.builder.build_call(
-            rt_fn,
-            &[coll_val.into()],
-            &format!("{}_spread_result", name),
-        ).unwrap();
+        let result = self
+            .builder
+            .build_call(
+                rt_fn,
+                &[coll_val.into()],
+                &format!("{}_spread_result", name),
+            )
+            .unwrap();
 
         Ok(result.try_as_basic_value().left().unwrap())
     }
@@ -4292,7 +5016,9 @@ impl<'ctx> CodegenContext<'ctx> {
                 let argc_val = self.context.i32_type().const_int(argc as u64, false);
 
                 let argv_ptr = if argc == 0 {
-                    self.context.ptr_type(inkwell::AddressSpace::from(0)).const_null()
+                    self.context
+                        .ptr_type(inkwell::AddressSpace::from(0))
+                        .const_null()
                 } else {
                     // Allocate stack space for arguments
                     let array_type = i64_type.array_type(argc as u32);
@@ -4302,26 +5028,29 @@ impl<'ctx> CodegenContext<'ctx> {
                     for (i, arg) in compiled_args.iter().enumerate() {
                         let index = i64_type.const_int(i as u64, false);
                         let elem_ptr = unsafe {
-                            self.builder.build_in_bounds_gep(
-                                array_type,
-                                array_alloca,
-                                &[i64_type.const_zero(), index],
-                                &format!("puts_arg_ptr_{}", i),
-                            ).unwrap()
+                            self.builder
+                                .build_in_bounds_gep(
+                                    array_type,
+                                    array_alloca,
+                                    &[i64_type.const_zero(), index],
+                                    &format!("puts_arg_ptr_{}", i),
+                                )
+                                .unwrap()
                         };
                         self.builder.build_store(elem_ptr, *arg).unwrap();
                     }
 
                     // Cast to pointer
                     let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
-                    self.builder.build_pointer_cast(array_alloca, ptr_type, "puts_argv").unwrap()
+                    self.builder
+                        .build_pointer_cast(array_alloca, ptr_type, "puts_argv")
+                        .unwrap()
                 };
 
-                let result = self.builder.build_call(
-                    rt_puts,
-                    &[argc_val.into(), argv_ptr.into()],
-                    "puts_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_puts, &[argc_val.into(), argv_ptr.into()], "puts_result")
+                    .unwrap();
 
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -4329,293 +5058,311 @@ impl<'ctx> CodegenContext<'ctx> {
                 // __time_nanos() - get current time in nanoseconds (for timing)
                 // Takes no arguments, returns i64
                 let rt_time_nanos = self.get_or_declare_rt_time_nanos();
-                let result = self.builder.build_call(
-                    rt_time_nanos,
-                    &[],
-                    "time_nanos_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_time_nanos, &[], "time_nanos_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "__get_args" => {
                 // __get_args() - get command line arguments (excluding program name)
                 // Takes no arguments, returns list of strings
                 let rt_get_args = self.get_or_declare_rt_get_args();
-                let result = self.builder.build_call(
-                    rt_get_args,
-                    &[],
-                    "get_args_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_get_args, &[], "get_args_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "__print_result" => {
                 // __print_result(label, value, time_nanos) - print colored solution result
                 if args.len() != 3 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("__print_result expects 3 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "__print_result expects 3 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let label = self.compile_arg(&args[0])?;
                 let value = self.compile_arg(&args[1])?;
                 let time_nanos = self.compile_arg(&args[2])?;
                 let rt_print_result = self.get_or_declare_rt_print_result();
-                self.builder.build_call(
-                    rt_print_result,
-                    &[label.into(), value.into(), time_nanos.into()],
-                    "",
-                ).unwrap();
+                self.builder
+                    .build_call(
+                        rt_print_result,
+                        &[label.into(), value.into(), time_nanos.into()],
+                        "",
+                    )
+                    .unwrap();
                 Ok(Some(self.context.i64_type().const_int(0, false).into()))
             }
             "__print_test_header" => {
                 // __print_test_header(test_num, is_slow) - print test case header
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("__print_test_header expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "__print_test_header expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let test_num = self.compile_arg(&args[0])?;
                 let is_slow = self.compile_arg(&args[1])?;
                 let rt_print_test_header = self.get_or_declare_rt_print_test_header();
-                self.builder.build_call(
-                    rt_print_test_header,
-                    &[test_num.into(), is_slow.into()],
-                    "",
-                ).unwrap();
+                self.builder
+                    .build_call(rt_print_test_header, &[test_num.into(), is_slow.into()], "")
+                    .unwrap();
                 Ok(Some(self.context.i64_type().const_int(0, false).into()))
             }
             "__print_test_result" => {
                 // __print_test_result(label, actual, expected, time_nanos) - print test result
                 // Returns true if passed, false if failed
                 if args.len() != 4 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("__print_test_result expects 4 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "__print_test_result expects 4 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let label = self.compile_arg(&args[0])?;
                 let actual = self.compile_arg(&args[1])?;
                 let expected = self.compile_arg(&args[2])?;
                 let time_nanos = self.compile_arg(&args[3])?;
                 let rt_print_test_result = self.get_or_declare_rt_print_test_result();
-                let result = self.builder.build_call(
-                    rt_print_test_result,
-                    &[label.into(), actual.into(), expected.into(), time_nanos.into()],
-                    "test_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_print_test_result,
+                        &[
+                            label.into(),
+                            actual.into(),
+                            expected.into(),
+                            time_nanos.into(),
+                        ],
+                        "test_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "__print_newline" => {
                 // __print_newline() - print a blank line
                 let rt_print_newline = self.get_or_declare_rt_print_newline();
-                self.builder.build_call(
-                    rt_print_newline,
-                    &[],
-                    "",
-                ).unwrap();
+                self.builder.build_call(rt_print_newline, &[], "").unwrap();
                 Ok(Some(self.context.i64_type().const_int(0, false).into()))
             }
             "sum" => {
                 // sum(collection) - sum all elements
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("sum expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "sum expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let collection = self.compile_arg(&args[0])?;
                 let rt_sum = self.get_or_declare_rt_sum();
-                let result = self.builder.build_call(
-                    rt_sum,
-                    &[collection.into()],
-                    "sum_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_sum, &[collection.into()], "sum_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "fold" => {
                 // fold(initial, folder, collection)
                 if args.len() != 3 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("fold expects 3 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "fold expects 3 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let initial = self.compile_arg(&args[0])?;
                 let folder = self.compile_arg(&args[1])?;
                 let collection = self.compile_arg(&args[2])?;
                 let rt_fold = self.get_or_declare_rt_fold();
-                let result = self.builder.build_call(
-                    rt_fold,
-                    &[initial.into(), folder.into(), collection.into()],
-                    "fold_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_fold,
+                        &[initial.into(), folder.into(), collection.into()],
+                        "fold_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "memoize" => {
                 // memoize(function) - wrap a function with memoization cache
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("memoize expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "memoize expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let func_arg = self.compile_arg(&args[0])?;
                 let rt_memoize = self.get_or_declare_rt_memoize();
-                let result = self.builder.build_call(
-                    rt_memoize,
-                    &[func_arg.into()],
-                    "memoize_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_memoize, &[func_arg.into()], "memoize_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "map" => {
                 // map(mapper, collection) - transform each element
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("map expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "map expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let mapper = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_map = self.get_or_declare_rt_map();
-                let result = self.builder.build_call(
-                    rt_map,
-                    &[mapper.into(), collection.into()],
-                    "map_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_map, &[mapper.into(), collection.into()], "map_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "filter" => {
                 // filter(predicate, collection) - keep matching elements
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("filter expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "filter expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let predicate = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_filter = self.get_or_declare_rt_filter();
-                let result = self.builder.build_call(
-                    rt_filter,
-                    &[predicate.into(), collection.into()],
-                    "filter_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_filter,
+                        &[predicate.into(), collection.into()],
+                        "filter_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "reduce" => {
                 // reduce(reducer, collection) - reduce with first element as initial
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("reduce expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "reduce expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let reducer = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_reduce = self.get_or_declare_rt_reduce();
-                let result = self.builder.build_call(
-                    rt_reduce,
-                    &[reducer.into(), collection.into()],
-                    "reduce_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_reduce,
+                        &[reducer.into(), collection.into()],
+                        "reduce_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "first" => {
                 // first(collection) - get first element
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("first expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "first expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let collection = self.compile_arg(&args[0])?;
                 let rt_first = self.get_or_declare_rt_first();
-                let result = self.builder.build_call(
-                    rt_first,
-                    &[collection.into()],
-                    "first_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_first, &[collection.into()], "first_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "second" => {
                 // second(collection) - get second element
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("second expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "second expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let collection = self.compile_arg(&args[0])?;
                 let rt_second = self.get_or_declare_rt_second();
-                let result = self.builder.build_call(
-                    rt_second,
-                    &[collection.into()],
-                    "second_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_second, &[collection.into()], "second_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "last" => {
                 // last(collection) - get last element
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("last expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "last expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let collection = self.compile_arg(&args[0])?;
                 let rt_last = self.get_or_declare_rt_last();
-                let result = self.builder.build_call(
-                    rt_last,
-                    &[collection.into()],
-                    "last_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_last, &[collection.into()], "last_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "rest" => {
                 // rest(collection) - get all elements except first
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("rest expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "rest expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let collection = self.compile_arg(&args[0])?;
                 let rt_rest = self.get_or_declare_rt_rest();
-                let result = self.builder.build_call(
-                    rt_rest,
-                    &[collection.into()],
-                    "rest_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_rest, &[collection.into()], "rest_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "size" => {
                 // size(collection) - get number of elements
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("size expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "size expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let collection = self.compile_arg(&args[0])?;
                 let rt_size = self.get_or_declare_rt_size();
-                let result = self.builder.build_call(
-                    rt_size,
-                    &[collection.into()],
-                    "size_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_size, &[collection.into()], "size_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "get" => {
                 // get(index, collection) - get element at index
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("get expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "get expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let index = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_get = self.get_or_declare_rt_get();
-                let result = self.builder.build_call(
-                    rt_get,
-                    &[index.into(), collection.into()],
-                    "get_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_get, &[index.into(), collection.into()], "get_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "id" => {
                 // id(value) - identity function, returns its argument unchanged
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("id expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "id expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 // Simply return the argument unchanged - no runtime call needed
                 let value = self.compile_arg(&args[0])?;
@@ -4624,251 +5371,279 @@ impl<'ctx> CodegenContext<'ctx> {
             "int" => {
                 // int(value) - convert to integer
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("int expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "int expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_int = self.get_or_declare_rt_int();
-                let result = self.builder.build_call(
-                    rt_int,
-                    &[value.into()],
-                    "int_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_int, &[value.into()], "int_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "ints" => {
                 // ints(string) - extract all integers from string
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("ints expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "ints expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_ints = self.get_or_declare_rt_ints();
-                let result = self.builder.build_call(
-                    rt_ints,
-                    &[value.into()],
-                    "ints_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_ints, &[value.into()], "ints_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "list" => {
                 // list(value) - convert to list
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("list expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "list expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_list = self.get_or_declare_rt_list();
-                let result = self.builder.build_call(
-                    rt_list,
-                    &[value.into()],
-                    "list_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_list, &[value.into()], "list_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "set" => {
                 // set(value) - convert to set
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("set expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "set expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_set = self.get_or_declare_rt_set();
-                let result = self.builder.build_call(
-                    rt_set,
-                    &[value.into()],
-                    "set_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_set, &[value.into()], "set_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "dict" => {
                 // dict(value) - convert to dict
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("dict expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "dict expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_dict = self.get_or_declare_rt_dict();
-                let result = self.builder.build_call(
-                    rt_dict,
-                    &[value.into()],
-                    "dict_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_dict, &[value.into()], "dict_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "keys" => {
                 // keys(dict) - get dict keys as list
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("keys expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "keys expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let collection = self.compile_arg(&args[0])?;
                 let rt_keys = self.get_or_declare_rt_keys();
-                let result = self.builder.build_call(
-                    rt_keys,
-                    &[collection.into()],
-                    "keys_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_keys, &[collection.into()], "keys_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "values" => {
                 // values(dict) - get dict values as list
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("values expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "values expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let collection = self.compile_arg(&args[0])?;
                 let rt_values = self.get_or_declare_rt_values();
-                let result = self.builder.build_call(
-                    rt_values,
-                    &[collection.into()],
-                    "values_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_values, &[collection.into()], "values_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "each" => {
                 // each(fn, collection) - apply fn to each element for side effects
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("each expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "each expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let func = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_each = self.get_or_declare_rt_each();
-                let result = self.builder.build_call(
-                    rt_each,
-                    &[func.into(), collection.into()],
-                    "each_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_each, &[func.into(), collection.into()], "each_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "find" => {
                 // find(predicate, collection) - find first matching element
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("find expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "find expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let predicate = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_find = self.get_or_declare_rt_find();
-                let result = self.builder.build_call(
-                    rt_find,
-                    &[predicate.into(), collection.into()],
-                    "find_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_find,
+                        &[predicate.into(), collection.into()],
+                        "find_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "count" => {
                 // count(predicate, collection) - count matching elements
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("count expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "count expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let predicate = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_count = self.get_or_declare_rt_count();
-                let result = self.builder.build_call(
-                    rt_count,
-                    &[predicate.into(), collection.into()],
-                    "count_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_count,
+                        &[predicate.into(), collection.into()],
+                        "count_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "flat_map" => {
                 // flat_map(mapper, collection) - map and flatten
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("flat_map expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "flat_map expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let mapper = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_flat_map = self.get_or_declare_rt_flat_map();
-                let result = self.builder.build_call(
-                    rt_flat_map,
-                    &[mapper.into(), collection.into()],
-                    "flat_map_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_flat_map,
+                        &[mapper.into(), collection.into()],
+                        "flat_map_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "filter_map" => {
                 // filter_map(mapper, collection) - map and keep truthy
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("filter_map expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "filter_map expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let mapper = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_filter_map = self.get_or_declare_rt_filter_map();
-                let result = self.builder.build_call(
-                    rt_filter_map,
-                    &[mapper.into(), collection.into()],
-                    "filter_map_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_filter_map,
+                        &[mapper.into(), collection.into()],
+                        "filter_map_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "find_map" => {
                 // find_map(mapper, collection) - find first truthy mapped
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("find_map expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "find_map expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let mapper = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_find_map = self.get_or_declare_rt_find_map();
-                let result = self.builder.build_call(
-                    rt_find_map,
-                    &[mapper.into(), collection.into()],
-                    "find_map_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_find_map,
+                        &[mapper.into(), collection.into()],
+                        "find_map_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "scan" => {
                 // scan(initial, folder, collection) - fold with intermediate results
                 if args.len() != 3 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("scan expects 3 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "scan expects 3 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let initial = self.compile_arg(&args[0])?;
                 let folder = self.compile_arg(&args[1])?;
                 let collection = self.compile_arg(&args[2])?;
                 let rt_scan = self.get_or_declare_rt_scan();
-                let result = self.builder.build_call(
-                    rt_scan,
-                    &[initial.into(), folder.into(), collection.into()],
-                    "scan_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_scan,
+                        &[initial.into(), folder.into(), collection.into()],
+                        "scan_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "fold_s" => {
                 // fold_s(initial, folder, collection) - fold with state
                 if args.len() != 3 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("fold_s expects 3 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "fold_s expects 3 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let initial = self.compile_arg(&args[0])?;
                 let folder = self.compile_arg(&args[1])?;
                 let collection = self.compile_arg(&args[2])?;
                 let rt_fold_s = self.get_or_declare_rt_fold_s();
-                let result = self.builder.build_call(
-                    rt_fold_s,
-                    &[initial.into(), folder.into(), collection.into()],
-                    "fold_s_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_fold_s,
+                        &[initial.into(), folder.into(), collection.into()],
+                        "fold_s_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "max" => {
@@ -4878,27 +5653,26 @@ impl<'ctx> CodegenContext<'ctx> {
                     1 => {
                         let collection = self.compile_arg(&args[0])?;
                         let rt_max = self.get_or_declare_rt_max();
-                        let result = self.builder.build_call(
-                            rt_max,
-                            &[collection.into()],
-                            "max_result",
-                        ).unwrap();
+                        let result = self
+                            .builder
+                            .build_call(rt_max, &[collection.into()], "max_result")
+                            .unwrap();
                         Ok(Some(result.try_as_basic_value().left().unwrap()))
                     }
                     2 => {
                         let a = self.compile_arg(&args[0])?;
                         let b = self.compile_arg(&args[1])?;
                         let rt_max2 = self.get_or_declare_rt_max2();
-                        let result = self.builder.build_call(
-                            rt_max2,
-                            &[a.into(), b.into()],
-                            "max2_result",
-                        ).unwrap();
+                        let result = self
+                            .builder
+                            .build_call(rt_max2, &[a.into(), b.into()], "max2_result")
+                            .unwrap();
                         Ok(Some(result.try_as_basic_value().left().unwrap()))
                     }
-                    _ => Err(CompileError::UnsupportedExpression(
-                        format!("max expects 1 or 2 arguments, got {}", args.len())
-                    ))
+                    _ => Err(CompileError::UnsupportedExpression(format!(
+                        "max expects 1 or 2 arguments, got {}",
+                        args.len()
+                    ))),
                 }
             }
             "min" => {
@@ -4908,128 +5682,139 @@ impl<'ctx> CodegenContext<'ctx> {
                     1 => {
                         let collection = self.compile_arg(&args[0])?;
                         let rt_min = self.get_or_declare_rt_min();
-                        let result = self.builder.build_call(
-                            rt_min,
-                            &[collection.into()],
-                            "min_result",
-                        ).unwrap();
+                        let result = self
+                            .builder
+                            .build_call(rt_min, &[collection.into()], "min_result")
+                            .unwrap();
                         Ok(Some(result.try_as_basic_value().left().unwrap()))
                     }
                     2 => {
                         let a = self.compile_arg(&args[0])?;
                         let b = self.compile_arg(&args[1])?;
                         let rt_min2 = self.get_or_declare_rt_min2();
-                        let result = self.builder.build_call(
-                            rt_min2,
-                            &[a.into(), b.into()],
-                            "min2_result",
-                        ).unwrap();
+                        let result = self
+                            .builder
+                            .build_call(rt_min2, &[a.into(), b.into()], "min2_result")
+                            .unwrap();
                         Ok(Some(result.try_as_basic_value().left().unwrap()))
                     }
-                    _ => Err(CompileError::UnsupportedExpression(
-                        format!("min expects 1 or 2 arguments, got {}", args.len())
-                    ))
+                    _ => Err(CompileError::UnsupportedExpression(format!(
+                        "min expects 1 or 2 arguments, got {}",
+                        args.len()
+                    ))),
                 }
             }
             "skip" => {
                 // skip(n, collection) - skip first n elements
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("skip expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "skip expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let n = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_skip = self.get_or_declare_rt_skip();
-                let result = self.builder.build_call(
-                    rt_skip,
-                    &[n.into(), collection.into()],
-                    "skip_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_skip, &[n.into(), collection.into()], "skip_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "take" => {
                 // take(n, collection) - take first n elements
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("take expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "take expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let n = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_take = self.get_or_declare_rt_take();
-                let result = self.builder.build_call(
-                    rt_take,
-                    &[n.into(), collection.into()],
-                    "take_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_take, &[n.into(), collection.into()], "take_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "sort" => {
                 // sort(comparator, collection) - sort collection
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("sort expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "sort expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let comparator = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_sort = self.get_or_declare_rt_sort();
-                let result = self.builder.build_call(
-                    rt_sort,
-                    &[comparator.into(), collection.into()],
-                    "sort_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_sort,
+                        &[comparator.into(), collection.into()],
+                        "sort_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "reverse" => {
                 // reverse(collection) - reverse collection
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("reverse expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "reverse expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let collection = self.compile_arg(&args[0])?;
                 let rt_reverse = self.get_or_declare_rt_reverse();
-                let result = self.builder.build_call(
-                    rt_reverse,
-                    &[collection.into()],
-                    "reverse_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_reverse, &[collection.into()], "reverse_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "rotate" => {
                 // rotate(steps, collection) - rotate collection
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("rotate expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "rotate expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let steps = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_rotate = self.get_or_declare_rt_rotate();
-                let result = self.builder.build_call(
-                    rt_rotate,
-                    &[steps.into(), collection.into()],
-                    "rotate_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_rotate,
+                        &[steps.into(), collection.into()],
+                        "rotate_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "chunk" => {
                 // chunk(size, collection) - split into chunks
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("chunk expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "chunk expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let size_arg = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_chunk = self.get_or_declare_rt_chunk();
-                let result = self.builder.build_call(
-                    rt_chunk,
-                    &[size_arg.into(), collection.into()],
-                    "chunk_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_chunk,
+                        &[size_arg.into(), collection.into()],
+                        "chunk_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "union" => {
@@ -5037,7 +5822,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 // Can be called with multiple args or a single list of collections
                 if args.is_empty() {
                     return Err(CompileError::UnsupportedExpression(
-                        "union requires at least 1 argument".to_string()
+                        "union requires at least 1 argument".to_string(),
                     ));
                 }
 
@@ -5057,31 +5842,41 @@ impl<'ctx> CodegenContext<'ctx> {
                 for (i, arg) in compiled_args.iter().enumerate() {
                     let index = i64_type.const_int(i as u64, false);
                     let elem_ptr = unsafe {
-                        self.builder.build_in_bounds_gep(
-                            array_type,
-                            array_alloca,
-                            &[i64_type.const_zero(), index],
-                            &format!("union_arg_ptr_{}", i),
-                        ).unwrap()
+                        self.builder
+                            .build_in_bounds_gep(
+                                array_type,
+                                array_alloca,
+                                &[i64_type.const_zero(), index],
+                                &format!("union_arg_ptr_{}", i),
+                            )
+                            .unwrap()
                     };
                     self.builder.build_store(elem_ptr, *arg).unwrap();
                 }
 
                 // Create list from the array
                 let rt_list_from_values = self.get_or_declare_rt_list_from_values();
-                let list = self.builder.build_call(
-                    rt_list_from_values,
-                    &[array_alloca.into(), i64_type.const_int(argc as u64, false).into()],
-                    "union_list",
-                ).unwrap().try_as_basic_value().left().unwrap();
+                let list = self
+                    .builder
+                    .build_call(
+                        rt_list_from_values,
+                        &[
+                            array_alloca.into(),
+                            i64_type.const_int(argc as u64, false).into(),
+                        ],
+                        "union_list",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap();
 
                 // Call rt_union_all(list)
                 let rt_union_all = self.get_or_declare_rt_union_all();
-                let result = self.builder.build_call(
-                    rt_union_all,
-                    &[list.into()],
-                    "union_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_union_all, &[list.into()], "union_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "intersection" => {
@@ -5089,7 +5884,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 // Can be called with multiple args or a single list of collections
                 if args.is_empty() {
                     return Err(CompileError::UnsupportedExpression(
-                        "intersection requires at least 1 argument".to_string()
+                        "intersection requires at least 1 argument".to_string(),
                     ));
                 }
 
@@ -5103,575 +5898,637 @@ impl<'ctx> CodegenContext<'ctx> {
                 let i64_type = self.context.i64_type();
                 let argc = compiled_args.len();
                 let array_type = i64_type.array_type(argc as u32);
-                let array_alloca = self.builder.build_alloca(array_type, "intersection_args").unwrap();
+                let array_alloca = self
+                    .builder
+                    .build_alloca(array_type, "intersection_args")
+                    .unwrap();
 
                 // Store each argument in the array
                 for (i, arg) in compiled_args.iter().enumerate() {
                     let index = i64_type.const_int(i as u64, false);
                     let elem_ptr = unsafe {
-                        self.builder.build_in_bounds_gep(
-                            array_type,
-                            array_alloca,
-                            &[i64_type.const_zero(), index],
-                            &format!("intersection_arg_ptr_{}", i),
-                        ).unwrap()
+                        self.builder
+                            .build_in_bounds_gep(
+                                array_type,
+                                array_alloca,
+                                &[i64_type.const_zero(), index],
+                                &format!("intersection_arg_ptr_{}", i),
+                            )
+                            .unwrap()
                     };
                     self.builder.build_store(elem_ptr, *arg).unwrap();
                 }
 
                 // Create list from the array
                 let rt_list_from_values = self.get_or_declare_rt_list_from_values();
-                let list = self.builder.build_call(
-                    rt_list_from_values,
-                    &[array_alloca.into(), i64_type.const_int(argc as u64, false).into()],
-                    "intersection_list",
-                ).unwrap().try_as_basic_value().left().unwrap();
+                let list = self
+                    .builder
+                    .build_call(
+                        rt_list_from_values,
+                        &[
+                            array_alloca.into(),
+                            i64_type.const_int(argc as u64, false).into(),
+                        ],
+                        "intersection_list",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap();
 
                 // Call rt_intersection_all(list)
                 let rt_intersection_all = self.get_or_declare_rt_intersection_all();
-                let result = self.builder.build_call(
-                    rt_intersection_all,
-                    &[list.into()],
-                    "intersection_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_intersection_all, &[list.into()], "intersection_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "includes?" => {
                 // includes?(collection, value) - check if value is in collection
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("includes? expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "includes? expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let collection = self.compile_arg(&args[0])?;
                 let value = self.compile_arg(&args[1])?;
                 let rt_includes = self.get_or_declare_rt_includes();
-                let result = self.builder.build_call(
-                    rt_includes,
-                    &[collection.into(), value.into()],
-                    "includes_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_includes,
+                        &[collection.into(), value.into()],
+                        "includes_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "excludes?" => {
                 // excludes?(collection, value) - check if value is not in collection
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("excludes? expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "excludes? expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let collection = self.compile_arg(&args[0])?;
                 let value = self.compile_arg(&args[1])?;
                 let rt_excludes = self.get_or_declare_rt_excludes();
-                let result = self.builder.build_call(
-                    rt_excludes,
-                    &[collection.into(), value.into()],
-                    "excludes_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_excludes,
+                        &[collection.into(), value.into()],
+                        "excludes_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "any?" => {
                 // any?(predicate, collection) - check if any element matches
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("any? expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "any? expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let predicate = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_any = self.get_or_declare_rt_any();
-                let result = self.builder.build_call(
-                    rt_any,
-                    &[predicate.into(), collection.into()],
-                    "any_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_any, &[predicate.into(), collection.into()], "any_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "all?" => {
                 // all?(predicate, collection) - check if all elements match
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("all? expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "all? expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let predicate = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_all = self.get_or_declare_rt_all();
-                let result = self.builder.build_call(
-                    rt_all,
-                    &[predicate.into(), collection.into()],
-                    "all_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_all, &[predicate.into(), collection.into()], "all_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "lines" => {
                 // lines(string) - split string into lines
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("lines expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "lines expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let string = self.compile_arg(&args[0])?;
                 let rt_lines = self.get_or_declare_rt_lines();
-                let result = self.builder.build_call(
-                    rt_lines,
-                    &[string.into()],
-                    "lines_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_lines, &[string.into()], "lines_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "split" => {
                 // split(separator, string) - split string by separator
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("split expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "split expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let separator = self.compile_arg(&args[0])?;
                 let string = self.compile_arg(&args[1])?;
                 let rt_split = self.get_or_declare_rt_split();
-                let result = self.builder.build_call(
-                    rt_split,
-                    &[separator.into(), string.into()],
-                    "split_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_split, &[separator.into(), string.into()], "split_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "join" => {
                 // join(separator, collection) - join collection with separator
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("join expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "join expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let separator = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_join = self.get_or_declare_rt_join();
-                let result = self.builder.build_call(
-                    rt_join,
-                    &[separator.into(), collection.into()],
-                    "join_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_join,
+                        &[separator.into(), collection.into()],
+                        "join_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "upper" => {
                 // upper(string) - convert to uppercase
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("upper expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "upper expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let string = self.compile_arg(&args[0])?;
                 let rt_upper = self.get_or_declare_rt_upper();
-                let result = self.builder.build_call(
-                    rt_upper,
-                    &[string.into()],
-                    "upper_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_upper, &[string.into()], "upper_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "lower" => {
                 // lower(string) - convert to lowercase
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("lower expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "lower expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let string = self.compile_arg(&args[0])?;
                 let rt_lower = self.get_or_declare_rt_lower();
-                let result = self.builder.build_call(
-                    rt_lower,
-                    &[string.into()],
-                    "lower_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_lower, &[string.into()], "lower_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "replace" => {
                 // replace(from, to, string) - replace occurrences
                 if args.len() != 3 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("replace expects 3 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "replace expects 3 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let from = self.compile_arg(&args[0])?;
                 let to = self.compile_arg(&args[1])?;
                 let string = self.compile_arg(&args[2])?;
                 let rt_replace = self.get_or_declare_rt_replace();
-                let result = self.builder.build_call(
-                    rt_replace,
-                    &[from.into(), to.into(), string.into()],
-                    "replace_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_replace,
+                        &[from.into(), to.into(), string.into()],
+                        "replace_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "abs" => {
                 // abs(value) - absolute value
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("abs expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "abs expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_abs = self.get_or_declare_rt_abs();
-                let result = self.builder.build_call(
-                    rt_abs,
-                    &[value.into()],
-                    "abs_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_abs, &[value.into()], "abs_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "signum" => {
                 // signum(value) - sign of value
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("signum expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "signum expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_signum = self.get_or_declare_rt_signum();
-                let result = self.builder.build_call(
-                    rt_signum,
-                    &[value.into()],
-                    "signum_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_signum, &[value.into()], "signum_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "type" => {
                 // type(value) - get type name
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("type expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "type expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_type = self.get_or_declare_rt_type();
-                let result = self.builder.build_call(
-                    rt_type,
-                    &[value.into()],
-                    "type_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_type, &[value.into()], "type_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "str" => {
                 // str(value) - convert value to string
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("str expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "str expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_str = self.get_or_declare_rt_str();
-                let result = self.builder.build_call(
-                    rt_str,
-                    &[value.into()],
-                    "str_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_str, &[value.into()], "str_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "or" => {
                 // or(a, b) - return a if truthy, else b
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("or expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "or expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let a = self.compile_arg(&args[0])?;
                 let b = self.compile_arg(&args[1])?;
                 let rt_or = self.get_or_declare_rt_or();
-                let result = self.builder.build_call(
-                    rt_or,
-                    &[a.into(), b.into()],
-                    "or_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_or, &[a.into(), b.into()], "or_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "and" => {
                 // and(a, b) - return b if a is truthy, else a
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("and expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "and expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let a = self.compile_arg(&args[0])?;
                 let b = self.compile_arg(&args[1])?;
                 let rt_and = self.get_or_declare_rt_and();
-                let result = self.builder.build_call(
-                    rt_and,
-                    &[a.into(), b.into()],
-                    "and_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_and, &[a.into(), b.into()], "and_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "read" => {
                 // read(path) - read file contents
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("read expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "read expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let path = self.compile_arg(&args[0])?;
                 let rt_read = self.get_or_declare_rt_read();
-                let result = self.builder.build_call(
-                    rt_read,
-                    &[path.into()],
-                    "read_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_read, &[path.into()], "read_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "push" => {
                 // push(value, collection) - add value to collection
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("push expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "push expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_push = self.get_or_declare_rt_push();
-                let result = self.builder.build_call(
-                    rt_push,
-                    &[value.into(), collection.into()],
-                    "push_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_push, &[value.into(), collection.into()], "push_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "assoc" => {
                 // assoc(key, value, collection) - associate key with value
                 if args.len() != 3 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("assoc expects 3 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "assoc expects 3 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let key = self.compile_arg(&args[0])?;
                 let value = self.compile_arg(&args[1])?;
                 let collection = self.compile_arg(&args[2])?;
                 let rt_assoc = self.get_or_declare_rt_assoc();
-                let result = self.builder.build_call(
-                    rt_assoc,
-                    &[key.into(), value.into(), collection.into()],
-                    "assoc_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_assoc,
+                        &[key.into(), value.into(), collection.into()],
+                        "assoc_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "update" => {
                 // update(key, updater, collection) - update key using updater function
                 if args.len() != 3 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("update expects 3 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "update expects 3 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let key = self.compile_arg(&args[0])?;
                 let updater = self.compile_arg(&args[1])?;
                 let collection = self.compile_arg(&args[2])?;
                 let rt_update = self.get_or_declare_rt_update();
-                let result = self.builder.build_call(
-                    rt_update,
-                    &[key.into(), updater.into(), collection.into()],
-                    "update_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_update,
+                        &[key.into(), updater.into(), collection.into()],
+                        "update_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "update_d" => {
                 // update_d(key, default, updater, collection) - update with default
                 if args.len() != 4 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("update_d expects 4 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "update_d expects 4 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let key = self.compile_arg(&args[0])?;
                 let default = self.compile_arg(&args[1])?;
                 let updater = self.compile_arg(&args[2])?;
                 let collection = self.compile_arg(&args[3])?;
                 let rt_update_d = self.get_or_declare_rt_update_d();
-                let result = self.builder.build_call(
-                    rt_update_d,
-                    &[key.into(), default.into(), updater.into(), collection.into()],
-                    "update_d_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_update_d,
+                        &[
+                            key.into(),
+                            default.into(),
+                            updater.into(),
+                            collection.into(),
+                        ],
+                        "update_d_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "vec_add" => {
                 // vec_add(a, b) - element-wise addition of lists
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("vec_add expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "vec_add expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let a = self.compile_arg(&args[0])?;
                 let b = self.compile_arg(&args[1])?;
                 let rt_vec_add = self.get_or_declare_rt_vec_add();
-                let result = self.builder.build_call(
-                    rt_vec_add,
-                    &[a.into(), b.into()],
-                    "vec_add_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_vec_add, &[a.into(), b.into()], "vec_add_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "bit_and" => {
                 // bit_and(a, b) - bitwise AND
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("bit_and expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "bit_and expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let a = self.compile_arg(&args[0])?;
                 let b = self.compile_arg(&args[1])?;
                 let rt_bit_and = self.get_or_declare_rt_bit_and();
-                let result = self.builder.build_call(
-                    rt_bit_and,
-                    &[a.into(), b.into()],
-                    "bit_and_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_bit_and, &[a.into(), b.into()], "bit_and_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "bit_or" => {
                 // bit_or(a, b) - bitwise OR
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("bit_or expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "bit_or expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let a = self.compile_arg(&args[0])?;
                 let b = self.compile_arg(&args[1])?;
                 let rt_bit_or = self.get_or_declare_rt_bit_or();
-                let result = self.builder.build_call(
-                    rt_bit_or,
-                    &[a.into(), b.into()],
-                    "bit_or_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_bit_or, &[a.into(), b.into()], "bit_or_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "bit_xor" => {
                 // bit_xor(a, b) - bitwise XOR
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("bit_xor expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "bit_xor expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let a = self.compile_arg(&args[0])?;
                 let b = self.compile_arg(&args[1])?;
                 let rt_bit_xor = self.get_or_declare_rt_bit_xor();
-                let result = self.builder.build_call(
-                    rt_bit_xor,
-                    &[a.into(), b.into()],
-                    "bit_xor_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_bit_xor, &[a.into(), b.into()], "bit_xor_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "bit_not" => {
                 // bit_not(value) - bitwise NOT
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("bit_not expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "bit_not expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_bit_not = self.get_or_declare_rt_bit_not();
-                let result = self.builder.build_call(
-                    rt_bit_not,
-                    &[value.into()],
-                    "bit_not_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_bit_not, &[value.into()], "bit_not_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "bit_shift_left" => {
                 // bit_shift_left(value, shift) - bitwise left shift
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("bit_shift_left expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "bit_shift_left expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let shift = self.compile_arg(&args[1])?;
                 let rt_bit_shift_left = self.get_or_declare_rt_bit_shift_left();
-                let result = self.builder.build_call(
-                    rt_bit_shift_left,
-                    &[value.into(), shift.into()],
-                    "bit_shift_left_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_bit_shift_left,
+                        &[value.into(), shift.into()],
+                        "bit_shift_left_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "bit_shift_right" => {
                 // bit_shift_right(value, shift) - bitwise right shift
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("bit_shift_right expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "bit_shift_right expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let shift = self.compile_arg(&args[1])?;
                 let rt_bit_shift_right = self.get_or_declare_rt_bit_shift_right();
-                let result = self.builder.build_call(
-                    rt_bit_shift_right,
-                    &[value.into(), shift.into()],
-                    "bit_shift_right_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_bit_shift_right,
+                        &[value.into(), shift.into()],
+                        "bit_shift_right_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "repeat" => {
                 // repeat(value) - create infinite sequence repeating value
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("repeat expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "repeat expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_repeat = self.get_or_declare_rt_repeat();
-                let result = self.builder.build_call(
-                    rt_repeat,
-                    &[value.into()],
-                    "repeat_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_repeat, &[value.into()], "repeat_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "cycle" => {
                 // cycle(collection) - cycle through collection infinitely
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("cycle expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "cycle expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let collection = self.compile_arg(&args[0])?;
                 let rt_cycle = self.get_or_declare_rt_cycle();
-                let result = self.builder.build_call(
-                    rt_cycle,
-                    &[collection.into()],
-                    "cycle_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_cycle, &[collection.into()], "cycle_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "iterate" => {
                 // iterate(generator, initial) - generate infinite sequence by repeated application
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("iterate expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "iterate expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let generator = self.compile_arg(&args[0])?;
                 let initial = self.compile_arg(&args[1])?;
                 let rt_iterate = self.get_or_declare_rt_iterate();
-                let result = self.builder.build_call(
-                    rt_iterate,
-                    &[generator.into(), initial.into()],
-                    "iterate_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_iterate,
+                        &[generator.into(), initial.into()],
+                        "iterate_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "combinations" => {
                 // combinations(size, collection) - generate all combinations of given size
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("combinations expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "combinations expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let size = self.compile_arg(&args[0])?;
                 let collection = self.compile_arg(&args[1])?;
                 let rt_combinations = self.get_or_declare_rt_combinations();
-                let result = self.builder.build_call(
-                    rt_combinations,
-                    &[size.into(), collection.into()],
-                    "combinations_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_combinations,
+                        &[size.into(), collection.into()],
+                        "combinations_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "range" => {
@@ -5682,11 +6539,10 @@ impl<'ctx> CodegenContext<'ctx> {
                     let from = self.compile_arg(&args[0])?;
                     let to = self.compile_arg(&args[1])?;
                     let rt_range = self.get_or_declare_rt_range_exclusive();
-                    let result = self.builder.build_call(
-                        rt_range,
-                        &[from.into(), to.into()],
-                        "range_result",
-                    ).unwrap();
+                    let result = self
+                        .builder
+                        .build_call(rt_range, &[from.into(), to.into()], "range_result")
+                        .unwrap();
                     Ok(Some(result.try_as_basic_value().left().unwrap()))
                 } else if args.len() == 3 {
                     // 3-arg: range(from, to, step)
@@ -5694,16 +6550,20 @@ impl<'ctx> CodegenContext<'ctx> {
                     let to = self.compile_arg(&args[1])?;
                     let step = self.compile_arg(&args[2])?;
                     let rt_range = self.get_or_declare_rt_range();
-                    let result = self.builder.build_call(
-                        rt_range,
-                        &[from.into(), to.into(), step.into()],
-                        "range_result",
-                    ).unwrap();
+                    let result = self
+                        .builder
+                        .build_call(
+                            rt_range,
+                            &[from.into(), to.into(), step.into()],
+                            "range_result",
+                        )
+                        .unwrap();
                     Ok(Some(result.try_as_basic_value().left().unwrap()))
                 } else {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("range expects 2 or 3 arguments, got {}", args.len())
-                    ));
+                    Err(CompileError::UnsupportedExpression(format!(
+                        "range expects 2 or 3 arguments, got {}",
+                        args.len()
+                    )))
                 }
             }
             "zip" => {
@@ -5711,7 +6571,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 // Variadic function similar to puts
                 if args.is_empty() {
                     return Err(CompileError::UnsupportedExpression(
-                        "zip expects at least 1 argument".to_string()
+                        "zip expects at least 1 argument".to_string(),
                     ));
                 }
 
@@ -5737,7 +6597,9 @@ impl<'ctx> CodegenContext<'ctx> {
                 let argc_val = self.context.i32_type().const_int(argc as u64, false);
 
                 let argv_ptr = if argc == 0 {
-                    self.context.ptr_type(inkwell::AddressSpace::from(0)).const_null()
+                    self.context
+                        .ptr_type(inkwell::AddressSpace::from(0))
+                        .const_null()
                 } else {
                     // Allocate stack space for arguments
                     let array_type = i64_type.array_type(argc as u32);
@@ -5747,77 +6609,88 @@ impl<'ctx> CodegenContext<'ctx> {
                     for (i, arg) in compiled_args.iter().enumerate() {
                         let index = i64_type.const_int(i as u64, false);
                         let elem_ptr = unsafe {
-                            self.builder.build_in_bounds_gep(
-                                array_type,
-                                array_alloca,
-                                &[i64_type.const_zero(), index],
-                                &format!("zip_arg_ptr_{}", i),
-                            ).unwrap()
+                            self.builder
+                                .build_in_bounds_gep(
+                                    array_type,
+                                    array_alloca,
+                                    &[i64_type.const_zero(), index],
+                                    &format!("zip_arg_ptr_{}", i),
+                                )
+                                .unwrap()
                         };
                         self.builder.build_store(elem_ptr, *arg).unwrap();
                     }
 
                     // Cast to pointer
                     let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
-                    self.builder.build_pointer_cast(array_alloca, ptr_type, "zip_argv").unwrap()
+                    self.builder
+                        .build_pointer_cast(array_alloca, ptr_type, "zip_argv")
+                        .unwrap()
                 };
 
-                let result = self.builder.build_call(
-                    rt_zip,
-                    &[argc_val.into(), argv_ptr.into()],
-                    "zip_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_zip, &[argc_val.into(), argv_ptr.into()], "zip_result")
+                    .unwrap();
 
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "regex_match" => {
                 // regex_match(pattern, string) - match regex and return captures
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("regex_match expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "regex_match expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let pattern = self.compile_arg(&args[0])?;
                 let string = self.compile_arg(&args[1])?;
                 let rt_regex_match = self.get_or_declare_rt_regex_match();
-                let result = self.builder.build_call(
-                    rt_regex_match,
-                    &[pattern.into(), string.into()],
-                    "regex_match_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_regex_match,
+                        &[pattern.into(), string.into()],
+                        "regex_match_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "regex_match_all" => {
                 // regex_match_all(pattern, string) - match all occurrences
                 if args.len() != 2 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("regex_match_all expects 2 arguments, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "regex_match_all expects 2 arguments, got {}",
+                        args.len()
+                    )));
                 }
                 let pattern = self.compile_arg(&args[0])?;
                 let string = self.compile_arg(&args[1])?;
                 let rt_regex_match_all = self.get_or_declare_rt_regex_match_all();
-                let result = self.builder.build_call(
-                    rt_regex_match_all,
-                    &[pattern.into(), string.into()],
-                    "regex_match_all_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_regex_match_all,
+                        &[pattern.into(), string.into()],
+                        "regex_match_all_result",
+                    )
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "md5" => {
                 // md5(value) - compute MD5 hash
                 if args.len() != 1 {
-                    return Err(CompileError::UnsupportedExpression(
-                        format!("md5 expects 1 argument, got {}", args.len())
-                    ));
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "md5 expects 1 argument, got {}",
+                        args.len()
+                    )));
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_md5 = self.get_or_declare_rt_md5();
-                let result = self.builder.build_call(
-                    rt_md5,
-                    &[value.into()],
-                    "md5_result",
-                ).unwrap();
+                let result = self
+                    .builder
+                    .build_call(rt_md5, &[value.into()], "md5_result")
+                    .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             _ => Ok(None), // Not a builtin, let compile_call handle it
@@ -5910,10 +6783,8 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (label: i64, value: i64, time_nanos: i64) -> void
         let i64_type = self.context.i64_type();
         let void_type = self.context.void_type();
-        let fn_type = void_type.fn_type(
-            &[i64_type.into(), i64_type.into(), i64_type.into()],
-            false,
-        );
+        let fn_type =
+            void_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
         self.module.add_function(fn_name, fn_type, None)
     }
 
@@ -5927,10 +6798,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (test_num: i64, is_slow: i64) -> void
         let i64_type = self.context.i64_type();
         let void_type = self.context.void_type();
-        let fn_type = void_type.fn_type(
-            &[i64_type.into(), i64_type.into()],
-            false,
-        );
+        let fn_type = void_type.fn_type(&[i64_type.into(), i64_type.into()], false);
         self.module.add_function(fn_name, fn_type, None)
     }
 
@@ -5944,7 +6812,12 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (label: i64, actual: i64, expected: i64, time_nanos: i64) -> i64 (bool)
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(
-            &[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()],
+            &[
+                i64_type.into(),
+                i64_type.into(),
+                i64_type.into(),
+                i64_type.into(),
+            ],
             false,
         );
         self.module.add_function(fn_name, fn_type, None)
@@ -5975,10 +6848,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let i32_type = self.context.i32_type();
         let i64_type = self.context.i64_type();
 
-        let fn_type = i64_type.fn_type(
-            &[i32_type.into(), ptr_type.into()],
-            false,
-        );
+        let fn_type = i64_type.fn_type(&[i32_type.into(), ptr_type.into()], false);
 
         self.module.add_function(fn_name, fn_type, None)
     }
@@ -5996,7 +6866,12 @@ impl<'ctx> CodegenContext<'ctx> {
         let i64_type = self.context.i64_type();
 
         let fn_type = i64_type.fn_type(
-            &[ptr_type.into(), i32_type.into(), ptr_type.into(), i64_type.into()],
+            &[
+                ptr_type.into(),
+                i32_type.into(),
+                ptr_type.into(),
+                i64_type.into(),
+            ],
             false,
         );
 
@@ -6015,10 +6890,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let i32_type = self.context.i32_type();
         let i64_type = self.context.i64_type();
 
-        let fn_type = i64_type.fn_type(
-            &[i64_type.into(), i32_type.into(), ptr_type.into()],
-            false,
-        );
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i32_type.into(), ptr_type.into()], false);
 
         self.module.add_function(fn_name, fn_type, None)
     }
@@ -6048,10 +6920,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
         let i64_type = self.context.i64_type();
 
-        let fn_type = i64_type.fn_type(
-            &[ptr_type.into(), i64_type.into()],
-            false,
-        );
+        let fn_type = i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
 
         self.module.add_function(fn_name, fn_type, None)
     }
@@ -6092,10 +6961,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Signature: (initial: Value, folder: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
-        let fn_type = i64_type.fn_type(
-            &[i64_type.into(), i64_type.into(), i64_type.into()],
-            false,
-        );
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
         self.module.add_function(fn_name, fn_type, None)
     }
 
@@ -6780,7 +7646,15 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Signature: rt_update_d(key: Value, default: Value, updater: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
-        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], false);
+        let fn_type = i64_type.fn_type(
+            &[
+                i64_type.into(),
+                i64_type.into(),
+                i64_type.into(),
+                i64_type.into(),
+            ],
+            false,
+        );
         self.module.add_function(fn_name, fn_type, None)
     }
 
@@ -6945,10 +7819,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let i32_type = self.context.i32_type();
         let i64_type = self.context.i64_type();
 
-        let fn_type = i64_type.fn_type(
-            &[i32_type.into(), ptr_type.into()],
-            false,
-        );
+        let fn_type = i64_type.fn_type(&[i32_type.into(), ptr_type.into()], false);
 
         self.module.add_function(fn_name, fn_type, None)
     }

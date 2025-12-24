@@ -1,8 +1,8 @@
 use super::*;
-use crate::lexer::LexError;
-use crate::parser::ParseError;
 use crate::codegen::compiler::CompileError as CodegenCompileError;
 use crate::codegen::pipeline::CompileError as PipelineCompileError;
+use crate::lexer::LexError;
+use crate::parser::ParseError;
 use crate::runner::RunnerError;
 use expect_test::expect;
 
@@ -72,14 +72,21 @@ Stack trace:
   0: divide at 10:5
   1: calculate at 20:3
   2: <main>
-"#]].assert_eq(&display);
+"#]]
+    .assert_eq(&display);
 }
 
 #[test]
 fn error_kind() {
     assert_eq!(SantaError::lex("test", pos(1, 1)).kind(), "LexError");
-    assert_eq!(SantaError::parse("test", span(1, 1, 1, 1)).kind(), "ParseError");
-    assert_eq!(SantaError::compile("test", span(1, 1, 1, 1)).kind(), "CompileError");
+    assert_eq!(
+        SantaError::parse("test", span(1, 1, 1, 1)).kind(),
+        "ParseError"
+    );
+    assert_eq!(
+        SantaError::compile("test", span(1, 1, 1, 1)).kind(),
+        "CompileError"
+    );
     assert_eq!(SantaError::runtime("test").kind(), "RuntimeError");
 }
 
@@ -111,7 +118,10 @@ fn error_position() {
 
 #[test]
 fn from_lex_error_unexpected_char() {
-    let lex_err = LexError::UnexpectedCharacter { ch: '?', position: pos(3, 7) };
+    let lex_err = LexError::UnexpectedCharacter {
+        ch: '?',
+        position: pos(3, 7),
+    };
     let santa_err: SantaError = lex_err.into();
     let display = format!("{}", santa_err);
     expect![[r#"LexError at 3:7: Unexpected character '?'"#]].assert_eq(&display);
@@ -119,7 +129,9 @@ fn from_lex_error_unexpected_char() {
 
 #[test]
 fn from_lex_error_unterminated_string() {
-    let lex_err = LexError::UnterminatedString { position: pos(5, 10) };
+    let lex_err = LexError::UnterminatedString {
+        position: pos(5, 10),
+    };
     let santa_err: SantaError = lex_err.into();
     let display = format!("{}", santa_err);
     expect![[r#"LexError at 5:10: Unterminated string literal"#]].assert_eq(&display);
@@ -127,7 +139,10 @@ fn from_lex_error_unterminated_string() {
 
 #[test]
 fn from_lex_error_invalid_number() {
-    let lex_err = LexError::InvalidNumber { text: "1.2.3".to_string(), position: pos(1, 1) };
+    let lex_err = LexError::InvalidNumber {
+        text: "1.2.3".to_string(),
+        position: pos(1, 1),
+    };
     let santa_err: SantaError = lex_err.into();
     let display = format!("{}", santa_err);
     expect![[r#"LexError at 1:1: Invalid number: '1.2.3'"#]].assert_eq(&display);

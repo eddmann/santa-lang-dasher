@@ -485,7 +485,9 @@ fn lex_string_with_escapes() {
 
 #[test]
 fn lex_operators() {
-    check_tokens("+ - * / %", expect![[r#"
+    check_tokens(
+        "+ - * / %",
+        expect![[r#"
         Ok(
             [
                 Token {
@@ -567,8 +569,11 @@ fn lex_operators() {
                     },
                 },
             ],
-        )"#]]);
-    check_tokens("== != < <= > >=", expect![[r#"
+        )"#]],
+    );
+    check_tokens(
+        "== != < <= > >=",
+        expect![[r#"
         Ok(
             [
                 Token {
@@ -663,8 +668,11 @@ fn lex_operators() {
                     },
                 },
             ],
-        )"#]]);
-    check_tokens("&& || !", expect![[r#"
+        )"#]],
+    );
+    check_tokens(
+        "&& || !",
+        expect![[r#"
         Ok(
             [
                 Token {
@@ -720,8 +728,11 @@ fn lex_operators() {
                     },
                 },
             ],
-        )"#]]);
-    check_tokens("|> >> .. ..=", expect![[r#"
+        )"#]],
+    );
+    check_tokens(
+        "|> >> .. ..=",
+        expect![[r#"
         Ok(
             [
                 Token {
@@ -790,12 +801,15 @@ fn lex_operators() {
                     },
                 },
             ],
-        )"#]]);
+        )"#]],
+    );
 }
 
 #[test]
 fn lex_keywords_vs_identifiers() {
-    check_tokens("let mut if else", expect![[r#"
+    check_tokens(
+        "let mut if else",
+        expect![[r#"
         Ok(
             [
                 Token {
@@ -864,8 +878,11 @@ fn lex_keywords_vs_identifiers() {
                     },
                 },
             ],
-        )"#]]);
-    check_tokens("match return break", expect![[r#"
+        )"#]],
+    );
+    check_tokens(
+        "match return break",
+        expect![[r#"
         Ok(
             [
                 Token {
@@ -921,8 +938,11 @@ fn lex_keywords_vs_identifiers() {
                     },
                 },
             ],
-        )"#]]);
-    check_tokens("nil true false", expect![[r#"
+        )"#]],
+    );
+    check_tokens(
+        "nil true false",
+        expect![[r#"
         Ok(
             [
                 Token {
@@ -978,8 +998,11 @@ fn lex_keywords_vs_identifiers() {
                     },
                 },
             ],
-        )"#]]);
-    check_tokens("x counter is_valid?", expect![[r#"
+        )"#]],
+    );
+    check_tokens(
+        "x counter is_valid?",
+        expect![[r#"
         Ok(
             [
                 Token {
@@ -1041,12 +1064,15 @@ fn lex_keywords_vs_identifiers() {
                     },
                 },
             ],
-        )"#]]);
+        )"#]],
+    );
 }
 
 #[test]
 fn lex_comments() {
-    check_tokens("42 // this is a comment", expect![[r#"
+    check_tokens(
+        "42 // this is a comment",
+        expect![[r#"
         Ok(
             [
                 Token {
@@ -1093,8 +1119,11 @@ fn lex_comments() {
                     },
                 },
             ],
-        )"#]]);
-    check_tokens("// full line comment\n42", expect![[r#"
+        )"#]],
+    );
+    check_tokens(
+        "// full line comment\n42",
+        expect![[r#"
         Ok(
             [
                 Token {
@@ -1141,12 +1170,15 @@ fn lex_comments() {
                     },
                 },
             ],
-        )"#]]);
+        )"#]],
+    );
 }
 
 #[test]
 fn lex_delimiters() {
-    check_tokens("( ) [ ] { } #{", expect![[r#"
+    check_tokens(
+        "( ) [ ] { } #{",
+        expect![[r#"
         Ok(
             [
                 Token {
@@ -1254,8 +1286,11 @@ fn lex_delimiters() {
                     },
                 },
             ],
-        )"#]]);
-    check_tokens(", : ; | `", expect![[r#"
+        )"#]],
+    );
+    check_tokens(
+        ", : ; | `",
+        expect![[r#"
         Ok(
             [
                 Token {
@@ -1337,12 +1372,15 @@ fn lex_delimiters() {
                     },
                 },
             ],
-        )"#]]);
+        )"#]],
+    );
 }
 
 #[test]
 fn lex_range_operators() {
-    check_tokens("1..5", expect![[r#"
+    check_tokens(
+        "1..5",
+        expect![[r#"
         Ok(
             [
                 Token {
@@ -1402,8 +1440,11 @@ fn lex_range_operators() {
                     },
                 },
             ],
-        )"#]]);
-    check_tokens("1..=5", expect![[r#"
+        )"#]],
+    );
+    check_tokens(
+        "1..=5",
+        expect![[r#"
         Ok(
             [
                 Token {
@@ -1463,7 +1504,8 @@ fn lex_range_operators() {
                     },
                 },
             ],
-        )"#]]);
+        )"#]],
+    );
 }
 
 #[test]
