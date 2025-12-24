@@ -2594,6 +2594,58 @@ impl<'ctx> CodegenContext<'ctx> {
                                 .unwrap();
                             self.builder.position_at_end(next_bb);
                         }
+                        Pattern::Range {
+                            start,
+                            end,
+                            inclusive,
+                        } => {
+                            // Range pattern inside list: check if element is in range
+                            let start_val = self.compile_integer(*start);
+                            let elem_int = elem_val.into_int_value();
+                            let start_int = start_val.into_int_value();
+
+                            // elem >= start
+                            let ge_start = self
+                                .builder
+                                .build_int_compare(
+                                    IntPredicate::SGE,
+                                    elem_int,
+                                    start_int,
+                                    "elem_ge_start",
+                                )
+                                .unwrap();
+
+                            let in_range = if let Some(e) = end {
+                                let end_val = self.compile_integer(*e);
+                                let end_int = end_val.into_int_value();
+
+                                let cmp = if *inclusive {
+                                    IntPredicate::SLE
+                                } else {
+                                    IntPredicate::SLT
+                                };
+                                let lt_end = self
+                                    .builder
+                                    .build_int_compare(cmp, elem_int, end_int, "elem_lt_end")
+                                    .unwrap();
+
+                                self.builder
+                                    .build_and(ge_start, lt_end, "in_range")
+                                    .unwrap()
+                            } else {
+                                // Unbounded range: just check >= start
+                                ge_start
+                            };
+
+                            let next_bb = self.context.append_basic_block(
+                                current_fn,
+                                &format!("check_elem_{}", elem_idx + 1),
+                            );
+                            self.builder
+                                .build_conditional_branch(in_range, next_bb, no_match_bb)
+                                .unwrap();
+                            self.builder.position_at_end(next_bb);
+                        }
                         Pattern::List(nested_patterns) => {
                             // Nested list pattern - recursively check the nested pattern
                             // We already have elem_val from above
@@ -2714,6 +2766,79 @@ impl<'ctx> CodegenContext<'ctx> {
                                     }
                                     Pattern::RestIdentifier(_) => {
                                         // Skip rest pattern in matching
+                                    }
+                                    Pattern::Range {
+                                        start,
+                                        end,
+                                        inclusive,
+                                    } => {
+                                        // Range pattern in nested list
+                                        let nested_idx_val = self.compile_integer(ni as i64);
+                                        let nested_elem_result = self
+                                            .builder
+                                            .build_call(
+                                                rt_get_nested,
+                                                &[nested_idx_val.into(), elem_val.into()],
+                                                &format!("nested_elem_{}_{}", i, ni),
+                                            )
+                                            .unwrap();
+                                        let nested_elem_val =
+                                            nested_elem_result.try_as_basic_value().left().unwrap();
+
+                                        let start_val = self.compile_integer(*start);
+                                        let nested_int = nested_elem_val.into_int_value();
+                                        let start_int = start_val.into_int_value();
+
+                                        // nested_elem >= start
+                                        let ge_start = self
+                                            .builder
+                                            .build_int_compare(
+                                                IntPredicate::SGE,
+                                                nested_int,
+                                                start_int,
+                                                "nested_ge_start",
+                                            )
+                                            .unwrap();
+
+                                        let in_range = if let Some(e) = end {
+                                            let end_val = self.compile_integer(*e);
+                                            let end_int = end_val.into_int_value();
+
+                                            let cmp = if *inclusive {
+                                                IntPredicate::SLE
+                                            } else {
+                                                IntPredicate::SLT
+                                            };
+                                            let lt_end = self
+                                                .builder
+                                                .build_int_compare(
+                                                    cmp,
+                                                    nested_int,
+                                                    end_int,
+                                                    "nested_lt_end",
+                                                )
+                                                .unwrap();
+
+                                            self.builder
+                                                .build_and(ge_start, lt_end, "nested_in_range")
+                                                .unwrap()
+                                        } else {
+                                            // Unbounded range: just check >= start
+                                            ge_start
+                                        };
+
+                                        let next_nested_bb = self.context.append_basic_block(
+                                            current_fn,
+                                            &format!("check_nested_range_{}_{}", i, ni + 1),
+                                        );
+                                        self.builder
+                                            .build_conditional_branch(
+                                                in_range,
+                                                next_nested_bb,
+                                                no_match_bb,
+                                            )
+                                            .unwrap();
+                                        self.builder.position_at_end(next_nested_bb);
                                     }
                                     _ => {
                                         return Err(CompileError::UnsupportedPattern(format!(
@@ -3440,6 +3565,59 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Load parameters from argv into local variables
         for (i, param) in params.iter().enumerate() {
+            // Check if this is a rest parameter
+            if let Pattern::RestIdentifier(rest_name) = &param.pattern {
+                // Rest parameter: collect all remaining args into a list
+                // We need to create a list from argv[i..argc]
+
+                // Calculate number of rest args: argc - i
+                let start_idx = self.context.i64_type().const_int(i as u64, false);
+                let argc_i64 = self
+                    .builder
+                    .build_int_z_extend(_argc, i64_type, "argc_ext")
+                    .unwrap();
+                let rest_count = self
+                    .builder
+                    .build_int_sub(argc_i64, start_idx, "rest_count")
+                    .unwrap();
+
+                // Use rt_list_from_values to create the list
+                // We pass a pointer to argv[i] and the count
+                let rest_argv = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(
+                            i64_type,
+                            argv,
+                            &[start_idx],
+                            "rest_argv",
+                        )
+                        .unwrap()
+                };
+
+                // Cast rest_count to i32 for rt_list_from_values
+                let rest_count_i32 = self
+                    .builder
+                    .build_int_truncate(rest_count, self.context.i32_type(), "rest_count_i32")
+                    .unwrap();
+
+                let rt_list_from_values = self.get_or_declare_rt_list_from_values();
+                let rest_list = self
+                    .builder
+                    .build_call(
+                        rt_list_from_values,
+                        &[rest_count_i32.into(), rest_argv.into()],
+                        "rest_args",
+                    )
+                    .unwrap();
+
+                let rest_val = rest_list.try_as_basic_value().left().unwrap();
+                let alloca = self.builder.build_alloca(i64_type, rest_name).unwrap();
+                self.builder.build_store(alloca, rest_val).unwrap();
+                self.variables.insert(rest_name.clone(), alloca);
+                // Rest param is always last, no need to continue
+                break;
+            }
+
             // Calculate pointer to argv[i]
             let index = self.context.i64_type().const_int(i as u64, false);
             let arg_ptr = unsafe {

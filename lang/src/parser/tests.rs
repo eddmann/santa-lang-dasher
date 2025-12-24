@@ -1444,3 +1444,254 @@ part_two: { if let y = f(5) { y } }"#;
     // Verify the IfLet is correctly parsed inside the section
     assert!(matches!(&program.sections[0], Section::PartTwo(_)));
 }
+
+#[test]
+fn parse_range_pattern_exclusive() {
+    // Range pattern in match: 8..12
+    let expr = parse_expr("match x { 8..12 { 1 } _ { 0 } }").unwrap();
+    expect![[r#"
+        Match {
+            subject: Identifier(
+                "x",
+            ),
+            arms: [
+                MatchArm {
+                    pattern: Range {
+                        start: 8,
+                        end: Some(
+                            12,
+                        ),
+                        inclusive: false,
+                    },
+                    guard: None,
+                    body: Block(
+                        [
+                            Expr(
+                                Integer(
+                                    1,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+                MatchArm {
+                    pattern: Wildcard,
+                    guard: None,
+                    body: Block(
+                        [
+                            Expr(
+                                Integer(
+                                    0,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_range_pattern_inclusive() {
+    // Inclusive range pattern in match: 8..=12
+    let expr = parse_expr("match x { 8..=12 { 1 } _ { 0 } }").unwrap();
+    expect![[r#"
+        Match {
+            subject: Identifier(
+                "x",
+            ),
+            arms: [
+                MatchArm {
+                    pattern: Range {
+                        start: 8,
+                        end: Some(
+                            12,
+                        ),
+                        inclusive: true,
+                    },
+                    guard: None,
+                    body: Block(
+                        [
+                            Expr(
+                                Integer(
+                                    1,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+                MatchArm {
+                    pattern: Wildcard,
+                    guard: None,
+                    body: Block(
+                        [
+                            Expr(
+                                Integer(
+                                    0,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_range_pattern_unbounded() {
+    // Unbounded range pattern in match: 8..
+    let expr = parse_expr("match x { 8.. { 1 } _ { 0 } }").unwrap();
+    expect![[r#"
+        Match {
+            subject: Identifier(
+                "x",
+            ),
+            arms: [
+                MatchArm {
+                    pattern: Range {
+                        start: 8,
+                        end: None,
+                        inclusive: false,
+                    },
+                    guard: None,
+                    body: Block(
+                        [
+                            Expr(
+                                Integer(
+                                    1,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+                MatchArm {
+                    pattern: Wildcard,
+                    guard: None,
+                    body: Block(
+                        [
+                            Expr(
+                                Integer(
+                                    0,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_range_pattern_in_list() {
+    // Range pattern inside list pattern: [0, 8..12]
+    let expr = parse_expr("match x { [0, 8..12] { 1 } _ { 0 } }").unwrap();
+    expect![[r#"
+        Match {
+            subject: Identifier(
+                "x",
+            ),
+            arms: [
+                MatchArm {
+                    pattern: List(
+                        [
+                            Literal(
+                                Integer(
+                                    0,
+                                ),
+                            ),
+                            Range {
+                                start: 8,
+                                end: Some(
+                                    12,
+                                ),
+                                inclusive: false,
+                            },
+                        ],
+                    ),
+                    guard: None,
+                    body: Block(
+                        [
+                            Expr(
+                                Integer(
+                                    1,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+                MatchArm {
+                    pattern: Wildcard,
+                    guard: None,
+                    body: Block(
+                        [
+                            Expr(
+                                Integer(
+                                    0,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_rest_param_only() {
+    // Rest parameter as only param: |..n|
+    let expr = parse_expr("|..n| n").unwrap();
+    expect![[r#"
+        Function {
+            params: [
+                Param {
+                    pattern: RestIdentifier(
+                        "n",
+                    ),
+                },
+            ],
+            body: Identifier(
+                "n",
+            ),
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_rest_param_with_regular_params() {
+    // Rest parameter after regular params: |a, b, ..rest|
+    let expr = parse_expr("|a, b, ..rest| rest").unwrap();
+    expect![[r#"
+        Function {
+            params: [
+                Param {
+                    pattern: Identifier(
+                        "a",
+                    ),
+                },
+                Param {
+                    pattern: Identifier(
+                        "b",
+                    ),
+                },
+                Param {
+                    pattern: RestIdentifier(
+                        "rest",
+                    ),
+                },
+            ],
+            body: Identifier(
+                "rest",
+            ),
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}

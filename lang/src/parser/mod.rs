@@ -615,6 +615,43 @@ impl Parser {
                         }
                     }
                 }
+                TokenKind::DotDot => {
+                    // Rest parameter: |..rest| or |a, ..rest|
+                    self.advance(); // consume '..'
+                    let name_token = self.current_token()?;
+                    let name = match &name_token.kind {
+                        TokenKind::Identifier(name) => name.clone(),
+                        _ => {
+                            return Err(ParseError {
+                                message: format!(
+                                    "Expected identifier after '..' in rest parameter, got {:?}",
+                                    name_token.kind
+                                ),
+                                line: name_token.span.start.line as usize,
+                                column: name_token.span.start.column as usize,
+                            });
+                        }
+                    };
+                    self.advance(); // consume identifier
+                    params.push(Param {
+                        pattern: Pattern::RestIdentifier(name),
+                    });
+
+                    // Rest parameter must be last, so expect closing |
+                    let next = self.current_token()?;
+                    if !matches!(next.kind, TokenKind::VerticalBar) {
+                        return Err(ParseError {
+                            message: format!(
+                                "Rest parameter must be last, expected '|' but got {:?}",
+                                next.kind
+                            ),
+                            line: next.span.start.line as usize,
+                            column: next.span.start.column as usize,
+                        });
+                    }
+                    self.advance(); // consume closing '|'
+                    break;
+                }
                 TokenKind::VerticalBar => {
                     // Empty parameter list: ||
                     self.advance();
@@ -623,7 +660,7 @@ impl Parser {
                 _ => {
                     return Err(ParseError {
                         message: format!(
-                            "Expected identifier, '[', or '|' in function parameters, got {:?}",
+                            "Expected identifier, '[', '..', or '|' in function parameters, got {:?}",
                             token.kind
                         ),
                         line: token.span.start.line as usize,
@@ -1293,9 +1330,59 @@ impl Parser {
             TokenKind::LeftBracket => self.parse_list_pattern(),
             // Literal patterns
             TokenKind::Integer(n) => {
-                let pattern = Pattern::Literal(Literal::Integer(*n));
+                let start = *n;
                 self.advance();
-                Ok(pattern)
+
+                // Check for range pattern: 8..12, 8..=12, or 8..
+                if let Ok(next) = self.current_token() {
+                    match next.kind {
+                        TokenKind::DotDot => {
+                            self.advance(); // consume '..'
+                            // Check for end value (optional for unbounded range)
+                            if let Ok(end_token) = self.current_token() {
+                                if let TokenKind::Integer(end) = end_token.kind {
+                                    self.advance();
+                                    return Ok(Pattern::Range {
+                                        start,
+                                        end: Some(end),
+                                        inclusive: false,
+                                    });
+                                }
+                            }
+                            // Unbounded range pattern (8..)
+                            return Ok(Pattern::Range {
+                                start,
+                                end: None,
+                                inclusive: false,
+                            });
+                        }
+                        TokenKind::DotDotEqual => {
+                            self.advance(); // consume '..='
+                            // Inclusive range requires end value
+                            let end_token = self.current_token()?;
+                            if let TokenKind::Integer(end) = end_token.kind {
+                                self.advance();
+                                return Ok(Pattern::Range {
+                                    start,
+                                    end: Some(end),
+                                    inclusive: true,
+                                });
+                            } else {
+                                return Err(ParseError {
+                                    message: format!(
+                                        "Expected integer after '..=' in range pattern, got {:?}",
+                                        end_token.kind
+                                    ),
+                                    line: end_token.span.start.line as usize,
+                                    column: end_token.span.start.column as usize,
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                Ok(Pattern::Literal(Literal::Integer(start)))
             }
             TokenKind::Decimal(f) => {
                 let pattern = Pattern::Literal(Literal::Decimal(*f));
