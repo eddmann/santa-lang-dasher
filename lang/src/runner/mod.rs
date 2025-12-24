@@ -875,17 +875,151 @@ impl Runner {
     }
 
     /// Generate source code for a program (for AOT compilation)
+    /// This produces a standalone executable with:
+    /// - Colored CLI-style output for solution mode
+    /// - Test mode support via -t/--test flag
     pub fn generate_source(&self, program: &Program) -> String {
         let input_expr = self.get_input_section(program);
         let part_one_expr = self.get_part_one_section(program);
         let part_two_expr = self.get_part_two_section(program);
+        let tests = self.get_tests(program);
 
-        self.generate_executable_source(
+        self.generate_standalone_source(
             &program.statements,
             input_expr,
             part_one_expr,
             part_two_expr,
+            &tests,
         )
+    }
+
+    /// Generate standalone executable source with CLI-style output and test mode
+    fn generate_standalone_source(
+        &self,
+        statements: &[crate::parser::ast::Stmt],
+        input_expr: Option<&Expr>,
+        part_one_expr: Option<&Expr>,
+        part_two_expr: Option<&Expr>,
+        tests: &[&Section],
+    ) -> String {
+        let mut source = String::new();
+
+        // Re-emit all the top-level statements (function definitions, etc)
+        for stmt in statements {
+            let stmt_source = self.stmt_to_source(stmt);
+            source.push_str(&stmt_source);
+            // Only add newline if the statement doesn't already end with one
+            if !stmt_source.ends_with('\n') && !stmt_source.ends_with(";\n") {
+                source.push_str(";\n");
+            }
+        }
+
+        // Check for test mode via command line args
+        source.push_str("let __args = __get_args();\n");
+        source.push_str("let __test_mode = size(__args) > 0 && (first(__args) == \"-t\" || first(__args) == \"--test\");\n");
+        source.push_str("let __include_slow = __test_mode && size(__args) > 1 && (__args[1] == \"-s\" || __args[1] == \"--slow\");\n");
+        source.push('\n');
+
+        source.push_str("if __test_mode {\n");
+
+        // Generate test mode code
+        if tests.is_empty() {
+            source.push_str("  puts(\"No tests found.\");\n");
+            source.push_str("  0\n");
+        } else {
+            source.push_str("  let mut __exit_code = 0;\n");
+            source.push_str("  let mut __test_num = 0;\n");
+            source.push('\n');
+
+            for (i, test) in tests.iter().enumerate() {
+                if let Section::Test { input, part_one: expected_one, part_two: expected_two, slow } = test {
+                    // Add blank line between tests (not before first)
+                    if i > 0 {
+                        source.push_str("  __print_newline();\n");
+                    }
+
+                    // Generate test code with slow check
+                    if *slow {
+                        source.push_str("  if __include_slow {\n");
+                        source.push_str("    __test_num = __test_num + 1;\n");
+                        source.push_str("    __print_test_header(__test_num, true);\n");
+                    } else {
+                        source.push_str("  {\n");
+                        source.push_str("    __test_num = __test_num + 1;\n");
+                        source.push_str("    __print_test_header(__test_num, false);\n");
+                    }
+
+                    // Bind test input
+                    source.push_str("    let input = ");
+                    source.push_str(&self.expr_to_source(input));
+                    source.push_str(";\n");
+
+                    // Test part_one if expected value exists
+                    if let Some(expected) = expected_one {
+                        if let Some(part_one) = part_one_expr {
+                            source.push_str("    let __start = __time_nanos();\n");
+                            source.push_str("    let __actual = ");
+                            source.push_str(&self.expr_to_source(part_one));
+                            source.push_str(";\n");
+                            source.push_str("    let __time = __time_nanos() - __start;\n");
+                            source.push_str("    if !__print_test_result(\"Part 1\", __actual, ");
+                            source.push_str(&self.expr_to_source(expected));
+                            source.push_str(", __time) { __exit_code = 3; };\n");
+                        }
+                    }
+
+                    // Test part_two if expected value exists
+                    if let Some(expected) = expected_two {
+                        if let Some(part_two) = part_two_expr {
+                            source.push_str("    let __start2 = __time_nanos();\n");
+                            source.push_str("    let __actual2 = ");
+                            source.push_str(&self.expr_to_source(part_two));
+                            source.push_str(";\n");
+                            source.push_str("    let __time2 = __time_nanos() - __start2;\n");
+                            source.push_str("    if !__print_test_result(\"Part 2\", __actual2, ");
+                            source.push_str(&self.expr_to_source(expected));
+                            source.push_str(", __time2) { __exit_code = 3; };\n");
+                        }
+                    }
+
+                    source.push_str("  };\n");
+                }
+            }
+
+            source.push_str("  __exit_code\n");
+        }
+
+        source.push_str("} else {\n");
+
+        // Generate solution mode code with colored output
+        if let Some(input) = input_expr {
+            source.push_str("  let input = ");
+            source.push_str(&self.expr_to_source(input));
+            source.push_str(";\n");
+        }
+
+        if let Some(part_one) = part_one_expr {
+            source.push_str("  let __start_one = __time_nanos();\n");
+            source.push_str("  let __result_one = ");
+            source.push_str(&self.expr_to_source(part_one));
+            source.push_str(";\n");
+            source.push_str("  let __time_one = __time_nanos() - __start_one;\n");
+            source.push_str("  __print_result(\"Part 1\", __result_one, __time_one);\n");
+        }
+
+        if let Some(part_two) = part_two_expr {
+            source.push_str("  let __start_two = __time_nanos();\n");
+            source.push_str("  let __result_two = ");
+            source.push_str(&self.expr_to_source(part_two));
+            source.push_str(";\n");
+            source.push_str("  let __time_two = __time_nanos() - __start_two;\n");
+            source.push_str("  __print_result(\"Part 2\", __result_two, __time_two);\n");
+        }
+
+        source.push_str("  0\n");
+        source.push_str("}\n");
+
+        source
     }
 
     /// Test helper: alias for generate_source (for debugging)

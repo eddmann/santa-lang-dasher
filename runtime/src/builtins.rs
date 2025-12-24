@@ -5,7 +5,7 @@
 
 use super::value::Value;
 use super::heap::{LazySequenceObject, LazySeqKind, ClosureObject};
-use super::operations::{rt_add, runtime_error, type_name};
+use super::operations::{rt_add, rt_eq, runtime_error, type_name};
 use regex::Regex;
 
 // ============================================================================
@@ -4985,6 +4985,91 @@ pub extern "C" fn rt_time_nanos() -> Value {
     let start = START_TIME.get_or_init(Instant::now);
     let elapsed_nanos = start.elapsed().as_nanos() as i64;
     Value::from_integer(elapsed_nanos)
+}
+
+// ============================================================================
+// CLI Output Functions (for standalone compiled executables)
+// ============================================================================
+
+/// Get command line arguments (excluding program name).
+/// Returns a list of strings.
+#[no_mangle]
+pub extern "C" fn rt_get_args() -> Value {
+    let args: im::Vector<Value> = std::env::args()
+        .skip(1) // Skip program name
+        .map(|s| Value::from_string(&s))
+        .collect();
+    Value::from_list(args)
+}
+
+/// Print solution result with colors and timing.
+/// label: "Part 1" or "Part 2"
+/// value: the result value
+/// time_nanos: execution time in nanoseconds
+#[no_mangle]
+pub extern "C" fn rt_print_result(label: Value, value: Value, time_nanos: Value) {
+    let label_str = label.as_string().unwrap_or("Result");
+    let time_ms = time_nanos.as_integer().unwrap_or(0) / 1_000_000;
+    println!(
+        "{}: \x1b[32m{}\x1b[0m \x1b[90m{}ms\x1b[0m",
+        label_str,
+        format_value(&value),
+        time_ms
+    );
+}
+
+/// Print test case header.
+/// test_num: test number (1-based)
+/// is_slow: whether this test is marked @slow
+#[no_mangle]
+pub extern "C" fn rt_print_test_header(test_num: Value, is_slow: Value) {
+    let num = test_num.as_integer().unwrap_or(0);
+    if is_slow.as_bool().unwrap_or(false) {
+        println!("\x1b[4mTestcase #{}\x1b[0m \x1b[33m(slow)\x1b[0m", num);
+    } else {
+        println!("\x1b[4mTestcase #{}\x1b[0m", num);
+    }
+}
+
+/// Print test result (pass or fail).
+/// Returns true if passed, false if failed.
+/// label: "Part 1" or "Part 2"
+/// actual: the computed value
+/// expected: the expected value
+/// time_nanos: execution time in nanoseconds
+#[no_mangle]
+pub extern "C" fn rt_print_test_result(
+    label: Value,
+    actual: Value,
+    expected: Value,
+    time_nanos: Value,
+) -> Value {
+    let label_str = label.as_string().unwrap_or("Result");
+    let time_ms = time_nanos.as_integer().unwrap_or(0) / 1_000_000;
+    let passed = rt_eq(actual, expected).as_bool().unwrap_or(false);
+
+    if passed {
+        println!(
+            "{}: {} \x1b[32m✔\x1b[0m \x1b[90m{}ms\x1b[0m",
+            label_str,
+            format_value(&actual),
+            time_ms
+        );
+    } else {
+        println!(
+            "{}: {} \x1b[31m✘ (Expected: {})\x1b[0m",
+            label_str,
+            format_value(&actual),
+            format_value(&expected)
+        );
+    }
+    Value::from_bool(passed)
+}
+
+/// Print a blank line (for separating test cases).
+#[no_mangle]
+pub extern "C" fn rt_print_newline() {
+    println!();
 }
 
 /// Get the cache path for an AOC input file.

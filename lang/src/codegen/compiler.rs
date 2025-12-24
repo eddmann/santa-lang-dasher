@@ -4336,6 +4336,82 @@ impl<'ctx> CodegenContext<'ctx> {
                 ).unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
+            "__get_args" => {
+                // __get_args() - get command line arguments (excluding program name)
+                // Takes no arguments, returns list of strings
+                let rt_get_args = self.get_or_declare_rt_get_args();
+                let result = self.builder.build_call(
+                    rt_get_args,
+                    &[],
+                    "get_args_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "__print_result" => {
+                // __print_result(label, value, time_nanos) - print colored solution result
+                if args.len() != 3 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("__print_result expects 3 arguments, got {}", args.len())
+                    ));
+                }
+                let label = self.compile_arg(&args[0])?;
+                let value = self.compile_arg(&args[1])?;
+                let time_nanos = self.compile_arg(&args[2])?;
+                let rt_print_result = self.get_or_declare_rt_print_result();
+                self.builder.build_call(
+                    rt_print_result,
+                    &[label.into(), value.into(), time_nanos.into()],
+                    "",
+                ).unwrap();
+                Ok(Some(self.context.i64_type().const_int(0, false).into()))
+            }
+            "__print_test_header" => {
+                // __print_test_header(test_num, is_slow) - print test case header
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("__print_test_header expects 2 arguments, got {}", args.len())
+                    ));
+                }
+                let test_num = self.compile_arg(&args[0])?;
+                let is_slow = self.compile_arg(&args[1])?;
+                let rt_print_test_header = self.get_or_declare_rt_print_test_header();
+                self.builder.build_call(
+                    rt_print_test_header,
+                    &[test_num.into(), is_slow.into()],
+                    "",
+                ).unwrap();
+                Ok(Some(self.context.i64_type().const_int(0, false).into()))
+            }
+            "__print_test_result" => {
+                // __print_test_result(label, actual, expected, time_nanos) - print test result
+                // Returns true if passed, false if failed
+                if args.len() != 4 {
+                    return Err(CompileError::UnsupportedExpression(
+                        format!("__print_test_result expects 4 arguments, got {}", args.len())
+                    ));
+                }
+                let label = self.compile_arg(&args[0])?;
+                let actual = self.compile_arg(&args[1])?;
+                let expected = self.compile_arg(&args[2])?;
+                let time_nanos = self.compile_arg(&args[3])?;
+                let rt_print_test_result = self.get_or_declare_rt_print_test_result();
+                let result = self.builder.build_call(
+                    rt_print_test_result,
+                    &[label.into(), actual.into(), expected.into(), time_nanos.into()],
+                    "test_result",
+                ).unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
+            "__print_newline" => {
+                // __print_newline() - print a blank line
+                let rt_print_newline = self.get_or_declare_rt_print_newline();
+                self.builder.build_call(
+                    rt_print_newline,
+                    &[],
+                    "",
+                ).unwrap();
+                Ok(Some(self.context.i64_type().const_int(0, false).into()))
+            }
             "sum" => {
                 // sum(collection) - sum all elements
                 if args.len() != 1 {
@@ -5808,6 +5884,82 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: () -> i64
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_get_args runtime function
+    fn get_or_declare_rt_get_args(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_get_args";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: () -> i64 (returns list of strings)
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_print_result runtime function
+    fn get_or_declare_rt_print_result(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_print_result";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (label: i64, value: i64, time_nanos: i64) -> void
+        let i64_type = self.context.i64_type();
+        let void_type = self.context.void_type();
+        let fn_type = void_type.fn_type(
+            &[i64_type.into(), i64_type.into(), i64_type.into()],
+            false,
+        );
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_print_test_header runtime function
+    fn get_or_declare_rt_print_test_header(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_print_test_header";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (test_num: i64, is_slow: i64) -> void
+        let i64_type = self.context.i64_type();
+        let void_type = self.context.void_type();
+        let fn_type = void_type.fn_type(
+            &[i64_type.into(), i64_type.into()],
+            false,
+        );
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_print_test_result runtime function
+    fn get_or_declare_rt_print_test_result(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_print_test_result";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (label: i64, actual: i64, expected: i64, time_nanos: i64) -> i64 (bool)
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(
+            &[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()],
+            false,
+        );
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_print_newline runtime function
+    fn get_or_declare_rt_print_newline(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_print_newline";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: () -> void
+        let void_type = self.context.void_type();
+        let fn_type = void_type.fn_type(&[], false);
         self.module.add_function(fn_name, fn_type, None)
     }
 

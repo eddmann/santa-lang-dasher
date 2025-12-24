@@ -165,15 +165,14 @@ part_one: input + 1
     let runner = Runner::new();
     let source = runner.test_generate_source(&program);
 
-    // Expected source:
-    // let input = 42;
-    // let result_part_one = (input + 1);
-    // puts("PART_ONE:", result_part_one);
-    // 0
+    // Expected source now includes CLI arg handling and colored output:
+    // - __get_args() for test mode detection
+    // - __print_result() for colored output
     println!("Generated source:\n{}", source);
     assert!(source.contains("let input = 42"));
     assert!(source.contains("input + 1"));
-    assert!(source.contains("result_part_one"));
+    assert!(source.contains("__print_result"));
+    assert!(source.contains("__get_args"));
 }
 
 #[test]
