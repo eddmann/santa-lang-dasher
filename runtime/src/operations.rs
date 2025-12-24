@@ -251,6 +251,32 @@ pub extern "C" fn rt_mul(left: Value, right: Value) -> Value {
         }
     }
 
+    // Handle List * Integer (repeat list N times)
+    if let Some(list) = left.as_list() {
+        if let Some(n) = right.as_integer() {
+            if n <= 0 {
+                return Value::from_list(im::Vector::new());
+            }
+            let mut result = im::Vector::new();
+            for _ in 0..n {
+                for item in list.iter() {
+                    result.push_back(*item);
+                }
+            }
+            return Value::from_list(result);
+        }
+    }
+
+    // Handle String * Integer (repeat string N times)
+    if let Some(s) = left.as_string() {
+        if let Some(n) = right.as_integer() {
+            if n <= 0 {
+                return Value::from_string(String::new());
+            }
+            return Value::from_string(s.repeat(n as usize));
+        }
+    }
+
     Value::nil()
 }
 
