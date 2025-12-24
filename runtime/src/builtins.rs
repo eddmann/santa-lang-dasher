@@ -5261,29 +5261,25 @@ fn fetch_aoc_input(year: u32, day: u32, session: &str) -> Option<String> {
     }
 }
 
-/// Fetch content from an HTTP or HTTPS URL.
+/// Fetch content from an HTTP or HTTPS URL using curl.
 ///
 /// Returns the response body as a String, or nil on error.
 fn read_http_url(url: &str) -> Value {
-    // Create an agent with native-tls explicitly configured
-    use std::sync::Arc;
-    let connector = match native_tls::TlsConnector::new() {
-        Ok(c) => c,
-        Err(_) => return Value::nil(),
-    };
-    let agent = ureq::AgentBuilder::new()
-        .tls_connector(Arc::new(connector))
-        .build();
+    let output = std::process::Command::new("curl")
+        .arg("-s")
+        .arg("-f") // Fail silently on HTTP errors
+        .arg("-L") // Follow redirects
+        .arg(url)
+        .output();
 
-    match agent.get(url).call() {
-        Ok(response) => {
-            // Read the response body as a string
-            match response.into_string() {
+    match output {
+        Ok(result) if result.status.success() => {
+            match String::from_utf8(result.stdout) {
                 Ok(body) => Value::from_string(&body),
-                Err(_) => Value::nil(), // Failed to read body
+                Err(_) => Value::nil(),
             }
         }
-        Err(_) => Value::nil(), // Network or HTTP error
+        _ => Value::nil(),
     }
 }
 
