@@ -7,9 +7,17 @@ authors.workspace = true
 [lib]
 crate-type = ["rlib"]
 
+[features]
+default = ["embedded-runtime"]
+embedded-runtime = []  # Embed the runtime library in the binary
+
 [dependencies]
 inkwell.workspace = true  # Phase 6 (Codegen)
 santa-lang-runtime = { path = "../runtime" }  # Runtime library (re-exported)
+flate2 = "1.0"  # For decompressing embedded runtime
+
+[build-dependencies]
+flate2 = "1.0"  # For compressing runtime at build time
 
 [dev-dependencies]
 expect-test.workspace = true

@@ -3220,7 +3220,7 @@ fn builtin_sort_with_subtraction() {
 
 #[test]
 fn builtin_sort_range() {
-    // sort(>, 1..5) → [4, 3, 2, 1] (descending)
+    // sort(>, 1..5) → [1, 2, 3, 4] (ascending, matches Comet behavior)
     use crate::heap::LazySequenceObject;
     let range = LazySequenceObject::range(1, Some(5), false, 1);
     let v = Value::from_lazy_sequence(range);
@@ -3228,10 +3228,10 @@ fn builtin_sort_range() {
     let result = rt_sort(comparator, v);
     let sorted = result.as_list().expect("should be a list");
     assert_eq!(sorted.len(), 4);
-    assert_eq!(sorted[0].as_integer(), Some(4));
-    assert_eq!(sorted[1].as_integer(), Some(3));
-    assert_eq!(sorted[2].as_integer(), Some(2));
-    assert_eq!(sorted[3].as_integer(), Some(1));
+    assert_eq!(sorted[0].as_integer(), Some(1));
+    assert_eq!(sorted[1].as_integer(), Some(2));
+    assert_eq!(sorted[2].as_integer(), Some(3));
+    assert_eq!(sorted[3].as_integer(), Some(4));
 }
 
 // reverse() tests per LANG.txt §11.9

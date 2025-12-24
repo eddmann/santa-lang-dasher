@@ -8,7 +8,9 @@
 //! 5. Link with runtime library
 //! 6. Produce executable
 
+use flate2::read::GzDecoder;
 use inkwell::context::Context;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -18,6 +20,14 @@ use crate::lexer::token::{Position, Span};
 use crate::parser::ast::{Expr, Program, Stmt};
 use crate::parser::Parser;
 use crate::types::{Type, TypeInference, TypedExpr, TypedProgram};
+
+/// Embedded runtime library (compressed with gzip)
+/// This is populated by the build script if the runtime is available
+#[cfg(feature = "embedded-runtime")]
+static EMBEDDED_RUNTIME: &[u8] = include_bytes!(env!("RUNTIME_EMBEDDED_PATH"));
+
+#[cfg(not(feature = "embedded-runtime"))]
+static EMBEDDED_RUNTIME: &[u8] = &[];
 
 /// Errors that can occur during compilation
 #[derive(Debug)]
@@ -55,6 +65,42 @@ impl Compiler {
         self
     }
 
+    /// Extract the embedded runtime library to a cache directory
+    fn extract_embedded_runtime() -> Result<PathBuf, CompileError> {
+        if EMBEDDED_RUNTIME.is_empty() {
+            return Err(CompileError::LinkError(
+                "No embedded runtime available".to_string(),
+            ));
+        }
+
+        // Use a stable cache location
+        let cache_dir = std::env::temp_dir().join("santa-lang-runtime");
+        std::fs::create_dir_all(&cache_dir)?;
+
+        let runtime_path = cache_dir.join("libsanta_lang_runtime.a");
+
+        // Check if already extracted (use file size as simple validation)
+        if runtime_path.exists() {
+            if let Ok(metadata) = std::fs::metadata(&runtime_path) {
+                // If file exists and is non-empty, use it
+                if metadata.len() > 0 {
+                    return Ok(runtime_path);
+                }
+            }
+        }
+
+        // Decompress and write
+        let mut decoder = GzDecoder::new(EMBEDDED_RUNTIME);
+        let mut decompressed = Vec::new();
+        decoder
+            .read_to_end(&mut decompressed)
+            .map_err(|e| CompileError::LinkError(format!("Failed to decompress runtime: {}", e)))?;
+
+        std::fs::write(&runtime_path, &decompressed)?;
+
+        Ok(runtime_path)
+    }
+
     /// Find the runtime library
     fn find_runtime_lib(&self) -> Result<PathBuf, CompileError> {
         // If explicitly set, use that
@@ -68,6 +114,12 @@ impl Compiler {
             )));
         }
 
+        // Try embedded runtime first
+        if let Ok(path) = Self::extract_embedded_runtime() {
+            return Ok(path);
+        }
+
+        // Fall back to searching for external runtime library
         // Try to find the project root from CARGO_MANIFEST_DIR
         let project_root = std::env::var("CARGO_MANIFEST_DIR")
             .map(PathBuf::from)
