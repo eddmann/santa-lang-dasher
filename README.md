@@ -150,6 +150,66 @@ Uses **inkwell** to generate LLVM IR with several optimizations:
 
 **Result:** Fully standalone native executables with no runtime dependencies.
 
+## Self-Contained Binary Distribution
+
+The `dasher` binary embeds its runtime library, making it completely self-contained. This design choice follows the modern trend of single-binary distribution.
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  dasher binary (37MB)                                   │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │  Compiler (lexer, parser, codegen, LLVM)   28MB   │  │
+│  ├───────────────────────────────────────────────────┤  │
+│  │  Embedded Runtime (gzip compressed)         9MB   │  │
+│  │  (libsanta_lang_runtime.a → 26MB uncompressed)    │  │
+│  └───────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
+                         │
+                         ▼  At compile time
+┌─────────────────────────────────────────────────────────┐
+│  1. Extract runtime to cache (~/.cache/santa-lang/)     │
+│  2. Compile source → object file                        │
+│  3. Link object + runtime → executable                  │
+└─────────────────────────────────────────────────────────┘
+```
+
+The runtime is extracted once and cached, so subsequent compilations are fast.
+
+### Comparison with Other Compilers
+
+| Compiler | Runtime Strategy | Binary Size | Distribution |
+|----------|------------------|-------------|--------------|
+| **Dasher** | Embedded + extracted at compile time | 37MB | Single binary ✓ |
+| **Go** | Embedded in compiler, statically linked | ~100MB | Single binary ✓ |
+| **Rust** | Ships sysroot separately (~500MB) | ~10MB | Toolchain required |
+| **GCC/Clang** | External libc, libstdc++ | ~50MB | System libs required |
+| **GraalVM native-image** | Embedded SubstrateVM | ~50MB | Single binary ✓ |
+
+### Why Embed the Runtime?
+
+**Problems with external runtime libraries:**
+- "Library not found" errors when binary is moved
+- Version mismatches between compiler and runtime
+- Complex installation/distribution
+
+**Benefits of embedding:**
+- **Zero configuration**: Copy the binary and it works
+- **Reproducible builds**: Runtime version always matches compiler
+- **Simpler distribution**: No installer, no paths to configure
+
+### Trade-offs
+
+| Aspect | Embedded | External |
+|--------|----------|----------|
+| Binary size | +9MB | Separate 26MB file |
+| Distribution | Single file | Two files + path setup |
+| Updates | Rebuild compiler | Replace .a file |
+| First compile | Extract once (~100ms) | Immediate |
+
+The embedded approach follows Go's philosophy: slightly larger binaries for dramatically simpler deployment. For a compiler that produces ~2-3MB executables, a 37MB compiler binary is acceptable.
+
 ## Value Representation: NaN-Boxing
 
 All values encoded as **64-bit unsigned integers** with tag bits:
