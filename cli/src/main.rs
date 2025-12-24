@@ -4,6 +4,7 @@
 //!   dasher <SCRIPT>           Run solution file
 //!   dasher -t <SCRIPT>        Run tests (exclude @slow)
 //!   dasher -t -s <SCRIPT>     Run tests (include @slow)
+//!   dasher -e <OUTPUT> <SCRIPT>  Compile to executable (don't run)
 
 use clap::Parser;
 use std::path::PathBuf;
@@ -28,6 +29,10 @@ struct Args {
     /// Include @slow tests (only with -t)
     #[arg(short = 's', long = "slow")]
     include_slow: bool,
+
+    /// Emit executable to this path (compile only, don't run)
+    #[arg(short = 'e', long = "emit")]
+    emit_path: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -41,6 +46,19 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+
+    // Emit mode: compile to executable and exit (don't run)
+    if let Some(emit_path) = &args.emit_path {
+        use santa_lang::codegen::pipeline::Compiler;
+
+        let compiler = Compiler::new();
+        if let Err(e) = compiler.compile_to_executable(&source, emit_path) {
+            eprintln!("Compilation error: {:?}", e);
+            return ExitCode::from(2);
+        }
+        println!("Compiled to: {}", emit_path.display());
+        return ExitCode::SUCCESS;
+    }
 
     // Lex and parse
     let tokens = match lex(&source) {
@@ -200,5 +218,18 @@ mod tests {
         let args = Args::try_parse_from(["dasher", "--test", "--slow", "test.santa"]).unwrap();
         assert!(args.test_mode);
         assert!(args.include_slow);
+    }
+
+    #[test]
+    fn parse_args_emit_mode() {
+        let args = Args::try_parse_from(["dasher", "-e", "output", "test.santa"]).unwrap();
+        assert_eq!(args.emit_path, Some(PathBuf::from("output")));
+        assert_eq!(args.script, PathBuf::from("test.santa"));
+    }
+
+    #[test]
+    fn parse_args_emit_mode_long() {
+        let args = Args::try_parse_from(["dasher", "--emit", "./my_program", "test.santa"]).unwrap();
+        assert_eq!(args.emit_path, Some(PathBuf::from("./my_program")));
     }
 }
