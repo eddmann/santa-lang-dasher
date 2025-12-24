@@ -1915,17 +1915,15 @@ impl Parser {
                     }
                     return Ok(Expr::Set(elements));
                 }
-                // Closing brace with single expression
-                // Per LANG.txt: {identifier} is a set, {complex expr} is a block
-                // This matches usage patterns: {point} for sets, {compute()} for blocks
+                // Closing brace with single expression and no semicolon
+                // Determine if it's a Set or Block based on the expression type:
+                // - Simple values (identifiers, lists, dicts, tuples, literals) → Set
+                // - Computed expressions (infix, calls, etc.) → Block
                 TokenKind::RightBrace => {
                     self.advance();
-                    // Simple identifier → Set (for patterns like `seen + {point}`)
-                    // Complex expression → Block (for patterns like `part_two: { ... }`)
-                    if matches!(first_expr, Expr::Identifier(_)) {
+                    if Self::is_set_element_expr(&first_expr) {
                         return Ok(Expr::Set(vec![first_expr]));
                     } else {
-                        // Treat as a block with single expression statement
                         return Ok(Expr::Block(vec![Stmt::Expr(first_expr)]));
                     }
                 }
@@ -2236,6 +2234,42 @@ impl Parser {
                 line: token.span.start.line as usize,
                 column: token.span.start.column as usize,
             })
+        }
+    }
+
+    /// Determines if an expression is suitable as a single set element.
+    /// Returns true for "value-like" expressions (identifiers, literals, collections).
+    /// Returns false for computed expressions (infix, calls) which suggest a block.
+    fn is_set_element_expr(expr: &Expr) -> bool {
+        match expr {
+            // These are clearly set elements (literals and collections)
+            Expr::Identifier(_) => true,
+            Expr::List(_) => true,
+            Expr::Dict(_) => true,
+            Expr::Set(_) => true,
+            Expr::Integer(_) => true,
+            Expr::Decimal(_) => true,
+            Expr::String(_) => true,
+            Expr::Boolean(_) => true,
+            Expr::Nil => true,
+            Expr::Placeholder => true,
+            Expr::RestIdentifier(_) => true,
+            // Range is a value (could be a set element)
+            Expr::Range { .. } => true,
+            // Index access is value-like (getting an element)
+            Expr::Index { .. } => true,
+            // These suggest computation, so treat as block
+            Expr::Infix { .. } => false,
+            Expr::Prefix { .. } => false,
+            Expr::Call { .. } => false,
+            Expr::InfixCall { .. } => false,
+            Expr::Function { .. } => false,
+            Expr::Block(_) => false,
+            Expr::If { .. } => false,
+            Expr::IfLet { .. } => false,
+            Expr::Match { .. } => false,
+            Expr::Spread(_) => false,
+            Expr::Assignment { .. } => false,
         }
     }
 }

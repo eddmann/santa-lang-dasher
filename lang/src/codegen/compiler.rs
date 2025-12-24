@@ -1944,10 +1944,19 @@ impl<'ctx> CodegenContext<'ctx> {
         let mut last_val = None;
 
         for (i, stmt) in stmts.iter().enumerate() {
+            let is_last = i == stmts.len() - 1;
             match stmt {
-                Stmt::Let { .. } => {
-                    // Let statements don't produce a value
-                    self.compile_stmt(stmt)?;
+                Stmt::Let {
+                    mutable,
+                    pattern,
+                    value,
+                } => {
+                    // Compile the let statement and get the bound value
+                    let bound_val = self.compile_let(pattern, value, *mutable)?;
+                    // If this is the last statement, the block returns the bound value
+                    if is_last {
+                        last_val = Some(bound_val);
+                    }
                 }
                 Stmt::Expr(expr) => {
                     // Expression statements produce a value
@@ -3247,7 +3256,11 @@ impl<'ctx> CodegenContext<'ctx> {
                 mutable,
                 pattern,
                 value,
-            } => self.compile_let(pattern, value, *mutable),
+            } => {
+                // compile_let returns the value, but compile_stmt ignores it
+                self.compile_let(pattern, value, *mutable)?;
+                Ok(())
+            }
             Stmt::Return(_) | Stmt::Break(_) | Stmt::Expr(_) => {
                 Err(CompileError::UnsupportedStatement(format!(
                     "Statement type not yet implemented: {:?}",
@@ -3258,12 +3271,13 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Compile a let binding
+    /// Returns the compiled value for use when let is the last statement in a block
     fn compile_let(
         &mut self,
         pattern: &Pattern,
         value: &Expr,
         _mutable: bool,
-    ) -> Result<(), CompileError> {
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         match pattern {
             Pattern::Identifier(name) => {
                 // For recursive function bindings, we need to pre-allocate the variable
@@ -3356,7 +3370,7 @@ impl<'ctx> CodegenContext<'ctx> {
                     self.variables.insert(name.clone(), alloca);
                 }
 
-                Ok(())
+                Ok(value_compiled)
             }
             Pattern::List(patterns) => {
                 // Compile the value expression first
@@ -3372,7 +3386,8 @@ impl<'ctx> CodegenContext<'ctx> {
                 let list_val = self.compile_expr(&value_typed)?;
 
                 // Bind patterns to the list value
-                self.compile_pattern_binding_list(patterns, list_val)
+                self.compile_pattern_binding_list(patterns, list_val)?;
+                Ok(list_val)
             }
             _ => Err(CompileError::UnsupportedPattern(format!(
                 "Pattern type not yet implemented: {:?}",
@@ -4285,8 +4300,17 @@ impl<'ctx> CodegenContext<'ctx> {
             let is_last = i == stmts.len() - 1;
 
             match stmt {
-                Stmt::Let { .. } => {
-                    self.compile_stmt(stmt)?;
+                Stmt::Let {
+                    mutable,
+                    pattern,
+                    value,
+                } => {
+                    // Compile the let statement and get the bound value
+                    let bound_val = self.compile_let(pattern, value, *mutable)?;
+                    // If this is the last statement, the block returns the bound value
+                    if is_last {
+                        last_val = Some(bound_val);
+                    }
                 }
                 Stmt::Expr(expr) => {
                     if is_last {

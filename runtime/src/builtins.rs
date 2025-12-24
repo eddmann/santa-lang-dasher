@@ -254,30 +254,35 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
                 current,
                 end,
                 inclusive,
-                step: 1,
+                step: _,  // Accept any step - we use start/end for slicing
             } = &range.kind
             {
                 let len = list.len() as i64;
                 let start = *current;
 
-                // Calculate end index
+                // Normalize start (handle negative indexing)
+                let start_norm = if start < 0 { (len + start).max(0) } else { start.min(len) };
+
+                // Calculate end index (handle negative indexing)
                 let end_idx = match end {
                     Some(e) => {
                         let e = *e;
+                        // Normalize negative index
+                        let e_norm = if e < 0 { len + e } else { e };
                         if *inclusive {
-                            (e + 1).min(len)
+                            (e_norm + 1).min(len)
                         } else {
-                            e.min(len)
+                            e_norm.min(len)
                         }
                     }
                     None => len, // Unbounded: slice to end
                 };
 
-                if start >= 0 && start <= len && end_idx >= start {
+                if start_norm <= len && end_idx >= start_norm && end_idx >= 0 {
                     let slice: im::Vector<Value> = list
                         .iter()
-                        .skip(start as usize)
-                        .take((end_idx - start) as usize)
+                        .skip(start_norm as usize)
+                        .take((end_idx - start_norm).max(0) as usize)
                         .copied()
                         .collect();
                     return Value::from_list(slice);
@@ -321,31 +326,36 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
                 current,
                 end,
                 inclusive,
-                step: 1,
+                step: _,  // Accept any step - we use start/end for slicing
             } = &range.kind
             {
                 let graphemes: Vec<&str> = s.graphemes(true).collect();
                 let len = graphemes.len() as i64;
                 let start = *current;
 
-                // Calculate end index
+                // Normalize start (handle negative indexing)
+                let start_norm = if start < 0 { (len + start).max(0) } else { start.min(len) };
+
+                // Calculate end index (handle negative indexing)
                 let end_idx = match end {
                     Some(e) => {
                         let e = *e;
+                        // Normalize negative index
+                        let e_norm = if e < 0 { len + e } else { e };
                         if *inclusive {
-                            (e + 1).min(len)
+                            (e_norm + 1).min(len)
                         } else {
-                            e.min(len)
+                            e_norm.min(len)
                         }
                     }
                     None => len, // Unbounded: slice to end
                 };
 
-                if start >= 0 && start <= len && end_idx >= start {
+                if start_norm <= len && end_idx >= start_norm && end_idx >= 0 {
                     let slice: String = graphemes
                         .iter()
-                        .skip(start as usize)
-                        .take((end_idx - start) as usize)
+                        .skip(start_norm as usize)
+                        .take((end_idx - start_norm).max(0) as usize)
                         .copied()
                         .collect();
                     return Value::from_string(slice);
@@ -693,14 +703,9 @@ pub extern "C" fn rt_last(collection: Value) -> Value {
 
             return Value::from_integer(last);
         }
-        // For other lazy sequences, iterate (only works for bounded)
-        let mut last_val = None;
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
-            last_val = Some(val);
-            current = *next_seq;
-        }
-        return last_val.unwrap_or_else(Value::nil);
+        // For other lazy sequences (including Map, Filter, Zip), collect and get last
+        let elements = collect_bounded_lazy(lazy);
+        return elements.last().copied().unwrap_or_else(Value::nil);
     }
 
     Value::nil()
@@ -2646,11 +2651,10 @@ pub extern "C" fn rt_max(collection: Value) -> Value {
             }
         }
 
-        // For other lazy sequences, iterate
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
-            update_max(val);
-            current = *next_seq;
+        // For other lazy sequences (including Map, Filter, Zip), collect and iterate
+        let elements = collect_bounded_lazy(lazy);
+        for v in elements.iter() {
+            update_max(*v);
         }
         return max_val.unwrap_or_else(Value::nil);
     }
@@ -2748,11 +2752,10 @@ pub extern "C" fn rt_min(collection: Value) -> Value {
             }
         }
 
-        // For other lazy sequences, iterate
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
-            update_min(val);
-            current = *next_seq;
+        // For other lazy sequences (including Map, Filter, Zip), collect and iterate
+        let elements = collect_bounded_lazy(lazy);
+        for v in elements.iter() {
+            update_min(*v);
         }
         return min_val.unwrap_or_else(Value::nil);
     }

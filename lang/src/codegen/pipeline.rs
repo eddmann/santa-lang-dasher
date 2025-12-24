@@ -79,11 +79,14 @@ impl Compiler {
 
         let runtime_path = cache_dir.join("libsanta_lang_runtime.a");
 
-        // Check if already extracted (use file size as simple validation)
+        // Check if already extracted and matches current embedded version
+        // We store the compressed size in a separate file to validate the cache
+        let version_file = cache_dir.join("version");
+        let expected_compressed_size = EMBEDDED_RUNTIME.len().to_string();
+
         if runtime_path.exists() {
-            if let Ok(metadata) = std::fs::metadata(&runtime_path) {
-                // If file exists and is non-empty, use it
-                if metadata.len() > 0 {
+            if let Ok(cached_size) = std::fs::read_to_string(&version_file) {
+                if cached_size.trim() == expected_compressed_size {
                     return Ok(runtime_path);
                 }
             }
@@ -97,6 +100,7 @@ impl Compiler {
             .map_err(|e| CompileError::LinkError(format!("Failed to decompress runtime: {}", e)))?;
 
         std::fs::write(&runtime_path, &decompressed)?;
+        std::fs::write(&version_file, &expected_compressed_size)?;
 
         Ok(runtime_path)
     }

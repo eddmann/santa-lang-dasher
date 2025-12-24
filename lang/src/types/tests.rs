@@ -255,9 +255,16 @@ fn infer_if_mixed_branches() {
 // ===== Block Expression Tests =====
 
 #[test]
-fn infer_block_single_expr() {
-    // { 42 } → Int (single non-identifier expression in braces is a block)
+fn infer_set_single_literal() {
+    // { 42 } → Set<Int> (single literal in braces is a Set)
     let ty = infer_type("{ 42 }");
+    assert_eq!(ty, Type::Set(Box::new(Type::Int)));
+}
+
+#[test]
+fn infer_block_single_computed_expr() {
+    // { 1 + 1 } → Int (single computed expression is a block)
+    let ty = infer_type("{ 1 + 1 }");
     assert_eq!(ty, Type::Int);
 }
 
