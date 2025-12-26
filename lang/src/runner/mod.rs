@@ -57,8 +57,8 @@ pub struct TestResult {
 pub struct RunnerConfig {
     /// Include @slow tests in test execution
     pub include_slow: bool,
-    /// Directory containing the script file (for .input file resolution)
-    pub script_dir: Option<std::path::PathBuf>,
+    /// Path to the script file (for .input file resolution)
+    pub script_path: Option<std::path::PathBuf>,
 }
 
 /// The AOC runner
@@ -338,8 +338,8 @@ impl Runner {
                     .map_err(|e| RunnerError::RuntimeError(format!("Eval failed: {:?}", e)))?;
 
                 let mut cmd = Command::new(&exe_path);
-                if let Some(ref script_dir) = self.config.script_dir {
-                    cmd.env("DASHER_SCRIPT_DIR", script_dir);
+                if let Some(ref script_path) = self.config.script_path {
+                    cmd.env("DASHER_SCRIPT_PATH", script_path);
                 }
                 let output = cmd.output().map_err(|e| {
                     RunnerError::RuntimeError(format!("Eval execution failed: {}", e))
@@ -867,9 +867,9 @@ impl Runner {
 
         // Execute and capture output
         let mut cmd = Command::new(&exe_path);
-        // Set script directory env var for AOC input resolution
-        if let Some(ref script_dir) = self.config.script_dir {
-            cmd.env("DASHER_SCRIPT_DIR", script_dir);
+        // Set script path env var for AOC input resolution
+        if let Some(ref script_path) = self.config.script_path {
+            cmd.env("DASHER_SCRIPT_PATH", script_path);
         }
         let output = cmd
             .output()

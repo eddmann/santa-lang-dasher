@@ -38,8 +38,17 @@ struct Args {
 fn main() -> ExitCode {
     let args = Args::parse();
 
+    // Canonicalize script path to absolute for proper input file resolution
+    let script_path = match args.script.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error resolving script path {:?}: {}", args.script, e);
+            return ExitCode::from(1);
+        }
+    };
+
     // Read the script file
-    let source = match std::fs::read_to_string(&args.script) {
+    let source = match std::fs::read_to_string(&script_path) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Error reading file {:?}: {}", args.script, e);
@@ -52,7 +61,7 @@ fn main() -> ExitCode {
         use santa_lang::codegen::pipeline::Compiler;
 
         // Output path: same directory as script, same name without extension
-        let emit_path = args.script.with_extension("");
+        let emit_path = script_path.with_extension("");
 
         // Parse first to check if it's a solution file
         let tokens = match lex(&source) {
@@ -80,9 +89,8 @@ fn main() -> ExitCode {
         } else {
             // Solution mode: use Runner to generate executable source
             // If input is an AOC read, resolve it and bake into the binary
-            let script_dir = args.script.parent().unwrap_or(std::path::Path::new("."));
             let resolved_input = runner.get_aoc_url_from_input(&program).and_then(|url| {
-                santa_lang::runtime::builtins::resolve_aoc_input(&url, script_dir)
+                santa_lang::runtime::builtins::resolve_aoc_input(&url, &script_path)
             });
             runner.generate_source_with_resolved_input(&program, resolved_input.as_deref())
         };
@@ -115,10 +123,9 @@ fn main() -> ExitCode {
     };
 
     // Create runner with configuration
-    let script_dir = args.script.parent().map(|p| p.to_path_buf());
     let config = RunnerConfig {
         include_slow: args.include_slow,
-        script_dir: script_dir.clone(),
+        script_path: Some(script_path.clone()),
     };
     let runner = Runner::with_config(config);
 
@@ -230,10 +237,8 @@ fn main() -> ExitCode {
             }
 
             let mut cmd = Command::new(&exe_path);
-            // Set script directory env var for AOC input resolution
-            if let Some(ref dir) = script_dir {
-                cmd.env("DASHER_SCRIPT_DIR", dir);
-            }
+            // Set script path env var for AOC input resolution
+            cmd.env("DASHER_SCRIPT_PATH", &script_path);
             let status = cmd.status().expect("Failed to run compiled program");
 
             std::fs::remove_file(&exe_path).ok();

@@ -162,7 +162,7 @@ test: {
     );
     let runner = Runner::with_config(RunnerConfig {
         include_slow: true,
-        script_dir: None,
+        script_path: None,
     });
     let tests = runner.get_tests(&program);
     let filtered = runner.filter_tests(tests);

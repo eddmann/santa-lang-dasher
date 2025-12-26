@@ -4935,14 +4935,15 @@ fn read_nonexistent_file_returns_nil() {
 
 #[test]
 fn read_aoc_local_input_file() {
-    // If the .input file exists next to the script, read should return it
+    // If <scriptname>.input file exists next to the script, read should return it
     let temp_dir = std::env::temp_dir().join("aoc_test_dir");
     std::fs::create_dir_all(&temp_dir).unwrap();
-    let input_path = temp_dir.join(".input");
+    let script_path = temp_dir.join("test_script.santa");
+    let input_path = temp_dir.join("test_script.input");
     std::fs::write(&input_path, "local input data").unwrap();
 
-    // Set the script directory env var
-    std::env::set_var("DASHER_SCRIPT_DIR", &temp_dir);
+    // Set the script path env var
+    std::env::set_var("DASHER_SCRIPT_PATH", &script_path);
 
     let path = Value::from_string("aoc://2022/1");
     let result = rt_read(path);
@@ -4950,7 +4951,7 @@ fn read_aoc_local_input_file() {
     assert_eq!(result.as_string(), Some("local input data"));
 
     // Cleanup
-    std::env::remove_var("DASHER_SCRIPT_DIR");
+    std::env::remove_var("DASHER_SCRIPT_PATH");
     std::fs::remove_file(&input_path).ok();
     std::fs::remove_dir(&temp_dir).ok();
 }

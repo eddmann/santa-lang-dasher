@@ -5279,11 +5279,11 @@ fn fetch_aoc_input(year: u32, day: u32, session: &str) -> Option<String> {
 }
 
 /// Resolve AOC input at compile time.
-/// Checks for .input file in script_dir, fetches and saves if not found.
+/// Checks for <scriptname>.input file, fetches and saves if not found.
 /// Used by CLI compile mode to bake input into compiled binaries.
-pub fn resolve_aoc_input(url: &str, script_dir: &std::path::Path) -> Option<String> {
+pub fn resolve_aoc_input(url: &str, script_path: &std::path::Path) -> Option<String> {
     let (year, day) = parse_aoc_url(url)?;
-    let local_input = script_dir.join(".input");
+    let local_input = script_path.with_extension("input");
 
     // Check local file first
     if let Ok(contents) = std::fs::read_to_string(&local_input) {
@@ -5319,18 +5319,18 @@ fn read_http_url(url: &str) -> Value {
     }
 }
 
-/// Read AOC input, using .input file next to the script.
+/// Read AOC input, using <scriptname>.input file next to the script.
 fn read_aoc_input(url: &str) -> Value {
     let (year, day) = match parse_aoc_url(url) {
         Some(v) => v,
         None => return Value::nil(),
     };
 
-    // Check for script directory from environment
-    if let Ok(script_dir) = std::env::var("DASHER_SCRIPT_DIR") {
-        let local_input = std::path::Path::new(&script_dir).join(".input");
+    // Check for script path from environment
+    if let Ok(script_path) = std::env::var("DASHER_SCRIPT_PATH") {
+        let local_input = std::path::Path::new(&script_path).with_extension("input");
 
-        // Check if .input file exists
+        // Check if <scriptname>.input file exists
         if let Ok(contents) = std::fs::read_to_string(&local_input) {
             return Value::from_string(&contents);
         }
@@ -5353,7 +5353,7 @@ fn read_aoc_input(url: &str) -> Value {
             }
         };
 
-        // Save to .input file for future use
+        // Save to <scriptname>.input file for future use
         std::fs::write(&local_input, &input).ok();
 
         return Value::from_string(&input);
