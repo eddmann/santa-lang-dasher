@@ -898,6 +898,31 @@ pub fn call_value(callee: Value, args: &[Value]) -> Value {
     crate::operations::rt_call(callee, args.len() as u32, args.as_ptr())
 }
 
+/// Get the effective arity of any callable value.
+/// Returns None if the value is not callable.
+pub fn get_callable_arity(callee: &Value) -> Option<u32> {
+    if let Some(closure) = callee.as_closure() {
+        Some(closure.arity)
+    } else if let Some(partial) = callee.as_partial_application() {
+        Some(partial.remaining_arity)
+    } else if let Some(memoized) = callee.as_memoized_closure() {
+        if let Some(inner) = memoized.inner_closure.as_closure() {
+            Some(inner.arity)
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+/// Check if a value is callable (closure, partial application, or memoized closure)
+pub fn is_callable(callee: &Value) -> bool {
+    callee.as_closure().is_some()
+        || callee.as_partial_application().is_some()
+        || callee.as_memoized_closure().is_some()
+}
+
 /// `update(key, updater, collection)` → Collection
 ///
 /// Update the given index/key using a pure updater function. The updater
@@ -1059,34 +1084,34 @@ pub extern "C-unwind" fn rt_update_d(
 /// - String: map(_ * 2, "ab") → ["aa", "bb"] (returns List)
 #[no_mangle]
 pub extern "C" fn rt_map(mapper: Value, collection: Value) -> Value {
-    // Get the closure - if not a closure, return empty collection
-    let closure = match mapper.as_closure() {
-        Some(c) => c,
+    // Check if mapper is callable, return empty collection if not
+    let arity = match get_callable_arity(&mapper) {
+        Some(a) => a,
         None => return Value::from_list(im::Vector::new()),
     };
 
     // List → List
     if let Some(list) = collection.as_list() {
-        let mapped: im::Vector<Value> = list.iter().map(|v| call_closure(closure, &[*v])).collect();
+        let mapped: im::Vector<Value> = list.iter().map(|v| call_value(mapper, &[*v])).collect();
         return Value::from_list(mapped);
     }
 
     // Set → Set
     if let Some(set) = collection.as_set() {
-        let mapped: im::HashSet<Value> = set.iter().map(|v| call_closure(closure, &[*v])).collect();
+        let mapped: im::HashSet<Value> = set.iter().map(|v| call_value(mapper, &[*v])).collect();
         return Value::from_set(mapped);
     }
 
     // Dict → Dict (mapper receives value, or (value, key) for 2-arg)
     if let Some(dict) = collection.as_dict() {
-        let is_two_arg = closure.arity >= 2;
+        let is_two_arg = arity >= 2;
         let mapped: im::HashMap<Value, Value> = dict
             .iter()
             .map(|(k, v)| {
                 let new_value = if is_two_arg {
-                    call_closure(closure, &[*v, *k])
+                    call_value(mapper, &[*v, *k])
                 } else {
-                    call_closure(closure, &[*v])
+                    call_value(mapper, &[*v])
                 };
                 (*k, new_value)
             })
@@ -1101,7 +1126,7 @@ pub extern "C" fn rt_map(mapper: Value, collection: Value) -> Value {
             .graphemes(true)
             .map(|g| {
                 let char_val = Value::from_string(g.to_string());
-                call_closure(closure, &[char_val])
+                call_value(mapper, &[char_val])
             })
             .collect();
         return Value::from_list(mapped);
@@ -1134,9 +1159,9 @@ pub extern "C" fn rt_map(mapper: Value, collection: Value) -> Value {
 /// - String: filter(_ == "a", "ab") → ["a"] (returns List)
 #[no_mangle]
 pub extern "C" fn rt_filter(predicate: Value, collection: Value) -> Value {
-    // Get the closure - if not a closure, return empty collection
-    let closure = match predicate.as_closure() {
-        Some(c) => c,
+    // Check if predicate is callable
+    let arity = match get_callable_arity(&predicate) {
+        Some(a) => a,
         None => return Value::from_list(im::Vector::new()),
     };
 
@@ -1144,7 +1169,7 @@ pub extern "C" fn rt_filter(predicate: Value, collection: Value) -> Value {
     if let Some(list) = collection.as_list() {
         let filtered: im::Vector<Value> = list
             .iter()
-            .filter(|v| call_closure(closure, &[**v]).is_truthy())
+            .filter(|v| call_value(predicate, &[**v]).is_truthy())
             .copied()
             .collect();
         return Value::from_list(filtered);
@@ -1154,7 +1179,7 @@ pub extern "C" fn rt_filter(predicate: Value, collection: Value) -> Value {
     if let Some(set) = collection.as_set() {
         let filtered: im::HashSet<Value> = set
             .iter()
-            .filter(|v| call_closure(closure, &[**v]).is_truthy())
+            .filter(|v| call_value(predicate, &[**v]).is_truthy())
             .copied()
             .collect();
         return Value::from_set(filtered);
@@ -1162,14 +1187,14 @@ pub extern "C" fn rt_filter(predicate: Value, collection: Value) -> Value {
 
     // Dict → Dict (predicate receives value, or (value, key) for 2-arg)
     if let Some(dict) = collection.as_dict() {
-        let is_two_arg = closure.arity >= 2;
+        let is_two_arg = arity >= 2;
         let filtered: im::HashMap<Value, Value> = dict
             .iter()
             .filter(|(k, v)| {
                 let keep = if is_two_arg {
-                    call_closure(closure, &[**v, **k])
+                    call_value(predicate, &[**v, **k])
                 } else {
-                    call_closure(closure, &[**v])
+                    call_value(predicate, &[**v])
                 };
                 keep.is_truthy()
             })
@@ -1185,7 +1210,7 @@ pub extern "C" fn rt_filter(predicate: Value, collection: Value) -> Value {
             .graphemes(true)
             .filter_map(|g| {
                 let char_val = Value::from_string(g.to_string());
-                if call_closure(closure, &[char_val]).is_truthy() {
+                if call_value(predicate, &[char_val]).is_truthy() {
                     Some(Value::from_string(g.to_string()))
                 } else {
                     None
@@ -1498,21 +1523,21 @@ pub extern "C" fn rt_find_map(mapper: Value, collection: Value) -> Value {
 /// - reduce(+, []) → RuntimeErr
 #[no_mangle]
 pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
-    // Get the closure - if not a closure, return nil
-    let closure = match reducer.as_closure() {
-        Some(c) => c,
+    // Check if reducer is callable
+    let arity = match get_callable_arity(&reducer) {
+        Some(a) => a,
         None => return Value::nil(),
     };
 
     // Helper for the common reduction logic
     // Returns None if the collection is empty
-    fn do_reduce(closure: &ClosureObject, mut iter: impl Iterator<Item = Value>) -> Option<Value> {
+    fn do_reduce(reducer: Value, mut iter: impl Iterator<Item = Value>) -> Option<Value> {
         // Get first element as initial accumulator
         let mut acc = iter.next()?;
 
         // Reduce over remaining elements
         for v in iter {
-            acc = call_closure(closure, &[acc, v]);
+            acc = call_value(reducer, &[acc, v]);
         }
 
         Some(acc)
@@ -1520,7 +1545,7 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
 
     // List
     if let Some(list) = collection.as_list() {
-        return match do_reduce(closure, list.iter().copied()) {
+        return match do_reduce(reducer, list.iter().copied()) {
             Some(v) => v,
             None => runtime_error("reduce on empty collection"),
         };
@@ -1528,7 +1553,7 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
 
     // Set
     if let Some(set) = collection.as_set() {
-        return match do_reduce(closure, set.iter().copied()) {
+        return match do_reduce(reducer, set.iter().copied()) {
             Some(v) => v,
             None => runtime_error("reduce on empty collection"),
         };
@@ -1536,7 +1561,7 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
 
     // Dict (reducer receives acc, value, or acc, value, key for 3-arg)
     if let Some(dict) = collection.as_dict() {
-        let is_three_arg = closure.arity >= 3;
+        let is_three_arg = arity >= 3;
         let mut iter = dict.iter();
 
         // Get first element as initial accumulator
@@ -1549,9 +1574,9 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
         // Reduce over remaining elements
         for (k, v) in iter {
             acc = if is_three_arg {
-                call_closure(closure, &[acc, *v, *k])
+                call_value(reducer, &[acc, *v, *k])
             } else {
-                call_closure(closure, &[acc, *v])
+                call_value(reducer, &[acc, *v])
             };
         }
 
@@ -1569,7 +1594,7 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
         let mut acc = Value::from_string(graphemes[0].to_string());
         for g in &graphemes[1..] {
             let char_val = Value::from_string((*g).to_string());
-            acc = call_closure(closure, &[acc, char_val]);
+            acc = call_value(reducer, &[acc, char_val]);
         }
 
         return acc;
@@ -1586,7 +1611,7 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
 
         let mut acc = first_val;
         while let Some((val, next_lazy)) = current.next() {
-            acc = call_closure(closure, &[acc, val]);
+            acc = call_value(reducer, &[acc, val]);
             current = *next_lazy;
         }
         return acc;

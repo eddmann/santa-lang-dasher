@@ -425,6 +425,8 @@ impl Compiler {
             // Strip debug symbols and dead code
             .arg("-Wl,-dead_strip")
             .arg("-Wl,-x")
+            // Increase stack size to 32MB for deeply recursive programs
+            .arg("-Wl,-stack_size,0x2000000")
             .status()?;
 
         if !status.success() {

@@ -467,7 +467,8 @@ impl TypeInference {
                     arg_types[i] = self.infer_expr_with_expected(arg, expected_ty.as_ref())?.ty;
                 }
                 // User-defined function reference: re-infer with expected param types
-                Expr::Identifier(name) if self.function_defs.contains_key(name) => {
+                // Skip if we're already inferring this function (prevent infinite recursion)
+                Expr::Identifier(name) if self.function_defs.contains_key(name) && !self.inferring.contains(name) => {
                     let expected_ty = compute_expected_lambda_type(sig, i, &arg_types);
                     arg_types[i] =
                         self.infer_function_ref_with_expected(name, expected_ty.as_ref())?;
@@ -489,6 +490,11 @@ impl TypeInference {
         name: &str,
         expected: Option<&Type>,
     ) -> Result<Type, TypeError> {
+        // Check if we're already inferring this function (prevent infinite recursion)
+        if self.inferring.contains(name) {
+            return Ok(Type::Unknown);
+        }
+
         // Get the function definition
         let (params, body) = match self.function_defs.get(name) {
             Some((p, b)) => (p.clone(), b.clone()),
@@ -515,11 +521,15 @@ impl TypeInference {
             }
         }
 
+        // Mark this function as being inferred to prevent infinite recursion
+        self.inferring.insert(name.to_string());
+
         // Re-infer the body with the expected parameter types
         let ret_ty = self.infer_expr(&body)?.ty;
 
-        // Restore environment
+        // Restore environment and inferring set
         self.env = old_env;
+        self.inferring.remove(name);
 
         Ok(Type::Function {
             params: expected_params,

@@ -4624,15 +4624,12 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
 
                 // Check if `name` is a free variable in this closure
+                // collect_free_variables already handles nested closures recursively,
+                // so we don't need a separate recursive call here
                 let mut free_vars = HashSet::new();
                 Self::collect_free_variables(body, &inner_bound, &mut free_vars);
 
-                if free_vars.contains(name) && !bound.contains(name) {
-                    return true;
-                }
-
-                // Also check for nested closures in the body
-                Self::value_has_self_reference(name, body, &inner_bound)
+                free_vars.contains(name) && !bound.contains(name)
             }
 
             // Recurse into subexpressions
@@ -4796,6 +4793,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
 
                 // Find free variables in the closure body
+                // collect_free_variables already handles nested closures recursively
                 let mut free_vars = HashSet::new();
                 Self::collect_free_variables(body, &inner_bound, &mut free_vars);
 
@@ -4805,14 +4803,6 @@ impl<'ctx> CodegenContext<'ctx> {
                         captured.insert(var);
                     }
                 }
-
-                // Also check for nested closures in the body
-                Self::collect_mutable_captures_recursive(
-                    body,
-                    mutable_vars,
-                    &inner_bound,
-                    captured,
-                );
             }
 
             // Recurse into subexpressions
@@ -5014,9 +5004,12 @@ impl<'ctx> CodegenContext<'ctx> {
         }
 
         // Check if this is a call to a builtin function
+        // But only if there's no user-defined variable with the same name (user shadows builtin)
         if let Expr::Identifier(name) = function {
-            if let Some(result) = self.try_compile_builtin_call(name, args)? {
-                return Ok(result);
+            if !self.variables.contains_key(name) {
+                if let Some(result) = self.try_compile_builtin_call(name, args)? {
+                    return Ok(result);
+                }
             }
         }
 
@@ -5854,7 +5847,11 @@ impl<'ctx> CodegenContext<'ctx> {
             "max" => {
                 // max(collection) - get maximum element from collection
                 // max(a, b) - get maximum of two values
+                // max(a, b, c, ...) - get maximum of multiple values (variadic)
                 match args.len() {
+                    0 => Err(CompileError::UnsupportedExpression(
+                        "max expects at least 1 argument".to_string(),
+                    )),
                     1 => {
                         let collection = self.compile_arg(&args[0])?;
                         let rt_max = self.get_or_declare_rt_max();
@@ -5874,10 +5871,50 @@ impl<'ctx> CodegenContext<'ctx> {
                             .unwrap();
                         Ok(Some(result.try_as_basic_value().left().unwrap()))
                     }
-                    _ => Err(CompileError::UnsupportedExpression(format!(
-                        "max expects 1 or 2 arguments, got {}",
-                        args.len()
-                    ))),
+                    _ => {
+                        // Variadic: create a list and call rt_max on it
+                        let mut compiled_args = Vec::new();
+                        for arg in args {
+                            compiled_args.push(self.compile_arg(arg)?);
+                        }
+                        // Build the list using rt_list_from_values
+                        let i64_type = self.context.i64_type();
+                        let array_type = i64_type.array_type(args.len() as u32);
+                        let array_alloca = self.builder.build_alloca(array_type, "max_args").unwrap();
+                        for (i, arg) in compiled_args.iter().enumerate() {
+                            let index = i64_type.const_int(i as u64, false);
+                            let elem_ptr = unsafe {
+                                self.builder
+                                    .build_in_bounds_gep(
+                                        array_type,
+                                        array_alloca,
+                                        &[i64_type.const_zero(), index],
+                                        &format!("max_arg_ptr_{}", i),
+                                    )
+                                    .unwrap()
+                            };
+                            self.builder.build_store(elem_ptr, *arg).unwrap();
+                        }
+                        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+                        let argv = self
+                            .builder
+                            .build_pointer_cast(array_alloca, ptr_type, "max_argv")
+                            .unwrap();
+                        let count = i64_type.const_int(args.len() as u64, false);
+                        let rt_list_from_values = self.get_or_declare_rt_list_from_values();
+                        let list = self
+                            .builder
+                            .build_call(rt_list_from_values, &[argv.into(), count.into()], "max_list")
+                            .unwrap();
+                        let list_val = list.try_as_basic_value().left().unwrap();
+                        // Now call rt_max on the list
+                        let rt_max = self.get_or_declare_rt_max();
+                        let result = self
+                            .builder
+                            .build_call(rt_max, &[list_val.into()], "max_result")
+                            .unwrap();
+                        Ok(Some(result.try_as_basic_value().left().unwrap()))
+                    }
                 }
             }
             "min" => {
