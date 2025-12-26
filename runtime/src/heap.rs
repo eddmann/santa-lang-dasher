@@ -1,4 +1,6 @@
 use im;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::atomic::AtomicU32;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -304,9 +306,12 @@ pub enum LazySeqKind {
     },
 
     /// iterate(generator, initial) - generated sequence
+    /// Uses Rc<RefCell<>> for mutable state that persists across clones,
+    /// allowing efficient indexed access without recomputing from start.
     Iterate {
-        generator: super::value::Value, // Closure
-        current: super::value::Value,
+        generator: super::value::Value,                   // Closure
+        current: Rc<RefCell<super::value::Value>>,        // Mutable current value
+        index: Rc<RefCell<usize>>,                        // Current index (for caching)
     },
 
     /// Range-based lazy sequence (from .. syntax)
@@ -377,7 +382,8 @@ impl LazySequenceObject {
     pub fn iterate(generator: super::value::Value, initial: super::value::Value) -> Box<Self> {
         Self::new(LazySeqKind::Iterate {
             generator,
-            current: initial,
+            current: Rc::new(RefCell::new(initial)),
+            index: Rc::new(RefCell::new(0)),
         })
     }
 
@@ -451,18 +457,11 @@ impl LazySequenceObject {
                 ))
             }
 
-            LazySeqKind::Iterate { generator, current } => {
-                // Return current value, generate next by calling generator
-                let current_val = *current;
-                // We need to call the generator to get the next value
-                // This will be done by the caller since we don't have call_closure here
-                Some((
-                    current_val,
-                    Self::new(LazySeqKind::Iterate {
-                        generator: *generator,
-                        current: current_val, // Placeholder - caller should update
-                    }),
-                ))
+            LazySeqKind::Iterate { .. } => {
+                // Iterate requires closure evaluation which we can't do here.
+                // Callers should use the mutable state directly via rt_get or
+                // collect_bounded_lazy which handles closure calls.
+                None
             }
 
             LazySeqKind::Skip { source, remaining } => {

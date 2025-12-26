@@ -149,9 +149,13 @@ unsafe fn free_lazy_seq_values(kind: &super::heap::LazySeqKind) {
                 rt_decref(*elem);
             }
         }
-        LazySeqKind::Iterate { generator, current } => {
+        LazySeqKind::Iterate {
+            generator,
+            current,
+            index: _,
+        } => {
             rt_decref(*generator);
-            rt_decref(*current);
+            rt_decref(*current.borrow());
         }
         LazySeqKind::Range { .. } => {
             // No Values to decref

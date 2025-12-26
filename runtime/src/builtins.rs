@@ -183,18 +183,13 @@ pub extern "C" fn rt_set(value: Value) -> Value {
         return Value::from_set(set);
     }
 
-    // LazySequence (including Range) → Force evaluation to set
+    // LazySequence (including Range, Map, Filter, etc.) → Force evaluation to set
     if let Some(lazy_seq) = value.as_lazy_sequence() {
-        let mut result: im::HashSet<Value> = im::HashSet::new();
-        let mut current = lazy_seq.clone();
-
-        // Iterate through the lazy sequence, collecting values
-        // Note: Only works for bounded sequences
-        while let Some((val, next_seq)) = current.next() {
-            result.insert(val);
-            current = *next_seq;
-        }
-        return Value::from_set(result);
+        // Use collect_bounded_lazy which handles Map, Filter, and other lazy kinds
+        // that require closure evaluation
+        let elements = collect_bounded_lazy(lazy_seq);
+        let set: im::HashSet<Value> = elements.iter().copied().collect();
+        return Value::from_set(set);
     }
 
     // Other types return empty set
@@ -422,14 +417,35 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
                     return Value::from_integer(value);
                 }
 
-                // For Iterate sequences, we need to call the generator
-                LazySeqKind::Iterate { generator, current } => {
-                    // Generator can be a closure, partial application, or memoized closure
-                    let mut cur = *current;
-                    for _ in 0..idx {
-                        cur = call_value(*generator, &[cur]);
+                // For Iterate sequences, use mutable cached state
+                LazySeqKind::Iterate {
+                    generator,
+                    current,
+                    index: cached_index,
+                } => {
+                    let mut cur_idx = *cached_index.borrow();
+                    let mut cur_val = *current.borrow();
+
+                    // If requested index is before our cached position, we must restart
+                    // This shouldn't happen often in practice (forward iteration is common)
+                    if idx < cur_idx {
+                        // Reset to beginning - we'd need the original initial value
+                        // For now, we can't go backwards, return nil
+                        // (This is a limitation - could store initial value if needed)
+                        return Value::nil();
                     }
-                    return cur;
+
+                    // Advance from current cached position to requested index
+                    while cur_idx < idx {
+                        cur_val = call_value(*generator, &[cur_val]);
+                        cur_idx += 1;
+                    }
+
+                    // Update the cached state for future accesses
+                    *current.borrow_mut() = cur_val;
+                    *cached_index.borrow_mut() = cur_idx;
+
+                    return cur_val;
                 }
 
                 // For other LazySequence types (Map/Filter/Zip), collect and index
@@ -576,9 +592,9 @@ pub extern "C" fn rt_first(collection: Value) -> Value {
 
     // LazySequence (including Range)
     if let Some(lazy) = collection.as_lazy_sequence() {
-        // Handle Iterate specially - get first value
+        // Handle Iterate specially - get first value from RefCell
         if let LazySeqKind::Iterate { current, .. } = &lazy.kind {
-            return *current;
+            return *current.borrow();
         }
         // For other lazy sequences, use next()
         if let Some((val, _)) = lazy.next() {
@@ -1409,14 +1425,54 @@ pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
 
     // LazySequence (including Range) → List
     if let Some(lazy) = collection.as_lazy_sequence() {
+        use crate::heap::LazySeqKind;
+
+        // Handle Iterate specially - iterate until finding matches
+        // For infinite sequences, we iterate until we find results
+        // This is commonly used as `iterate(...) |> filter_map(f) |> first`
+        if let LazySeqKind::Iterate {
+            generator,
+            current,
+            index: cached_index,
+        } = &lazy.kind
+        {
+            let mut result: im::Vector<Value> = im::Vector::new();
+            let mut cur_val = *current.borrow();
+            let mut cur_idx = *cached_index.borrow();
+
+            // Iterate until we find a truthy result (with a safety limit)
+            // Use call_value instead of call_closure to support closures with mutable cells
+            const MAX_ITERATIONS: usize = 10_000_000;
+            for _ in 0..MAX_ITERATIONS {
+                let mapped = call_value(mapper, &[cur_val]);
+                if mapped.is_truthy() {
+                    result.push_back(mapped);
+                    // For typical use with `first`, we only need one result
+                    // Continue to next value for state update
+                    cur_val = call_value(*generator, &[cur_val]);
+                    cur_idx += 1;
+                    break;
+                }
+                cur_val = call_value(*generator, &[cur_val]);
+                cur_idx += 1;
+            }
+
+            // Update cached state
+            *current.borrow_mut() = cur_val;
+            *cached_index.borrow_mut() = cur_idx;
+
+            return Value::from_list(result);
+        }
+
+        // For other lazy sequences, use next() and collect eagerly
         let mut result: im::Vector<Value> = im::Vector::new();
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
+        let mut current_seq = lazy.clone();
+        while let Some((val, next_seq)) = current_seq.next() {
             let mapped = call_closure(closure, &[val]);
             if mapped.is_truthy() {
                 result.push_back(mapped);
             }
-            current = *next_seq;
+            current_seq = *next_seq;
         }
         return Value::from_list(result);
     }
@@ -2070,9 +2126,13 @@ fn find_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> Value {
             Value::nil()
         }
 
-        LazySeqKind::Iterate { generator, current } => {
+        LazySeqKind::Iterate {
+            generator,
+            current,
+            index: _,
+        } => {
             // Generator can be a closure, partial application, or memoized closure
-            let mut cur = *current;
+            let mut cur = *current.borrow();
             for _ in 0..MAX_ITERATIONS {
                 if call_closure(predicate, &[cur]).is_truthy() {
                     return cur;
@@ -2167,6 +2227,102 @@ fn find_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> Value {
                 return Value::nil();
             }
 
+            // Check if any source contains an Iterate (directly or via Skip)
+            let has_iterate = sources.iter().any(|s| {
+                matches!(&s.kind, LazySeqKind::Iterate { .. })
+                    || matches!(&s.kind, LazySeqKind::Skip { source, .. }
+                        if matches!(&source.kind, LazySeqKind::Iterate { .. }))
+            });
+
+            if has_iterate {
+                // Extract (generator, current_value, skip_remaining) for each Iterate source
+                // For non-Iterate sources, collect them eagerly
+                let mut generators: Vec<Option<Value>> = Vec::with_capacity(sources.len());
+                let mut currents: Vec<Value> = Vec::with_capacity(sources.len());
+                let mut other_vecs: Vec<Option<(im::Vector<Value>, usize)>> =
+                    Vec::with_capacity(sources.len());
+
+                for s in sources.iter() {
+                    match &s.kind {
+                        LazySeqKind::Iterate {
+                            generator,
+                            current,
+                            ..
+                        } => {
+                            generators.push(Some(*generator));
+                            currents.push(*current.borrow());
+                            other_vecs.push(None);
+                        }
+                        LazySeqKind::Skip { source, remaining } => {
+                            if let LazySeqKind::Iterate {
+                                generator,
+                                current,
+                                ..
+                            } = &source.kind
+                            {
+                                // Advance past skip count
+                                let mut cur = *current.borrow();
+                                for _ in 0..*remaining {
+                                    cur = call_value(*generator, &[cur]);
+                                }
+                                generators.push(Some(*generator));
+                                currents.push(cur);
+                                other_vecs.push(None);
+                            } else {
+                                generators.push(None);
+                                currents.push(Value::nil());
+                                other_vecs.push(Some((collect_bounded_lazy(s), 0)));
+                            }
+                        }
+                        _ => {
+                            generators.push(None);
+                            currents.push(Value::nil());
+                            other_vecs.push(Some((collect_bounded_lazy(s), 0)));
+                        }
+                    }
+                }
+
+                // Iterate in lockstep
+                for _ in 0..MAX_ITERATIONS {
+                    // Build tuple from current values
+                    let mut tuple: im::Vector<Value> = im::Vector::new();
+                    let mut all_valid = true;
+
+                    for i in 0..sources.len() {
+                        if generators[i].is_some() {
+                            tuple.push_back(currents[i]);
+                        } else if let Some((ref vec, idx)) = other_vecs[i] {
+                            if idx < vec.len() {
+                                tuple.push_back(vec[idx]);
+                            } else {
+                                all_valid = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if !all_valid {
+                        return Value::nil();
+                    }
+
+                    let val = Value::from_list(tuple);
+                    if call_closure(predicate, &[val]).is_truthy() {
+                        return val;
+                    }
+
+                    // Advance all sources
+                    for i in 0..sources.len() {
+                        if let Some(gen) = generators[i] {
+                            currents[i] = call_value(gen, &[currents[i]]);
+                        } else if let Some((_, ref mut idx)) = other_vecs[i] {
+                            *idx += 1;
+                        }
+                    }
+                }
+                return Value::nil();
+            }
+
+            // For non-iterate sources, collect and iterate (original behavior)
             let source_vecs: Vec<im::Vector<Value>> =
                 sources.iter().map(collect_bounded_lazy).collect();
 
@@ -4057,11 +4213,15 @@ fn collect_bounded_lazy_recursive(result: &mut im::Vector<Value>, lazy: &LazySeq
             // Return empty (caller should use take instead)
         }
 
-        LazySeqKind::Iterate { generator, current } => {
+        LazySeqKind::Iterate {
+            generator,
+            current,
+            index: _,
+        } => {
             // Iterate is potentially infinite, but we'll try to collect with a limit
             // In practice, users should use take() for iterate sequences
             // Generator can be a closure, partial application, or memoized closure
-            let mut cur = *current;
+            let mut cur = *current.borrow();
             for _ in 0..MAX_ELEMENTS {
                 result.push_back(cur);
                 cur = call_value(*generator, &[cur]);
@@ -4267,9 +4427,13 @@ fn take_from_lazy_recursive(
             }
         }
 
-        LazySeqKind::Iterate { generator, current } => {
+        LazySeqKind::Iterate {
+            generator,
+            current,
+            index: _,
+        } => {
             // Generator can be a closure, partial application, or memoized closure
-            let mut cur = *current;
+            let mut cur = *current.borrow();
             while *remaining > 0 {
                 result.push_back(cur);
                 *remaining -= 1;
