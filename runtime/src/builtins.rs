@@ -5217,17 +5217,6 @@ pub extern "C" fn rt_print_newline() {
     println!();
 }
 
-/// Get the cache path for an AOC input file.
-/// Path: ~/.cache/dasher/aoc/YEAR/DAY.txt
-pub fn get_aoc_cache_path(year: u32, day: u32) -> std::path::PathBuf {
-    let cache_dir = dirs::cache_dir().unwrap_or_else(|| std::path::PathBuf::from(".cache"));
-    cache_dir
-        .join("dasher")
-        .join("aoc")
-        .join(year.to_string())
-        .join(format!("{}.txt", day))
-}
-
 /// Get the AOC session cookie.
 /// Tries (in order):
 /// 1. AOC_SESSION environment variable
@@ -5289,6 +5278,25 @@ fn fetch_aoc_input(year: u32, day: u32, session: &str) -> Option<String> {
     }
 }
 
+/// Resolve AOC input at compile time.
+/// Checks for .input file in script_dir, fetches and saves if not found.
+/// Used by CLI compile mode to bake input into compiled binaries.
+pub fn resolve_aoc_input(url: &str, script_dir: &std::path::Path) -> Option<String> {
+    let (year, day) = parse_aoc_url(url)?;
+    let local_input = script_dir.join(".input");
+
+    // Check local file first
+    if let Ok(contents) = std::fs::read_to_string(&local_input) {
+        return Some(contents);
+    }
+
+    // Fetch and save to local file
+    let session = get_aoc_session()?;
+    let input = fetch_aoc_input(year, day, &session)?;
+    std::fs::write(&local_input, &input).ok();
+    Some(input)
+}
+
 /// Fetch content from an HTTP or HTTPS URL using curl.
 ///
 /// Returns the response body as a String, or nil on error.
@@ -5311,44 +5319,49 @@ fn read_http_url(url: &str) -> Value {
     }
 }
 
-/// Read AOC input, using cache if available.
+/// Read AOC input, using .input file next to the script.
 fn read_aoc_input(url: &str) -> Value {
     let (year, day) = match parse_aoc_url(url) {
         Some(v) => v,
         None => return Value::nil(),
     };
 
-    // Check cache first
-    let cache_path = get_aoc_cache_path(year, day);
-    if let Ok(contents) = std::fs::read_to_string(&cache_path) {
-        return Value::from_string(&contents);
+    // Check for script directory from environment
+    if let Ok(script_dir) = std::env::var("DASHER_SCRIPT_DIR") {
+        let local_input = std::path::Path::new(&script_dir).join(".input");
+
+        // Check if .input file exists
+        if let Ok(contents) = std::fs::read_to_string(&local_input) {
+            return Value::from_string(&contents);
+        }
+
+        // Need to fetch - check for session
+        let session = match get_aoc_session() {
+            Some(s) => s,
+            None => {
+                eprintln!("Error: AOC session not found. Set AOC_SESSION environment variable or create ~/.config/dasher/session.txt");
+                return Value::nil();
+            }
+        };
+
+        // Fetch from AOC
+        let input = match fetch_aoc_input(year, day, &session) {
+            Some(s) => s,
+            None => {
+                eprintln!("Error: Failed to fetch AOC input for {}/{}", year, day);
+                return Value::nil();
+            }
+        };
+
+        // Save to .input file for future use
+        std::fs::write(&local_input, &input).ok();
+
+        return Value::from_string(&input);
     }
 
-    // Need to fetch - check for session
-    let session = match get_aoc_session() {
-        Some(s) => s,
-        None => {
-            eprintln!("Error: AOC session not found. Set AOC_SESSION environment variable or create ~/.config/dasher/session.txt");
-            return Value::nil();
-        }
-    };
-
-    // Fetch from AOC
-    let input = match fetch_aoc_input(year, day, &session) {
-        Some(s) => s,
-        None => {
-            eprintln!("Error: Failed to fetch AOC input for {}/{}", year, day);
-            return Value::nil();
-        }
-    };
-
-    // Cache for future use
-    if let Some(parent) = cache_path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    std::fs::write(&cache_path, &input).ok();
-
-    Value::from_string(&input)
+    // No script context - compiled binaries should have input baked in
+    eprintln!("Error: No script context for AOC input (compiled binaries should have input baked in)");
+    Value::nil()
 }
 
 /// `read(path)` → String

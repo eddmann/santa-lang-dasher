@@ -4934,22 +4934,25 @@ fn read_nonexistent_file_returns_nil() {
 }
 
 #[test]
-fn read_aoc_cached_input() {
-    // If the AOC input is already cached, read should return it
-    use super::builtins::get_aoc_cache_path;
+fn read_aoc_local_input_file() {
+    // If the .input file exists next to the script, read should return it
+    let temp_dir = std::env::temp_dir().join("aoc_test_dir");
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let input_path = temp_dir.join(".input");
+    std::fs::write(&input_path, "local input data").unwrap();
 
-    let cache_path = get_aoc_cache_path(2022, 1);
-    let cache_dir = cache_path.parent().unwrap();
-    std::fs::create_dir_all(cache_dir).unwrap();
-    std::fs::write(&cache_path, "cached input data").unwrap();
+    // Set the script directory env var
+    std::env::set_var("DASHER_SCRIPT_DIR", &temp_dir);
 
     let path = Value::from_string("aoc://2022/1");
     let result = rt_read(path);
 
-    assert_eq!(result.as_string(), Some("cached input data"));
+    assert_eq!(result.as_string(), Some("local input data"));
 
     // Cleanup
-    std::fs::remove_file(&cache_path).ok();
+    std::env::remove_var("DASHER_SCRIPT_DIR");
+    std::fs::remove_file(&input_path).ok();
+    std::fs::remove_dir(&temp_dir).ok();
 }
 
 #[test]

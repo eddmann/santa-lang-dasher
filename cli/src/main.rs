@@ -79,7 +79,12 @@ fn main() -> ExitCode {
             source.clone()
         } else {
             // Solution mode: use Runner to generate executable source
-            runner.generate_source(&program)
+            // If input is an AOC read, resolve it and bake into the binary
+            let script_dir = args.script.parent().unwrap_or(std::path::Path::new("."));
+            let resolved_input = runner.get_aoc_url_from_input(&program).and_then(|url| {
+                santa_lang::runtime::builtins::resolve_aoc_input(&url, script_dir)
+            });
+            runner.generate_source_with_resolved_input(&program, resolved_input.as_deref())
         };
 
         let compiler = Compiler::new();
@@ -110,8 +115,10 @@ fn main() -> ExitCode {
     };
 
     // Create runner with configuration
+    let script_dir = args.script.parent().map(|p| p.to_path_buf());
     let config = RunnerConfig {
         include_slow: args.include_slow,
+        script_dir: script_dir.clone(),
     };
     let runner = Runner::with_config(config);
 
@@ -222,9 +229,12 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
 
-            let status = Command::new(&exe_path)
-                .status()
-                .expect("Failed to run compiled program");
+            let mut cmd = Command::new(&exe_path);
+            // Set script directory env var for AOC input resolution
+            if let Some(ref dir) = script_dir {
+                cmd.env("DASHER_SCRIPT_DIR", dir);
+            }
+            let status = cmd.status().expect("Failed to run compiled program");
 
             std::fs::remove_file(&exe_path).ok();
 

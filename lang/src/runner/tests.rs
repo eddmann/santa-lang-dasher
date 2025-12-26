@@ -160,7 +160,10 @@ test: {
 }
 "#,
     );
-    let runner = Runner::with_config(RunnerConfig { include_slow: true });
+    let runner = Runner::with_config(RunnerConfig {
+        include_slow: true,
+        script_dir: None,
+    });
     let tests = runner.get_tests(&program);
     let filtered = runner.filter_tests(tests);
     assert_eq!(filtered.len(), 2);

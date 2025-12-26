@@ -57,6 +57,8 @@ pub struct TestResult {
 pub struct RunnerConfig {
     /// Include @slow tests in test execution
     pub include_slow: bool,
+    /// Directory containing the script file (for .input file resolution)
+    pub script_dir: Option<std::path::PathBuf>,
 }
 
 /// The AOC runner
@@ -335,7 +337,11 @@ impl Runner {
                     .compile_to_executable(&source, &exe_path)
                     .map_err(|e| RunnerError::RuntimeError(format!("Eval failed: {:?}", e)))?;
 
-                let output = Command::new(&exe_path).output().map_err(|e| {
+                let mut cmd = Command::new(&exe_path);
+                if let Some(ref script_dir) = self.config.script_dir {
+                    cmd.env("DASHER_SCRIPT_DIR", script_dir);
+                }
+                let output = cmd.output().map_err(|e| {
                     RunnerError::RuntimeError(format!("Eval execution failed: {}", e))
                 })?;
 
@@ -397,6 +403,31 @@ impl Runner {
                 None
             }
         })
+    }
+
+    /// Extract AOC URL from input section if it's a read("aoc://...") call.
+    /// Returns the URL string if the input is an AOC read, None otherwise.
+    pub fn get_aoc_url_from_input(&self, program: &Program) -> Option<String> {
+        let input_expr = self.get_input_section(program)?;
+        self.extract_aoc_url(input_expr)
+    }
+
+    /// Extract AOC URL from an expression if it's a read("aoc://...") call.
+    fn extract_aoc_url(&self, expr: &Expr) -> Option<String> {
+        if let Expr::Call { function, args } = expr {
+            // Check if function is `read`
+            if let Expr::Identifier(name) = function.as_ref() {
+                if name == "read" && args.len() == 1 {
+                    // Check if first arg is a string starting with "aoc://"
+                    if let Expr::String(url) = &args[0] {
+                        if url.starts_with("aoc://") {
+                            return Some(url.clone());
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Get the part_one section expression if present
@@ -807,6 +838,17 @@ impl Runner {
         }
     }
 
+    /// Convert a raw string to a properly escaped source code string literal
+    fn string_to_source(&self, s: &str) -> String {
+        let escaped = s
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t");
+        format!("\"{}\"", escaped)
+    }
+
     /// Compile and execute source, parsing output into SolutionResult
     fn compile_and_execute(&self, source: &str) -> Result<SolutionResult, RunnerError> {
         // Create temp directory for executable with unique filename
@@ -824,7 +866,12 @@ impl Runner {
             .map_err(|e| RunnerError::RuntimeError(format!("Compilation failed: {:?}", e)))?;
 
         // Execute and capture output
-        let output = Command::new(&exe_path)
+        let mut cmd = Command::new(&exe_path);
+        // Set script directory env var for AOC input resolution
+        if let Some(ref script_dir) = self.config.script_dir {
+            cmd.env("DASHER_SCRIPT_DIR", script_dir);
+        }
+        let output = cmd
             .output()
             .map_err(|e| RunnerError::RuntimeError(format!("Execution failed: {}", e)))?;
 
@@ -928,6 +975,17 @@ impl Runner {
     /// - Colored CLI-style output for solution mode
     /// - Test mode support via -t/--test flag
     pub fn generate_source(&self, program: &Program) -> String {
+        self.generate_source_with_resolved_input(program, None)
+    }
+
+    /// Generate source code with an optionally pre-resolved input string.
+    /// If `resolved_input` is Some, it will be embedded as a string literal
+    /// instead of the original input expression (used for baking AOC input).
+    pub fn generate_source_with_resolved_input(
+        &self,
+        program: &Program,
+        resolved_input: Option<&str>,
+    ) -> String {
         let input_expr = self.get_input_section(program);
         let part_one_expr = self.get_part_one_section(program);
         let part_two_expr = self.get_part_two_section(program);
@@ -939,6 +997,7 @@ impl Runner {
             part_one_expr,
             part_two_expr,
             &tests,
+            resolved_input,
         )
     }
 
@@ -950,6 +1009,7 @@ impl Runner {
         part_one_expr: Option<&Expr>,
         part_two_expr: Option<&Expr>,
         tests: &[&Section],
+        resolved_input: Option<&str>,
     ) -> String {
         let mut source = String::new();
 
@@ -1047,7 +1107,12 @@ impl Runner {
         source.push_str("} else {\n");
 
         // Generate solution mode code with colored output
-        if let Some(input) = input_expr {
+        // Use resolved_input if provided (baked AOC input), otherwise use the expression
+        if let Some(resolved) = resolved_input {
+            source.push_str("  let input = ");
+            source.push_str(&self.string_to_source(resolved));
+            source.push_str(";\n");
+        } else if let Some(input) = input_expr {
             source.push_str("  let input = ");
             source.push_str(&self.expr_to_source(input));
             source.push_str(";\n");
