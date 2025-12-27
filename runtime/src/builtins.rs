@@ -5444,6 +5444,12 @@ fn parse_aoc_url(url: &str) -> Option<(u32, u32)> {
     Some((year, day))
 }
 
+/// Generate cache filename for AOC input based on year/day.
+/// Returns filename like "aoc2022_day05.input" (day zero-padded).
+fn aoc_cache_filename(year: u32, day: u32) -> String {
+    format!("aoc{}_day{:02}.input", year, day)
+}
+
 /// Fetch AOC input from adventofcode.com.
 /// Returns the input string or None on error.
 fn fetch_aoc_input(year: u32, day: u32, session: &str) -> Option<String> {
@@ -5469,11 +5475,14 @@ fn fetch_aoc_input(year: u32, day: u32, session: &str) -> Option<String> {
 }
 
 /// Resolve AOC input at compile time.
-/// Checks for <scriptname>.input file, fetches and saves if not found.
+/// Checks for aoc<YEAR>_day<DD>.input file, fetches and saves if not found.
 /// Used by CLI compile mode to bake input into compiled binaries.
 pub fn resolve_aoc_input(url: &str, script_path: &std::path::Path) -> Option<String> {
     let (year, day) = parse_aoc_url(url)?;
-    let local_input = script_path.with_extension("input");
+
+    // Cache file is named by URL pattern, placed in same directory as script
+    let script_dir = script_path.parent()?;
+    let local_input = script_dir.join(aoc_cache_filename(year, day));
 
     // Check local file first
     if let Ok(contents) = std::fs::read_to_string(&local_input) {
@@ -5509,7 +5518,7 @@ fn read_http_url(url: &str) -> Value {
     }
 }
 
-/// Read AOC input, using <scriptname>.input file next to the script.
+/// Read AOC input, using aoc<YEAR>_day<DD>.input file next to the script.
 fn read_aoc_input(url: &str) -> Value {
     let (year, day) = match parse_aoc_url(url) {
         Some(v) => v,
@@ -5518,9 +5527,16 @@ fn read_aoc_input(url: &str) -> Value {
 
     // Check for script path from environment
     if let Ok(script_path) = std::env::var("DASHER_SCRIPT_PATH") {
-        let local_input = std::path::Path::new(&script_path).with_extension("input");
+        let script_path = std::path::Path::new(&script_path);
 
-        // Check if <scriptname>.input file exists
+        // Cache file is named by URL pattern, placed in same directory as script
+        let script_dir = match script_path.parent() {
+            Some(d) => d,
+            None => return Value::nil(),
+        };
+        let local_input = script_dir.join(aoc_cache_filename(year, day));
+
+        // Check if cache file exists
         if let Ok(contents) = std::fs::read_to_string(&local_input) {
             return Value::from_string(&contents);
         }
@@ -5543,7 +5559,7 @@ fn read_aoc_input(url: &str) -> Value {
             }
         };
 
-        // Save to <scriptname>.input file for future use
+        // Save to cache file for future use
         std::fs::write(&local_input, &input).ok();
 
         return Value::from_string(&input);

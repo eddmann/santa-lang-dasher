@@ -4936,11 +4936,12 @@ fn read_nonexistent_file_returns_nil() {
 
 #[test]
 fn read_aoc_local_input_file() {
-    // If <scriptname>.input file exists next to the script, read should return it
+    // If aoc<year>_day<DD>.input file exists next to the script, read should return it
+    // The cache filename is based on the URL (aoc://2022/1 -> aoc2022_day01.input)
     let temp_dir = std::env::temp_dir().join("aoc_test_dir");
     std::fs::create_dir_all(&temp_dir).unwrap();
     let script_path = temp_dir.join("test_script.santa");
-    let input_path = temp_dir.join("test_script.input");
+    let input_path = temp_dir.join("aoc2022_day01.input");
     std::fs::write(&input_path, "local input data").unwrap();
 
     // Set the script path env var
