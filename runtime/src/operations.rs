@@ -590,9 +590,9 @@ pub extern "C-unwind" fn rt_ge(left: Value, right: Value) -> Value {
 }
 
 /// Convert a Value to its string representation
-/// Note: Uses the full format_value from builtins for collections
+/// Uses print_value which doesn't add quotes around strings
 fn value_to_string(value: &Value) -> String {
-    crate::builtins::format_value(value)
+    crate::builtins::print_value(value)
 }
 
 // ===== Closure Operations =====

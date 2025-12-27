@@ -5193,7 +5193,17 @@ pub extern "C" fn rt_and(a: Value, b: Value) -> Value {
 // ============================================================================
 
 /// Format a Value as a string representation (for display/printing)
+/// Strings are wrapped in quotes to match other implementations (Blitzen, etc.)
 pub fn format_value(value: &Value) -> String {
+    format_value_inner(value, true)
+}
+
+/// Format a Value for puts output (strings without quotes for parsing)
+pub fn print_value(value: &Value) -> String {
+    format_value_inner(value, false)
+}
+
+fn format_value_inner(value: &Value, quote_strings: bool) -> String {
     // Check type and format accordingly
     if value.is_nil() {
         return "nil".to_string();
@@ -5212,23 +5222,39 @@ pub fn format_value(value: &Value) -> String {
     }
 
     if let Some(s) = value.as_string() {
-        return s.to_string();
+        if quote_strings {
+            return format!("\"{}\"", s);
+        } else {
+            return s.to_string();
+        }
     }
 
     if let Some(list) = value.as_list() {
-        let items: Vec<String> = list.iter().map(format_value).collect();
+        let items: Vec<String> = list
+            .iter()
+            .map(|v| format_value_inner(v, quote_strings))
+            .collect();
         return format!("[{}]", items.join(", "));
     }
 
     if let Some(set) = value.as_set() {
-        let items: Vec<String> = set.iter().map(format_value).collect();
+        let items: Vec<String> = set
+            .iter()
+            .map(|v| format_value_inner(v, quote_strings))
+            .collect();
         return format!("{{{}}}", items.join(", "));
     }
 
     if let Some(dict) = value.as_dict() {
         let items: Vec<String> = dict
             .iter()
-            .map(|(k, v)| format!("{}: {}", format_value(k), format_value(v)))
+            .map(|(k, v)| {
+                format!(
+                    "{}: {}",
+                    format_value_inner(k, quote_strings),
+                    format_value_inner(v, quote_strings)
+                )
+            })
             .collect();
         return format!("#{{{}}}", items.join(", "));
     }
@@ -5268,7 +5294,7 @@ pub extern "C" fn rt_puts(argc: u32, argv: *const Value) -> Value {
     // Safety: Caller guarantees valid argc/argv from LLVM-generated code
     let args: &[Value] = unsafe { std::slice::from_raw_parts(argv, argc as usize) };
 
-    let formatted: Vec<String> = args.iter().map(format_value).collect();
+    let formatted: Vec<String> = args.iter().map(print_value).collect();
     println!("{}", formatted.join(" "));
 
     Value::nil()
@@ -5277,7 +5303,7 @@ pub extern "C" fn rt_puts(argc: u32, argv: *const Value) -> Value {
 /// Helper for calling rt_puts with two arguments (common case in runner)
 #[no_mangle]
 pub extern "C" fn rt_puts_two(a: Value, b: Value) -> Value {
-    let formatted = format!("{} {}", format_value(&a), format_value(&b));
+    let formatted = format!("{} {}", print_value(&a), print_value(&b));
     println!("{}", formatted);
     Value::nil()
 }

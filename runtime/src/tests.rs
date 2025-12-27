@@ -4872,7 +4872,8 @@ fn format_value_decimal() {
 #[test]
 fn format_value_string() {
     let v = Value::from_string("hello");
-    assert_eq!(format_value(&v), "hello");
+    // format_value wraps strings in quotes to match other implementations
+    assert_eq!(format_value(&v), "\"hello\"");
 }
 
 #[test]
@@ -5660,11 +5661,11 @@ fn format_empty_set() {
 #[test]
 fn format_dict() {
     // Dict should format as #{key: value, ...}
-    // Note: existing format_value doesn't add quotes around string keys
+    // format_value wraps string keys in quotes
     let mut dict = im::HashMap::new();
     dict.insert(Value::from_string("a".to_string()), Value::from_integer(1));
     let dict_val = Value::from_dict(dict);
-    assert_eq!(format_value(&dict_val), "#{a: 1}");
+    assert_eq!(format_value(&dict_val), "#{\"a\": 1}");
 }
 
 #[test]
