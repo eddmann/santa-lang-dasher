@@ -5119,7 +5119,7 @@ impl<'ctx> CodegenContext<'ctx> {
             // 2-arg builtins (additional)
             "regex_match" | "regex_match_all" | "iterate" => Some(2),
             // 3-arg builtins
-            "fold" | "scan" | "slice" | "fold_s" | "update" | "assoc" => Some(3),
+            "fold" | "scan" | "slice" | "fold_s" | "update" | "assoc" | "replace" => Some(3),
             // 4-arg builtins
             "update_d" => Some(4),
             // range supports 2 or 3 args, handled specially

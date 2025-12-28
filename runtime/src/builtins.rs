@@ -1656,21 +1656,14 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
         return acc;
     }
 
-    // LazySequence - iterate using next(), first element is initial accumulator
-    // WARNING: Unbounded sequences will loop forever unless break is used
+    // LazySequence - collect and reduce
+    // For Map, Filter, Zip etc. we need to collect first since they require closure evaluation
     if let Some(lazy) = collection.as_lazy_sequence() {
-        // Get first element as initial accumulator
-        let (first_val, mut current) = match lazy.next() {
-            Some((v, next)) => (v, *next),
+        let elements = collect_bounded_lazy(lazy);
+        return match do_reduce(reducer, elements.into_iter()) {
+            Some(v) => v,
             None => runtime_error("reduce on empty collection"),
         };
-
-        let mut acc = first_val;
-        while let Some((val, next_lazy)) = current.next() {
-            acc = call_value(reducer, &[acc, val]);
-            current = *next_lazy;
-        }
-        return acc;
     }
 
     Value::nil()
@@ -2351,9 +2344,9 @@ fn find_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> Value {
 /// - count(_ % 2, 1..10) → 5  (Range support)
 #[no_mangle]
 pub extern "C" fn rt_count(predicate: Value, collection: Value) -> Value {
-    // Get the closure - if not a closure, return 0
-    let closure = match predicate.as_closure() {
-        Some(c) => c,
+    // Check if predicate is callable
+    let arity = match get_callable_arity(&predicate) {
+        Some(a) => a,
         None => return Value::from_integer(0),
     };
 
@@ -2362,7 +2355,7 @@ pub extern "C" fn rt_count(predicate: Value, collection: Value) -> Value {
     // List
     if let Some(list) = collection.as_list() {
         for v in list.iter() {
-            if call_closure(closure, &[*v]).is_truthy() {
+            if call_value(predicate, &[*v]).is_truthy() {
                 count += 1;
             }
         }
@@ -2372,7 +2365,7 @@ pub extern "C" fn rt_count(predicate: Value, collection: Value) -> Value {
     // Set
     if let Some(set) = collection.as_set() {
         for v in set.iter() {
-            if call_closure(closure, &[*v]).is_truthy() {
+            if call_value(predicate, &[*v]).is_truthy() {
                 count += 1;
             }
         }
@@ -2381,12 +2374,12 @@ pub extern "C" fn rt_count(predicate: Value, collection: Value) -> Value {
 
     // Dict (predicate receives value, or (value, key) for 2-arg)
     if let Some(dict) = collection.as_dict() {
-        let is_two_arg = closure.arity >= 2;
+        let is_two_arg = arity >= 2;
         for (k, v) in dict.iter() {
             let matches = if is_two_arg {
-                call_closure(closure, &[*v, *k])
+                call_value(predicate, &[*v, *k])
             } else {
-                call_closure(closure, &[*v])
+                call_value(predicate, &[*v])
             };
             if matches.is_truthy() {
                 count += 1;
@@ -2400,7 +2393,7 @@ pub extern "C" fn rt_count(predicate: Value, collection: Value) -> Value {
         use unicode_segmentation::UnicodeSegmentation;
         for g in s.graphemes(true) {
             let char_val = Value::from_string(g.to_string());
-            if call_closure(closure, &[char_val]).is_truthy() {
+            if call_value(predicate, &[char_val]).is_truthy() {
                 count += 1;
             }
         }
@@ -2409,7 +2402,7 @@ pub extern "C" fn rt_count(predicate: Value, collection: Value) -> Value {
 
     // LazySequence (including Range, Map, Filter, etc.)
     if let Some(lazy) = collection.as_lazy_sequence() {
-        return Value::from_integer(count_in_lazy(lazy, closure));
+        return Value::from_integer(count_in_lazy(lazy, predicate));
     }
 
     Value::from_integer(count)
@@ -2417,7 +2410,7 @@ pub extern "C" fn rt_count(predicate: Value, collection: Value) -> Value {
 
 /// Helper to count matching elements in any lazy sequence
 /// Handles all lazy sequence variants including Map, Filter, and Iterate
-fn count_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> i64 {
+fn count_in_lazy(lazy: &LazySequenceObject, predicate: Value) -> i64 {
     // Safety limit to prevent infinite loops
     const MAX_ITERATIONS: usize = 10_000_000;
     let mut count: i64 = 0;
@@ -2426,7 +2419,7 @@ fn count_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> i64 {
         LazySeqKind::Repeat { value } => {
             // Repeat is infinite - count would be infinite if match
             // Just return 0 since we can't reasonably count infinite elements
-            if call_closure(predicate, &[*value]).is_truthy() {
+            if call_value(predicate, &[*value]).is_truthy() {
                 // Would be infinite, return 0 as placeholder
             }
             0
@@ -2438,7 +2431,7 @@ fn count_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> i64 {
             }
             // Count matches in one full cycle
             for val in source.iter() {
-                if call_closure(predicate, &[*val]).is_truthy() {
+                if call_value(predicate, &[*val]).is_truthy() {
                     count += 1;
                 }
             }
@@ -2474,7 +2467,7 @@ fn count_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> i64 {
                     return count;
                 }
                 let val = Value::from_integer(cur);
-                if call_closure(predicate, &[val]).is_truthy() {
+                if call_value(predicate, &[val]).is_truthy() {
                     count += 1;
                 }
                 cur += step;
@@ -2488,13 +2481,11 @@ fn count_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> i64 {
         }
 
         LazySeqKind::Map { source, mapper } => {
-            if let Some(map_closure) = mapper.as_closure() {
-                let source_elements = collect_bounded_lazy(source);
-                for val in source_elements {
-                    let mapped = call_closure(map_closure, &[val]);
-                    if call_closure(predicate, &[mapped]).is_truthy() {
-                        count += 1;
-                    }
+            let source_elements = collect_bounded_lazy(source);
+            for val in source_elements {
+                let mapped = call_value(*mapper, &[val]);
+                if call_value(predicate, &[mapped]).is_truthy() {
+                    count += 1;
                 }
             }
             count
@@ -2504,14 +2495,12 @@ fn count_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> i64 {
             source,
             predicate: filter_pred,
         } => {
-            if let Some(filter_closure) = filter_pred.as_closure() {
-                let source_elements = collect_bounded_lazy(source);
-                for val in source_elements {
-                    if call_closure(filter_closure, &[val]).is_truthy()
-                        && call_closure(predicate, &[val]).is_truthy()
-                    {
-                        count += 1;
-                    }
+            let source_elements = collect_bounded_lazy(source);
+            for val in source_elements {
+                if call_value(*filter_pred, &[val]).is_truthy()
+                    && call_value(predicate, &[val]).is_truthy()
+                {
+                    count += 1;
                 }
             }
             count
@@ -2520,7 +2509,7 @@ fn count_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> i64 {
         LazySeqKind::Skip { source, remaining } => {
             let source_elements = collect_bounded_lazy(source);
             for (i, val) in source_elements.into_iter().enumerate() {
-                if i >= *remaining && call_closure(predicate, &[val]).is_truthy() {
+                if i >= *remaining && call_value(predicate, &[val]).is_truthy() {
                     count += 1;
                 }
             }
@@ -2545,7 +2534,7 @@ fn count_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> i64 {
                     current_indices.iter().map(|&i| source[i]).collect();
                 let val = Value::from_list(combination);
 
-                if call_closure(predicate, &[val]).is_truthy() {
+                if call_value(predicate, &[val]).is_truthy() {
                     count += 1;
                 }
 
@@ -2578,7 +2567,7 @@ fn count_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> i64 {
             for i in 0..min_len {
                 let tuple: im::Vector<Value> = source_vecs.iter().map(|v| v[i]).collect();
                 let val = Value::from_list(tuple);
-                if call_closure(predicate, &[val]).is_truthy() {
+                if call_value(predicate, &[val]).is_truthy() {
                     count += 1;
                 }
             }
