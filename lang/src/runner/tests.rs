@@ -481,6 +481,77 @@ test: {
 }
 
 #[test]
+fn execute_test_list_unbounded_range_errors() {
+    let program = parse_program(
+        r#"
+part_one: list(1..)
+
+test: {
+  input: 0
+  part_one: 0
+}
+"#,
+    );
+    let runner = Runner::new();
+    let result = runner.execute_tests(&program);
+    assert!(matches!(result, Err(RunnerError::RuntimeError(_))));
+}
+
+#[test]
+fn execute_test_spread_unbounded_range_errors() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let f = |a, b| a + b
+  f(..(1..))
+}
+
+test: {
+  input: 0
+  part_one: 0
+}
+"#,
+    );
+    let runner = Runner::new();
+    let result = runner.execute_tests(&program);
+    assert!(matches!(result, Err(RunnerError::RuntimeError(_))));
+}
+
+#[test]
+fn execute_test_set_literal_unbounded_range_errors() {
+    let program = parse_program(
+        r#"
+part_one: {1..}
+
+test: {
+  input: 0
+  part_one: 0
+}
+"#,
+    );
+    let runner = Runner::new();
+    let result = runner.execute_tests(&program);
+    assert!(matches!(result, Err(RunnerError::RuntimeError(_))));
+}
+
+#[test]
+fn execute_test_dict_key_unbounded_range_errors() {
+    let program = parse_program(
+        r#"
+part_one: #{(1..): 1}
+
+test: {
+  input: 0
+  part_one: 0
+}
+"#,
+    );
+    let runner = Runner::new();
+    let result = runner.execute_tests(&program);
+    assert!(matches!(result, Err(RunnerError::RuntimeError(_))));
+}
+
+#[test]
 fn execute_test_range_builtin_as_value() {
     let program = parse_program(
         r#"

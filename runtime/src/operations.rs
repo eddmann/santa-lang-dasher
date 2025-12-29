@@ -1,3 +1,4 @@
+use super::heap::{LazySeqKind, LazySequenceObject};
 use super::value::Value;
 
 /// Terminate execution with a runtime error.
@@ -47,6 +48,22 @@ pub fn type_name(value: &Value) -> &'static str {
         "LazySequence"
     } else {
         "Unknown"
+    }
+}
+
+pub(crate) fn is_infinite_lazy_sequence(lazy: &LazySequenceObject) -> bool {
+    match &lazy.kind {
+        LazySeqKind::Range { end: None, .. } => true,
+        LazySeqKind::Repeat { .. } => true,
+        LazySeqKind::Cycle { .. } => true,
+        LazySeqKind::Iterate { .. } => true,
+        LazySeqKind::Map { source, .. } | LazySeqKind::Filter { source, .. } => {
+            is_infinite_lazy_sequence(source)
+        }
+        LazySeqKind::Zip { sources } => sources.iter().all(is_infinite_lazy_sequence),
+        LazySeqKind::Range { end: Some(_), .. } => false,
+        LazySeqKind::Skip { source, .. } => is_infinite_lazy_sequence(source),
+        LazySeqKind::Combinations { .. } => false,
     }
 }
 
@@ -760,6 +777,9 @@ pub extern "C-unwind" fn rt_apply(callee: Value, collection: Value) -> Value {
     let args: Vec<Value> = if let Some(list) = collection.as_list() {
         list.iter().copied().collect()
     } else if let Some(lazy) = collection.as_lazy_sequence() {
+        if is_infinite_lazy_sequence(lazy) {
+            runtime_error("Cannot spread unbounded lazy sequence");
+        }
         let mut items = Vec::new();
         let mut current = lazy.clone();
         while let Some((val, next_seq)) = current.next() {

@@ -4,7 +4,7 @@
 //! LANG.txt Reference: §11 Built-in Functions
 
 use super::heap::{ClosureObject, LazySeqKind, LazySequenceObject};
-use super::operations::{rt_add, rt_eq, runtime_error, type_name};
+use super::operations::{is_infinite_lazy_sequence, rt_add, rt_eq, runtime_error, type_name};
 use super::value::Value;
 use regex::Regex;
 
@@ -142,6 +142,9 @@ pub extern "C" fn rt_list(value: Value) -> Value {
 
     // LazySequence (including Range) → Force evaluation to list
     if let Some(lazy_seq) = value.as_lazy_sequence() {
+        if is_infinite_lazy_sequence(lazy_seq) {
+            runtime_error("Cannot materialize unbounded lazy sequence");
+        }
         // Use collect_bounded_lazy which handles Map, Filter, and other lazy kinds
         // that require closure evaluation
         return Value::from_list(collect_bounded_lazy(lazy_seq));
@@ -165,6 +168,17 @@ pub extern "C" fn rt_set(value: Value) -> Value {
 
     // List → Set
     if let Some(list) = value.as_list() {
+        for elem in list.iter() {
+            if elem.as_lazy_sequence().is_some() {
+                runtime_error("LazySequence is not hashable and cannot be added to a Set");
+            }
+            if !elem.is_hashable() {
+                runtime_error(&format!(
+                    "{} is not hashable and cannot be added to a Set",
+                    type_name(elem)
+                ));
+            }
+        }
         let set: im::HashSet<Value> = list.iter().copied().collect();
         return Value::from_set(set);
     }
@@ -185,9 +199,23 @@ pub extern "C" fn rt_set(value: Value) -> Value {
 
     // LazySequence (including Range, Map, Filter, etc.) → Force evaluation to set
     if let Some(lazy_seq) = value.as_lazy_sequence() {
+        if is_infinite_lazy_sequence(lazy_seq) {
+            runtime_error("Cannot materialize unbounded lazy sequence");
+        }
         // Use collect_bounded_lazy which handles Map, Filter, and other lazy kinds
         // that require closure evaluation
         let elements = collect_bounded_lazy(lazy_seq);
+        for elem in elements.iter() {
+            if elem.as_lazy_sequence().is_some() {
+                runtime_error("LazySequence is not hashable and cannot be added to a Set");
+            }
+            if !elem.is_hashable() {
+                runtime_error(&format!(
+                    "{} is not hashable and cannot be added to a Set",
+                    type_name(elem)
+                ));
+            }
+        }
         let set: im::HashSet<Value> = elements.iter().copied().collect();
         return Value::from_set(set);
     }
@@ -4138,7 +4166,11 @@ pub extern "C" fn rt_zip(argc: u32, argv: *const Value) -> Value {
     let args = unsafe { std::slice::from_raw_parts(argv, argc as usize) };
 
     // Check if all collections are infinite lazy sequences
-    let all_infinite = args.iter().all(is_infinite_lazy_sequence);
+    let all_infinite = args.iter().all(|v| {
+        v.as_lazy_sequence()
+            .map(is_infinite_lazy_sequence)
+            .unwrap_or(false)
+    });
 
     if all_infinite {
         // All infinite → return LazySequence
@@ -4180,6 +4212,9 @@ pub extern "C" fn rt_zip_spread(collection: Value) -> Value {
     let args: Vec<Value> = if let Some(list) = collection.as_list() {
         list.iter().copied().collect()
     } else if let Some(lazy) = collection.as_lazy_sequence() {
+        if is_infinite_lazy_sequence(lazy) {
+            runtime_error("Cannot spread unbounded lazy sequence");
+        }
         // Materialize lazy sequence
         let mut result = Vec::new();
         let mut current = lazy.clone();
@@ -4195,39 +4230,6 @@ pub extern "C" fn rt_zip_spread(collection: Value) -> Value {
 
     // Call rt_zip with the extracted elements
     rt_zip(args.len() as u32, args.as_ptr())
-}
-
-/// Check if a value is an infinite lazy sequence (unbounded range or non-Range lazy)
-fn is_infinite_lazy_sequence(v: &Value) -> bool {
-    if let Some(lazy) = v.as_lazy_sequence() {
-        match &lazy.kind {
-            // Unbounded range (no end)
-            LazySeqKind::Range { end: None, .. } => true,
-            // Repeat and Cycle are infinite
-            LazySeqKind::Repeat { .. } => true,
-            LazySeqKind::Cycle { .. } => true,
-            // Iterate is infinite
-            LazySeqKind::Iterate { .. } => true,
-            // Map/Filter of infinite source is infinite
-            LazySeqKind::Map { source, .. } | LazySeqKind::Filter { source, .. } => {
-                is_infinite_lazy_sequence(&Value::from_lazy_sequence(source.clone()))
-            }
-            // Zip of all infinite sources is infinite
-            LazySeqKind::Zip { sources } => sources.iter().all(|s| {
-                is_infinite_lazy_sequence(&Value::from_lazy_sequence(Box::new(s.clone())))
-            }),
-            // Bounded range has an end
-            LazySeqKind::Range { end: Some(_), .. } => false,
-            // Skip preserves finiteness of source
-            LazySeqKind::Skip { source, .. } => {
-                is_infinite_lazy_sequence(&Value::from_lazy_sequence(source.clone()))
-            }
-            // Combinations is always finite
-            LazySeqKind::Combinations { .. } => false,
-        }
-    } else {
-        false
-    }
 }
 
 /// Get the finite length of a collection, or None if infinite

@@ -1,4 +1,5 @@
 use super::heap::{DictObject, ListObject, SetObject};
+use super::operations::{is_infinite_lazy_sequence, runtime_error, type_name};
 use super::value::Value;
 use im;
 
@@ -51,6 +52,9 @@ pub extern "C" fn rt_list_concat(list1: Value, list2: Value) -> Value {
     if let Some(l2) = list2.as_list() {
         result.append(l2.clone());
     } else if let Some(lazy) = list2.as_lazy_sequence() {
+        if is_infinite_lazy_sequence(lazy) {
+            runtime_error("Cannot spread unbounded lazy sequence");
+        }
         // Materialize lazy sequence
         let mut current = lazy.clone();
         while let Some((val, next_seq)) = current.next() {
@@ -76,6 +80,17 @@ pub extern "C" fn rt_set_new() -> Value {
 #[no_mangle]
 pub unsafe extern "C" fn rt_set_from_values(values: *const Value, count: usize) -> Value {
     let values_slice = std::slice::from_raw_parts(values, count);
+    for value in values_slice.iter() {
+        if value.as_lazy_sequence().is_some() {
+            runtime_error("LazySequence is not hashable and cannot be added to a Set");
+        }
+        if !value.is_hashable() {
+            runtime_error(&format!(
+                "{} is not hashable and cannot be added to a Set",
+                type_name(value)
+            ));
+        }
+    }
     let hashset = values_slice.iter().copied().collect();
     let set = SetObject::new(hashset);
     Value::from_heap_ptr(Box::into_raw(set))
@@ -100,6 +115,18 @@ pub unsafe extern "C" fn rt_dict_from_entries(
 ) -> Value {
     let keys_slice = std::slice::from_raw_parts(keys, count);
     let values_slice = std::slice::from_raw_parts(values, count);
+
+    for key in keys_slice.iter() {
+        if key.as_lazy_sequence().is_some() {
+            runtime_error("LazySequence is not hashable and cannot be used as a Dictionary key");
+        }
+        if !key.is_hashable() {
+            runtime_error(&format!(
+                "{} is not hashable and cannot be used as a Dictionary key",
+                type_name(key)
+            ));
+        }
+    }
 
     let hashmap = keys_slice
         .iter()

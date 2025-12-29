@@ -658,6 +658,14 @@ fn hashability_lists_with_hashable_elements() {
 }
 
 #[test]
+fn hashability_lazy_sequence_not_hashable() {
+    use crate::heap::LazySequenceObject;
+    let lazy = LazySequenceObject::range(1, None, false, 1);
+    let value = Value::from_lazy_sequence(lazy);
+    assert!(!value.is_hashable());
+}
+
+#[test]
 fn hashability_dicts_not_hashable() {
     let dict = Value::from_dict(im::HashMap::new());
     assert!(!dict.is_hashable());
