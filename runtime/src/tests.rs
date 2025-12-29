@@ -1110,6 +1110,74 @@ fn builtin_get_string() {
     assert_eq!(result.as_string(), Some("e"));
 }
 
+#[test]
+fn builtin_get_lazy_map_unbounded() {
+    // get(5, map(_ + 1, 0..)) → 6
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(0, None, false, 1));
+    let mapper = make_test_closure(add_one_closure, 1);
+    let mapped = crate::builtins::rt_map(mapper, range);
+    let result = rt_get(Value::from_integer(5), mapped);
+    assert_eq!(result.as_integer(), Some(6));
+}
+
+#[test]
+fn builtin_get_lazy_filter_unbounded() {
+    // get(3, filter(is_odd, 0..)) → 7
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(0, None, false, 1));
+    let predicate = make_test_closure(is_odd_closure, 1);
+    let filtered = crate::builtins::rt_filter(predicate, range);
+    let result = rt_get(Value::from_integer(3), filtered);
+    assert_eq!(result.as_integer(), Some(7));
+}
+
+#[test]
+fn builtin_get_lazy_zip_unbounded() {
+    // get(2, zip(0.., 10..)) → [2, 12]
+    let range1 = Value::from_lazy_sequence(LazySequenceObject::range(0, None, false, 1));
+    let range2 = Value::from_lazy_sequence(LazySequenceObject::range(10, None, false, 1));
+    let zipped = crate::builtins::rt_zip(2, [range1, range2].as_ptr());
+    let result = rt_get(Value::from_integer(2), zipped);
+    let tuple = result.as_list().expect("should be a list");
+    assert_eq!(tuple.len(), 2);
+    assert_eq!(tuple[0].as_integer(), Some(2));
+    assert_eq!(tuple[1].as_integer(), Some(12));
+}
+
+#[test]
+fn builtin_get_lazy_iterate_unbounded() {
+    // get(4, iterate(_ + 1, 0)) → 4
+    let generator = make_test_closure(add_one_closure, 1);
+    let lazy = crate::builtins::rt_iterate(generator, Value::from_integer(0));
+    let result = rt_get(Value::from_integer(4), lazy);
+    assert_eq!(result.as_integer(), Some(4));
+}
+
+#[test]
+fn builtin_get_lazy_cycle_unbounded() {
+    // get(5, cycle([1, 2, 3])) → 3 (0-based: 1,2,3,1,2,3)
+    let list = Value::from_list(
+        vec![
+            Value::from_integer(1),
+            Value::from_integer(2),
+            Value::from_integer(3),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let lazy = crate::builtins::rt_cycle(list);
+    let result = rt_get(Value::from_integer(5), lazy);
+    assert_eq!(result.as_integer(), Some(3));
+}
+
+#[test]
+fn builtin_get_lazy_skip_unbounded() {
+    // get(3, skip(2, 0..)) → 5  (sequence after skip: 2,3,4,5...)
+    let range = Value::from_lazy_sequence(LazySequenceObject::range(0, None, false, 1));
+    let skipped = crate::builtins::rt_skip(Value::from_integer(2), range);
+    let result = rt_get(Value::from_integer(3), skipped);
+    assert_eq!(result.as_integer(), Some(5));
+}
+
 // size() tests
 #[test]
 fn builtin_size_list() {

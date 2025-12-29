@@ -312,17 +312,25 @@ impl TypeInference {
                             return Ok(compute_return_type(sig, &arg_types));
                         }
                     }
+
+                    // Non-builtin: infer call with placeholders replaced by left value
+                    let replaced_args: Vec<Expr> = args
+                        .iter()
+                        .map(|arg| {
+                            if matches!(arg, Expr::Placeholder) {
+                                left.clone()
+                            } else {
+                                arg.clone()
+                            }
+                        })
+                        .collect();
+                    return self.infer_call(function, &replaced_args);
                 }
 
-                // Fall back to inferring the call normally (it may be a partial application)
-                let call_ty = self.infer_expr(right)?;
-                match call_ty.ty {
-                    Type::Function { params: _, ret } => {
-                        // Calling the partial with left as argument
-                        Ok(*ret)
-                    }
-                    _ => Ok(Type::Unknown),
-                }
+                // No placeholder: pipeline appends value as last argument
+                let mut new_args = args.clone();
+                new_args.push(left.clone());
+                self.infer_call(function, &new_args)
             }
 
             // x |> (some expression that returns a function)
@@ -692,7 +700,9 @@ impl TypeInference {
             Pattern::Literal(_) => {}
             // Rest identifier in list: binds to same type (remainder of list)
             Pattern::RestIdentifier(name) => {
-                self.env.insert(name.clone(), ty.clone());
+                if !name.is_empty() {
+                    self.env.insert(name.clone(), ty.clone());
+                }
             }
             // List pattern: destructure and bind each element
             Pattern::List(patterns) => {

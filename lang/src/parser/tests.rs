@@ -1016,6 +1016,44 @@ fn parse_let_destructuring_with_rest() {
 }
 
 #[test]
+fn parse_let_destructuring_ignore_rest() {
+    // Test list destructuring ignoring rest: let [a, b, ..] = [1, 2, 3];
+    let stmt = parse_stmt("let [a, b, ..] = [1, 2, 3]").unwrap();
+    expect![[r#"
+        Let {
+            mutable: false,
+            pattern: List(
+                [
+                    Identifier(
+                        "a",
+                    ),
+                    Identifier(
+                        "b",
+                    ),
+                    RestIdentifier(
+                        "",
+                    ),
+                ],
+            ),
+            value: List(
+                [
+                    Integer(
+                        1,
+                    ),
+                    Integer(
+                        2,
+                    ),
+                    Integer(
+                        3,
+                    ),
+                ],
+            ),
+        }
+    "#]]
+    .assert_debug_eq(&stmt);
+}
+
+#[test]
 fn parse_let_wildcard_pattern() {
     // Test wildcard pattern: let _ = 42;
     let stmt = parse_stmt("let _ = 42").unwrap();
@@ -1556,6 +1594,148 @@ fn parse_range_pattern_exclusive() {
                         ),
                         inclusive: false,
                     },
+                    guard: None,
+                    body: Block(
+                        [
+                            Expr(
+                                Integer(
+                                    1,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+                MatchArm {
+                    pattern: Wildcard,
+                    guard: None,
+                    body: Block(
+                        [
+                            Expr(
+                                Integer(
+                                    0,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_range_pattern_negative_start() {
+    // Range pattern in match: -2..2
+    let expr = parse_expr("match x { -2..2 { 1 } _ { 0 } }").unwrap();
+    expect![[r#"
+        Match {
+            subject: Identifier(
+                "x",
+            ),
+            arms: [
+                MatchArm {
+                    pattern: Range {
+                        start: -2,
+                        end: Some(
+                            2,
+                        ),
+                        inclusive: false,
+                    },
+                    guard: None,
+                    body: Block(
+                        [
+                            Expr(
+                                Integer(
+                                    1,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+                MatchArm {
+                    pattern: Wildcard,
+                    guard: None,
+                    body: Block(
+                        [
+                            Expr(
+                                Integer(
+                                    0,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_range_pattern_negative_end() {
+    // Range pattern in match: 2..-2
+    let expr = parse_expr("match x { 2..-2 { 1 } _ { 0 } }").unwrap();
+    expect![[r#"
+        Match {
+            subject: Identifier(
+                "x",
+            ),
+            arms: [
+                MatchArm {
+                    pattern: Range {
+                        start: 2,
+                        end: Some(
+                            -2,
+                        ),
+                        inclusive: false,
+                    },
+                    guard: None,
+                    body: Block(
+                        [
+                            Expr(
+                                Integer(
+                                    1,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+                MatchArm {
+                    pattern: Wildcard,
+                    guard: None,
+                    body: Block(
+                        [
+                            Expr(
+                                Integer(
+                                    0,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_negative_literal_pattern() {
+    // Match with negative literal: -1
+    let expr = parse_expr("match x { -1 { 1 } _ { 0 } }").unwrap();
+    expect![[r#"
+        Match {
+            subject: Identifier(
+                "x",
+            ),
+            arms: [
+                MatchArm {
+                    pattern: Literal(
+                        Integer(
+                            -1,
+                        ),
+                    ),
                     guard: None,
                     body: Block(
                         [

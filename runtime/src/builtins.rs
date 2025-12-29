@@ -406,114 +406,238 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
                 return Value::nil();
             }
             let idx = i as usize;
-
-            use crate::heap::LazySeqKind;
-            match &lazy_seq.kind {
-                // Range - O(1) direct calculation
-                LazySeqKind::Range {
-                    current,
-                    end,
-                    inclusive,
-                    step,
-                } => {
-                    // Calculate the size of the range for bounds checking
-                    if let Some(end_val) = end {
-                        let size = if *step > 0 {
-                            if *inclusive {
-                                ((end_val - current) / step + 1) as usize
-                            } else {
-                                ((end_val - current + step - 1) / step).max(0) as usize
-                            }
-                        } else {
-                            // step < 0 (descending)
-                            let step_abs = step.abs();
-                            if *inclusive {
-                                ((current - end_val) / step_abs + 1) as usize
-                            } else {
-                                ((current - end_val + step_abs - 1) / step_abs).max(0) as usize
-                            }
-                        };
-
-                        if idx >= size {
-                            return Value::nil();
-                        }
-                    }
-                    // Unbounded range: always valid for non-negative index
-
-                    // Calculate value: start + index * step
-                    let value = current + (idx as i64) * step;
-                    return Value::from_integer(value);
-                }
-
-                // For Iterate sequences, use mutable cached state
-                LazySeqKind::Iterate {
-                    generator,
-                    current,
-                    index: cached_index,
-                } => {
-                    let mut cur_idx = *cached_index.borrow();
-                    let mut cur_val = *current.borrow();
-
-                    // If requested index is before our cached position, we must restart
-                    // This shouldn't happen often in practice (forward iteration is common)
-                    if idx < cur_idx {
-                        // Reset to beginning - we'd need the original initial value
-                        // For now, we can't go backwards, return nil
-                        // (This is a limitation - could store initial value if needed)
-                        return Value::nil();
-                    }
-
-                    // Advance from current cached position to requested index
-                    while cur_idx < idx {
-                        cur_val = call_value(*generator, &[cur_val]);
-                        cur_idx += 1;
-                    }
-
-                    // Update the cached state for future accesses
-                    *current.borrow_mut() = cur_val;
-                    *cached_index.borrow_mut() = cur_idx;
-
-                    return cur_val;
-                }
-
-                // For other LazySequence types (Map/Filter/Zip/Iterate), collect and index
-                _ => {
-                    let needs_forcing = matches!(
-                        &lazy_seq.kind,
-                        LazySeqKind::Map { .. }
-                            | LazySeqKind::Filter { .. }
-                            | LazySeqKind::Zip { .. }
-                            | LazySeqKind::Iterate { .. }
-                    );
-
-                    if needs_forcing {
-                        // Force to list first
-                        let elements = collect_bounded_lazy(lazy_seq);
-                        return elements.get(idx).copied().unwrap_or(Value::nil());
-                    }
-
-                    // Clone and iterate - for other simple types
-                    let mut current_seq: Box<crate::heap::LazySequenceObject> =
-                        Box::new(lazy_seq.clone());
-                    for _ in 0..idx {
-                        match current_seq.next() {
-                            Some((_val, next_seq)) => {
-                                current_seq = next_seq;
-                            }
-                            None => return Value::nil(),
-                        }
-                    }
-                    if let Some((val, _next_seq)) = current_seq.next() {
-                        return val;
-                    }
-                    return Value::nil();
-                }
-            }
+            return lazy_nth(lazy_seq, idx).unwrap_or_else(Value::nil);
         }
         return Value::nil();
     }
 
     Value::nil()
+}
+
+/// Get the nth element of a lazy sequence without materializing it.
+/// Returns None if the sequence is exhausted before reaching idx.
+fn lazy_nth(lazy: &LazySequenceObject, idx: usize) -> Option<Value> {
+    use crate::heap::LazySeqKind;
+
+    match &lazy.kind {
+        // Range - O(1) direct calculation
+        LazySeqKind::Range {
+            current,
+            end,
+            inclusive,
+            step,
+        } => {
+            if *step == 0 {
+                return None;
+            }
+            if let Some(end_val) = end {
+                let size = if *step > 0 {
+                    if *inclusive {
+                        if *current > *end_val {
+                            0
+                        } else {
+                            ((*end_val - *current) / *step + 1) as usize
+                        }
+                    } else if *current >= *end_val {
+                        0
+                    } else {
+                        ((*end_val - *current - 1) / *step + 1) as usize
+                    }
+                } else {
+                    let step_abs = step.abs();
+                    if *inclusive {
+                        if *current < *end_val {
+                            0
+                        } else {
+                            ((*current - *end_val) / step_abs + 1) as usize
+                        }
+                    } else if *current <= *end_val {
+                        0
+                    } else {
+                        ((*current - *end_val - 1) / step_abs + 1) as usize
+                    }
+                };
+
+                if idx >= size {
+                    return None;
+                }
+            }
+
+            let value = *current + (idx as i64) * *step;
+            return Some(Value::from_integer(value));
+        }
+
+        // Repeat - infinite, always same value
+        LazySeqKind::Repeat { value } => Some(*value),
+
+        // Cycle - infinite if source non-empty
+        LazySeqKind::Cycle { source, index } => {
+            if source.is_empty() {
+                None
+            } else {
+                let pos = (*index + idx) % source.len();
+                Some(source[pos])
+            }
+        }
+
+        // Iterate - use mutable cached state for forward access
+        LazySeqKind::Iterate {
+            generator,
+            current,
+            index: cached_index,
+        } => {
+            let mut cur_idx = *cached_index.borrow();
+            let mut cur_val = *current.borrow();
+
+            if idx < cur_idx {
+                return None;
+            }
+
+            while cur_idx < idx {
+                cur_val = call_value(*generator, &[cur_val]);
+                cur_idx += 1;
+            }
+
+            *current.borrow_mut() = cur_val;
+            *cached_index.borrow_mut() = cur_idx;
+
+            Some(cur_val)
+        }
+
+        // Skip - delegate to source with offset
+        LazySeqKind::Skip { source, remaining } => lazy_nth(source, remaining + idx),
+
+        // Map - apply mapper to source element
+        LazySeqKind::Map { source, mapper } => {
+            let val = lazy_nth(source, idx)?;
+            Some(call_value(*mapper, &[val]))
+        }
+
+        // Filter - iterate until the idx-th matching element
+        LazySeqKind::Filter { source, predicate } => {
+            let mut count = 0usize;
+            let mut current = source.clone();
+            loop {
+                let (val, next_source) = lazy_next_with_closures(&current)?;
+                if call_value(*predicate, &[val]).is_truthy() {
+                    if count == idx {
+                        return Some(val);
+                    }
+                    count += 1;
+                }
+                current = next_source;
+            }
+        }
+
+        // Zip - nth element from each source
+        LazySeqKind::Zip { sources } => {
+            let mut tuple = im::Vector::new();
+            for src in sources {
+                let val = lazy_nth(src, idx)?;
+                tuple.push_back(val);
+            }
+            Some(Value::from_list(tuple))
+        }
+
+        // Combinations and other simple kinds - iterate
+        _ => {
+            let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+            for _ in 0..idx {
+                let (_val, next_seq) = lazy_next_with_closures(&current)?;
+                current = next_seq;
+            }
+            let (val, _next_seq) = lazy_next_with_closures(&current)?;
+            Some(val)
+        }
+    }
+}
+
+/// Get the next value from any lazy sequence, evaluating closures as needed.
+fn lazy_next_with_closures(
+    lazy: &LazySequenceObject,
+) -> Option<(Value, Box<LazySequenceObject>)> {
+    use crate::heap::LazySeqKind;
+
+    match &lazy.kind {
+        LazySeqKind::Map { source, mapper } => {
+            let (val, next_source) = lazy_next_with_closures(source)?;
+            let mapped = call_value(*mapper, &[val]);
+            Some((
+                mapped,
+                LazySequenceObject::new(LazySeqKind::Map {
+                    source: next_source,
+                    mapper: *mapper,
+                }),
+            ))
+        }
+        LazySeqKind::Filter { source, predicate } => {
+            let mut current = source.clone();
+            loop {
+                let (val, next_source) = lazy_next_with_closures(&current)?;
+                if call_value(*predicate, &[val]).is_truthy() {
+                    return Some((
+                        val,
+                        LazySequenceObject::new(LazySeqKind::Filter {
+                            source: next_source,
+                            predicate: *predicate,
+                        }),
+                    ));
+                }
+                current = next_source;
+            }
+        }
+        LazySeqKind::Zip { sources } => {
+            let mut values = im::Vector::new();
+            let mut next_sources = Vec::with_capacity(sources.len());
+            for src in sources {
+                let (val, next_src) = lazy_next_with_closures(src)?;
+                values.push_back(val);
+                next_sources.push(*next_src);
+            }
+            Some((
+                Value::from_list(values),
+                LazySequenceObject::new(LazySeqKind::Zip {
+                    sources: next_sources,
+                }),
+            ))
+        }
+        LazySeqKind::Iterate {
+            generator,
+            current,
+            index,
+        } => {
+            let cur = *current.borrow();
+            let next_val = call_value(*generator, &[cur]);
+            *current.borrow_mut() = next_val;
+            *index.borrow_mut() += 1;
+            Some((
+                cur,
+                LazySequenceObject::new(LazySeqKind::Iterate {
+                    generator: *generator,
+                    current: current.clone(),
+                    index: index.clone(),
+                }),
+            ))
+        }
+        LazySeqKind::Skip { source, remaining } => {
+            let mut current = source.clone();
+            let mut to_skip = *remaining;
+            while to_skip > 0 {
+                let (_val, next_source) = lazy_next_with_closures(&current)?;
+                current = next_source;
+                to_skip -= 1;
+            }
+            let (val, next_source) = lazy_next_with_closures(&current)?;
+            Some((
+                val,
+                LazySequenceObject::new(LazySeqKind::Skip {
+                    source: next_source,
+                    remaining: 0,
+                }),
+            ))
+        }
+        _ => lazy.next(),
+    }
 }
 
 /// `size(collection)` → Integer
@@ -550,6 +674,9 @@ pub extern "C" fn rt_size(collection: Value) -> Value {
 
     // LazySequence - need to handle different kinds
     if let Some(lazy_seq) = collection.as_lazy_sequence() {
+        if is_infinite_lazy_sequence(lazy_seq) {
+            runtime_error("size on unbounded lazy sequence");
+        }
         use crate::heap::LazySeqKind;
 
         // Range (bounded only) - calculate size directly without iterating
@@ -744,6 +871,9 @@ pub extern "C" fn rt_last(collection: Value) -> Value {
 
     // LazySequence - for bounded sequences, iterate to find last
     if let Some(lazy) = collection.as_lazy_sequence() {
+        if is_infinite_lazy_sequence(lazy) {
+            runtime_error("last on unbounded lazy sequence");
+        }
         use crate::heap::LazySeqKind;
         // For Range, calculate last directly (O(1))
         if let LazySeqKind::Range {
@@ -2769,6 +2899,9 @@ pub extern "C" fn rt_sum(collection: Value) -> Value {
 
     // LazySequence (including Range)
     if let Some(lazy) = collection.as_lazy_sequence() {
+        if is_infinite_lazy_sequence(lazy) {
+            runtime_error("sum on unbounded lazy sequence");
+        }
         use crate::heap::LazySeqKind;
         // For Range, use arithmetic sequence sum formula: sum = n * (first + last) / 2
         if let LazySeqKind::Range {
@@ -2906,6 +3039,9 @@ pub extern "C" fn rt_max(collection: Value) -> Value {
 
     // LazySequence (including Range)
     if let Some(lazy) = collection.as_lazy_sequence() {
+        if is_infinite_lazy_sequence(lazy) {
+            runtime_error("max on unbounded lazy sequence");
+        }
         use crate::heap::LazySeqKind;
         // For Range, max is first (descending) or last (ascending)
         if let LazySeqKind::Range {
@@ -3007,6 +3143,9 @@ pub extern "C" fn rt_min(collection: Value) -> Value {
 
     // LazySequence (including Range)
     if let Some(lazy) = collection.as_lazy_sequence() {
+        if is_infinite_lazy_sequence(lazy) {
+            runtime_error("min on unbounded lazy sequence");
+        }
         use crate::heap::LazySeqKind;
         // For Range, min is first (ascending) or last (descending)
         if let LazySeqKind::Range {

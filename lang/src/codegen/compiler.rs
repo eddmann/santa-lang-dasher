@@ -513,89 +513,24 @@ impl<'ctx> CodegenContext<'ctx> {
     /// Compile a pipeline operation: x |> f transforms to f(x)
     ///
     /// Per LANG.txt §4.7, the pipeline operator threads values through function calls.
-    /// There are two behaviors depending on the right-hand expression:
-    ///
-    /// 1. If f is a builtin name being called with args: x |> map(_ * 2)
-    ///    This transforms to map(_ * 2, x) - value is appended as last argument.
-    ///    This is the common case for builtins like map, filter, fold, etc.
-    ///
-    /// 2. If f is a call to a user-defined function or variable that returns a function:
-    ///    x |> make_func(1) transforms to (make_func(1))(x)
-    ///    The call is evaluated first, returning a function, then that function is called with x.
-    ///
-    /// We distinguish these by checking if the function being called is a known builtin.
+    /// If the RHS is a call expression, the piped value is appended as the last argument:
+    ///   x |> f(a, b)  →  f(a, b, x)
+    /// Otherwise it is a simple call:
+    ///   x |> f  →  f(x)
     fn compile_pipeline(
         &mut self,
         value: &Expr,
         function: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
-        // If function is already a Call expression, check if it's a builtin
+        // If function is already a Call expression, append the piped value
         if let Expr::Call {
             function: inner_fn,
             args,
         } = function
         {
-            // Check if the inner function is a builtin that takes a collection as last arg
-            let is_known_builtin = if let Expr::Identifier(name) = inner_fn.as_ref() {
-                Self::is_pipeline_builtin(name)
-            } else {
-                false
-            };
-
-            if is_known_builtin {
-                // For builtins, append value as last argument: x |> map(f) → map(f, x)
-                let mut new_args = args.clone();
-                new_args.push(value.clone());
-                return self.compile_call(inner_fn, &new_args);
-            } else {
-                // For user-defined functions, evaluate the call first, then call result with value
-                // x |> make_f(1) → (make_f(1))(x)
-                let func_result = self.compile_call(inner_fn, args)?;
-
-                // Now call func_result with value
-                let value_ty = self.infer_expr_type(value);
-                let value_typed = TypedExpr {
-                    expr: value.clone(),
-                    ty: value_ty,
-                    span: crate::lexer::token::Span::new(
-                        crate::lexer::token::Position::new(0, 0),
-                        crate::lexer::token::Position::new(0, 0),
-                    ),
-                };
-                let value_compiled = self.compile_expr(&value_typed)?;
-
-                // Allocate array for the single argument
-                let i64_type = self.context.i64_type();
-                let argv_alloca = self
-                    .builder
-                    .build_alloca(i64_type.array_type(1), "pipeline_argv")
-                    .unwrap();
-
-                // Store the value argument
-                let zero = self.context.i32_type().const_int(0, false);
-                let gep = unsafe {
-                    self.builder
-                        .build_gep(i64_type.array_type(1), argv_alloca, &[zero, zero], "argv_0")
-                        .unwrap()
-                };
-                self.builder.build_store(gep, value_compiled).unwrap();
-
-                // Call the function result with the value
-                let rt_call = self.get_or_declare_rt_call();
-                let result = self
-                    .builder
-                    .build_call(
-                        rt_call,
-                        &[
-                            func_result.into(),
-                            self.context.i32_type().const_int(1, false).into(),
-                            argv_alloca.into(),
-                        ],
-                        "pipeline_call",
-                    )
-                    .unwrap();
-                return Ok(result.try_as_basic_value().left().unwrap());
-            }
+            let mut new_args = args.clone();
+            new_args.push(value.clone());
+            return self.compile_call(inner_fn, &new_args);
         }
 
         // Otherwise, x |> f transforms to f(x)
@@ -2465,532 +2400,9 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
             }
             Pattern::List(patterns) => {
-                // List pattern matching:
-                // 1. Check if subject is a list (via rt_size not returning 0 for non-collections)
-                // 2. Check length matches expected count (if no rest pattern)
-                // 3. Check each element matches its pattern
-
-                let current_fn = self
-                    .builder
-                    .get_insert_block()
-                    .unwrap()
-                    .get_parent()
-                    .unwrap();
-
-                let rt_is_list = self.get_or_declare_rt_is_list();
-                let is_list_val = self
-                    .builder
-                    .build_call(rt_is_list, &[subject.into()], "is_list")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap()
-                    .into_int_value();
-                let is_list_bool = self
-                    .builder
-                    .build_int_compare(
-                        IntPredicate::NE,
-                        is_list_val,
-                        self.context.i64_type().const_zero(),
-                        "is_list_bool",
-                    )
-                    .unwrap();
-                let list_check_bb = self.context.append_basic_block(current_fn, "list_check");
-                self.builder
-                    .build_conditional_branch(is_list_bool, list_check_bb, no_match_bb)
-                    .unwrap();
-                self.builder.position_at_end(list_check_bb);
-
-                // Count non-rest patterns and find rest pattern position
-                let mut fixed_count = 0usize;
-                let mut has_rest = false;
-                let mut rest_position = None;
-                for (i, p) in patterns.iter().enumerate() {
-                    if matches!(p, Pattern::RestIdentifier(_)) {
-                        has_rest = true;
-                        rest_position = Some(i);
-                    } else {
-                        fixed_count += 1;
-                    }
-                }
-
-                // Get subject's length
-                let rt_size = self.get_or_declare_rt_size();
-                let size_result = self
-                    .builder
-                    .build_call(rt_size, &[subject.into()], "list_size")
-                    .unwrap();
-                let size_val = size_result.try_as_basic_value().left().unwrap();
-
-                // Extract the integer value from tagged result (shift right by 3)
-                let size_int = size_val.into_int_value();
-                let actual_len = self
-                    .builder
-                    .build_right_shift(
-                        size_int,
-                        self.context.i64_type().const_int(3, false),
-                        false,
-                        "actual_len",
-                    )
-                    .unwrap();
-
-                let expected_len = self.context.i64_type().const_int(fixed_count as u64, false);
-
-                // Check length
-                let len_ok = if has_rest {
-                    // With rest pattern: actual_len >= fixed_count
-                    self.builder
-                        .build_int_compare(IntPredicate::UGE, actual_len, expected_len, "len_ge")
-                        .unwrap()
-                } else {
-                    // Without rest: actual_len == patterns.len()
-                    self.builder
-                        .build_int_compare(IntPredicate::EQ, actual_len, expected_len, "len_eq")
-                        .unwrap()
-                };
-
-                // If length doesn't match, go to no_match
-                let check_elements_bb = self
-                    .context
-                    .append_basic_block(current_fn, "check_elements");
-                self.builder
-                    .build_conditional_branch(len_ok, check_elements_bb, no_match_bb)
-                    .unwrap();
-
-                // Check each element pattern
-                self.builder.position_at_end(check_elements_bb);
-
-                // For now, just match on fixed patterns (not rest)
-                // We check elements from the start and from the end
-                //
-                // For rest pattern at any position:
-                // - Elements before rest: access at index i (from start)
-                // - Elements after rest: access at index (length - patterns_after_rest + offset)
-                //   where offset is the position within after-rest elements (0, 1, 2, ...)
-                //
-                // Example: [first, ..middle, last] with list [1,2,3,4,5]
-                //   first -> index 0
-                //   last -> index (5 - 1) = 4  (patterns_after_rest = 1, offset = 0)
-
-                // Count patterns after rest
-                let patterns_after_rest = if let Some(rest_pos) = rest_position {
-                    patterns.len() - rest_pos - 1
-                } else {
-                    0
-                };
-
-                let mut elem_idx = 0usize;
-                let mut after_rest_offset = 0usize;
-                for (i, p) in patterns.iter().enumerate() {
-                    if matches!(p, Pattern::RestIdentifier(_)) {
-                        continue; // Skip rest pattern in matching
-                    }
-
-                    // Determine the actual index to check
-                    let is_after_rest = rest_position.is_some_and(|pos| i > pos);
-
-                    // Get element at computed index
-                    let elem_val = if is_after_rest {
-                        // Element after rest: compute index from end
-                        // index = actual_len - (patterns_after_rest - after_rest_offset)
-                        let offset_from_end = (patterns_after_rest - after_rest_offset) as u64;
-                        let idx_from_end = self
-                            .builder
-                            .build_int_sub(
-                                actual_len,
-                                self.context.i64_type().const_int(offset_from_end, false),
-                                "idx_from_end",
-                            )
-                            .unwrap();
-
-                        let rt_get = self.get_or_declare_rt_get();
-                        // Convert to tagged integer for rt_get
-                        let tagged_idx = self
-                            .builder
-                            .build_left_shift(
-                                idx_from_end,
-                                self.context.i64_type().const_int(3, false),
-                                "shift_idx",
-                            )
-                            .unwrap();
-                        let tagged_idx = self
-                            .builder
-                            .build_or(
-                                tagged_idx,
-                                self.context.i64_type().const_int(0b001, false),
-                                "tag_idx",
-                            )
-                            .unwrap();
-
-                        let elem_result = self
-                            .builder
-                            .build_call(
-                                rt_get,
-                                &[tagged_idx.into(), subject.into()],
-                                &format!("elem_from_end_{}", after_rest_offset),
-                            )
-                            .unwrap();
-                        after_rest_offset += 1;
-                        elem_result.try_as_basic_value().left().unwrap()
-                    } else {
-                        // Element before rest (or no rest): use direct index
-                        let idx_val = self.compile_integer(i as i64);
-                        let rt_get = self.get_or_declare_rt_get();
-                        let elem_result = self
-                            .builder
-                            .build_call(
-                                rt_get,
-                                &[idx_val.into(), subject.into()],
-                                &format!("elem_{}", i),
-                            )
-                            .unwrap();
-                        elem_result.try_as_basic_value().left().unwrap()
-                    };
-
-                    // Check if element matches pattern
-                    match p {
-                        Pattern::Wildcard | Pattern::Identifier(_) => {
-                            // Always matches - continue to next element
-                        }
-                        Pattern::Literal(lit) => {
-                            // Compare element to literal
-                            let lit_val = self.compile_literal(lit);
-                            let rt_eq = self.get_or_declare_rt_eq();
-                            let eq_result = self
-                                .builder
-                                .build_call(rt_eq, &[elem_val.into(), lit_val.into()], "elem_eq")
-                                .unwrap();
-                            let eq_val = eq_result.try_as_basic_value().left().unwrap();
-                            let eq_bool = self.value_to_bool(eq_val);
-
-                            // If element doesn't match, fail
-                            let next_bb = self.context.append_basic_block(
-                                current_fn,
-                                &format!("check_elem_{}", elem_idx + 1),
-                            );
-                            self.builder
-                                .build_conditional_branch(eq_bool, next_bb, no_match_bb)
-                                .unwrap();
-                            self.builder.position_at_end(next_bb);
-                        }
-                        Pattern::Range {
-                            start,
-                            end,
-                            inclusive,
-                        } => {
-                            // Range pattern inside list: check if element is in range
-                            let rt_expect_integer = self.get_or_declare_rt_expect_integer();
-                            let elem_checked = self
-                                .builder
-                                .build_call(rt_expect_integer, &[elem_val.into()], "elem_int")
-                                .unwrap()
-                                .try_as_basic_value()
-                                .left()
-                                .unwrap();
-                            let start_val = self.compile_integer(*start);
-                            let elem_int = elem_checked.into_int_value();
-                            let start_int = start_val.into_int_value();
-
-                            // elem >= start
-                            let ge_start = self
-                                .builder
-                                .build_int_compare(
-                                    IntPredicate::SGE,
-                                    elem_int,
-                                    start_int,
-                                    "elem_ge_start",
-                                )
-                                .unwrap();
-
-                            let in_range = if let Some(e) = end {
-                                let end_val = self.compile_integer(*e);
-                                let end_int = end_val.into_int_value();
-
-                                let cmp = if *inclusive {
-                                    IntPredicate::SLE
-                                } else {
-                                    IntPredicate::SLT
-                                };
-                                let lt_end = self
-                                    .builder
-                                    .build_int_compare(cmp, elem_int, end_int, "elem_lt_end")
-                                    .unwrap();
-
-                                self.builder
-                                    .build_and(ge_start, lt_end, "in_range")
-                                    .unwrap()
-                            } else {
-                                // Unbounded range: just check >= start
-                                ge_start
-                            };
-
-                            let next_bb = self.context.append_basic_block(
-                                current_fn,
-                                &format!("check_elem_{}", elem_idx + 1),
-                            );
-                            self.builder
-                                .build_conditional_branch(in_range, next_bb, no_match_bb)
-                                .unwrap();
-                            self.builder.position_at_end(next_bb);
-                        }
-                        Pattern::List(nested_patterns) => {
-                            // Nested list pattern - recursively check the nested pattern
-                            // We already have elem_val from above
-
-                            let rt_is_list = self.get_or_declare_rt_is_list();
-                            let nested_is_list_val = self
-                                .builder
-                                .build_call(rt_is_list, &[elem_val.into()], "nested_is_list")
-                                .unwrap()
-                                .try_as_basic_value()
-                                .left()
-                                .unwrap()
-                                .into_int_value();
-                            let nested_is_list_bool = self
-                                .builder
-                                .build_int_compare(
-                                    IntPredicate::NE,
-                                    nested_is_list_val,
-                                    self.context.i64_type().const_zero(),
-                                    "nested_is_list_bool",
-                                )
-                                .unwrap();
-                            let nested_list_bb = self.context.append_basic_block(
-                                current_fn,
-                                &format!("check_nested_list_{}", i),
-                            );
-                            self.builder
-                                .build_conditional_branch(
-                                    nested_is_list_bool,
-                                    nested_list_bb,
-                                    no_match_bb,
-                                )
-                                .unwrap();
-                            self.builder.position_at_end(nested_list_bb);
-
-                            // Check the nested list's length
-                            let nested_size_result = self
-                                .builder
-                                .build_call(rt_size, &[elem_val.into()], "nested_size")
-                                .unwrap();
-                            let nested_size_val =
-                                nested_size_result.try_as_basic_value().left().unwrap();
-                            let nested_size_int = nested_size_val.into_int_value();
-                            let nested_actual_len = self
-                                .builder
-                                .build_right_shift(
-                                    nested_size_int,
-                                    self.context.i64_type().const_int(3, false),
-                                    false,
-                                    "nested_actual_len",
-                                )
-                                .unwrap();
-
-                            // Count fixed patterns in nested list (excluding rest patterns)
-                            let mut nested_fixed_count = 0usize;
-                            let mut nested_has_rest = false;
-                            for np in nested_patterns.iter() {
-                                if matches!(np, Pattern::RestIdentifier(_)) {
-                                    nested_has_rest = true;
-                                } else {
-                                    nested_fixed_count += 1;
-                                }
-                            }
-
-                            let nested_expected_len = self
-                                .context
-                                .i64_type()
-                                .const_int(nested_fixed_count as u64, false);
-                            let nested_len_ok = if nested_has_rest {
-                                self.builder
-                                    .build_int_compare(
-                                        IntPredicate::UGE,
-                                        nested_actual_len,
-                                        nested_expected_len,
-                                        "nested_len_ge",
-                                    )
-                                    .unwrap()
-                            } else {
-                                self.builder
-                                    .build_int_compare(
-                                        IntPredicate::EQ,
-                                        nested_actual_len,
-                                        nested_expected_len,
-                                        "nested_len_eq",
-                                    )
-                                    .unwrap()
-                            };
-
-                            // If nested length doesn't match, fail
-                            let nested_check_bb = self
-                                .context
-                                .append_basic_block(current_fn, &format!("check_nested_{}", i));
-                            self.builder
-                                .build_conditional_branch(
-                                    nested_len_ok,
-                                    nested_check_bb,
-                                    no_match_bb,
-                                )
-                                .unwrap();
-                            self.builder.position_at_end(nested_check_bb);
-
-                            // Check each element in the nested pattern
-                            let rt_get_nested = self.get_or_declare_rt_get();
-                            for (ni, np) in nested_patterns.iter().enumerate() {
-                                match np {
-                                    Pattern::Wildcard | Pattern::Identifier(_) => {
-                                        // Always matches - continue
-                                    }
-                                    Pattern::Literal(lit) => {
-                                        // Compare nested element to literal
-                                        let nested_idx_val = self.compile_integer(ni as i64);
-                                        let nested_elem_result = self
-                                            .builder
-                                            .build_call(
-                                                rt_get_nested,
-                                                &[nested_idx_val.into(), elem_val.into()],
-                                                &format!("nested_elem_{}_{}", i, ni),
-                                            )
-                                            .unwrap();
-                                        let nested_elem_val =
-                                            nested_elem_result.try_as_basic_value().left().unwrap();
-
-                                        let lit_val = self.compile_literal(lit);
-                                        let rt_eq = self.get_or_declare_rt_eq();
-                                        let eq_result = self
-                                            .builder
-                                            .build_call(
-                                                rt_eq,
-                                                &[nested_elem_val.into(), lit_val.into()],
-                                                "nested_elem_eq",
-                                            )
-                                            .unwrap();
-                                        let eq_val_cmp =
-                                            eq_result.try_as_basic_value().left().unwrap();
-                                        let eq_bool = self.value_to_bool(eq_val_cmp);
-
-                                        let next_nested_bb = self.context.append_basic_block(
-                                            current_fn,
-                                            &format!("check_nested_elem_{}_{}", i, ni + 1),
-                                        );
-                                        self.builder
-                                            .build_conditional_branch(
-                                                eq_bool,
-                                                next_nested_bb,
-                                                no_match_bb,
-                                            )
-                                            .unwrap();
-                                        self.builder.position_at_end(next_nested_bb);
-                                    }
-                                    Pattern::RestIdentifier(_) => {
-                                        // Skip rest pattern in matching
-                                    }
-                                    Pattern::Range {
-                                        start,
-                                        end,
-                                        inclusive,
-                                    } => {
-                                        // Range pattern in nested list
-                                        let nested_idx_val = self.compile_integer(ni as i64);
-                                        let nested_elem_result = self
-                                            .builder
-                                            .build_call(
-                                                rt_get_nested,
-                                                &[nested_idx_val.into(), elem_val.into()],
-                                                &format!("nested_elem_{}_{}", i, ni),
-                                            )
-                                            .unwrap();
-                                        let nested_elem_val =
-                                            nested_elem_result.try_as_basic_value().left().unwrap();
-
-                                        let rt_expect_integer =
-                                            self.get_or_declare_rt_expect_integer();
-                                        let nested_checked = self
-                                            .builder
-                                            .build_call(
-                                                rt_expect_integer,
-                                                &[nested_elem_val.into()],
-                                                "nested_elem_int",
-                                            )
-                                            .unwrap()
-                                            .try_as_basic_value()
-                                            .left()
-                                            .unwrap();
-                                        let start_val = self.compile_integer(*start);
-                                        let nested_int = nested_checked.into_int_value();
-                                        let start_int = start_val.into_int_value();
-
-                                        // nested_elem >= start
-                                        let ge_start = self
-                                            .builder
-                                            .build_int_compare(
-                                                IntPredicate::SGE,
-                                                nested_int,
-                                                start_int,
-                                                "nested_ge_start",
-                                            )
-                                            .unwrap();
-
-                                        let in_range = if let Some(e) = end {
-                                            let end_val = self.compile_integer(*e);
-                                            let end_int = end_val.into_int_value();
-
-                                            let cmp = if *inclusive {
-                                                IntPredicate::SLE
-                                            } else {
-                                                IntPredicate::SLT
-                                            };
-                                            let lt_end = self
-                                                .builder
-                                                .build_int_compare(
-                                                    cmp,
-                                                    nested_int,
-                                                    end_int,
-                                                    "nested_lt_end",
-                                                )
-                                                .unwrap();
-
-                                            self.builder
-                                                .build_and(ge_start, lt_end, "nested_in_range")
-                                                .unwrap()
-                                        } else {
-                                            // Unbounded range: just check >= start
-                                            ge_start
-                                        };
-
-                                        let next_nested_bb = self.context.append_basic_block(
-                                            current_fn,
-                                            &format!("check_nested_range_{}_{}", i, ni + 1),
-                                        );
-                                        self.builder
-                                            .build_conditional_branch(
-                                                in_range,
-                                                next_nested_bb,
-                                                no_match_bb,
-                                            )
-                                            .unwrap();
-                                        self.builder.position_at_end(next_nested_bb);
-                                    }
-                                    _ => {
-                                        return Err(CompileError::UnsupportedPattern(format!(
-                                            "Deeply nested pattern not yet supported: {:?}",
-                                            np
-                                        )));
-                                    }
-                                }
-                            }
-                        }
-                        _ => {
-                            // Other patterns in list
-                            return Err(CompileError::UnsupportedPattern(format!(
-                                "Pattern type not supported in list: {:?}",
-                                p
-                            )));
-                        }
-                    }
-
-                    elem_idx += 1;
-                }
+                let success_bb =
+                    self.compile_list_pattern_match(subject, patterns, no_match_bb, "list_pat")?;
+                self.builder.position_at_end(success_bb);
 
                 // All elements matched - check guard if present
                 if let Some(guard_expr) = guard {
@@ -3035,6 +2447,9 @@ impl<'ctx> CodegenContext<'ctx> {
     fn validate_pattern_bindings(&self, pattern: &Pattern) -> Result<(), CompileError> {
         match pattern {
             Pattern::Identifier(name) | Pattern::RestIdentifier(name) => {
+                if name.is_empty() {
+                    return Ok(());
+                }
                 if Self::is_protected_builtin_name(name) {
                     return Err(CompileError::UnsupportedPattern(format!(
                         "Cannot bind protected builtin name: {}",
@@ -3187,6 +2602,10 @@ impl<'ctx> CodegenContext<'ctx> {
                             self.variables.insert(name.clone(), alloca);
                         }
                         Pattern::RestIdentifier(name) => {
+                            if name.is_empty() {
+                                // Bare rest (..) ignores remaining elements
+                                continue;
+                            }
                             // Bind the rest of the list to this name
                             // We need to slice from current position (i) to (len - patterns_after_rest)
                             // Use rt_skip to skip the first 'i' elements
@@ -3313,45 +2732,11 @@ impl<'ctx> CodegenContext<'ctx> {
                                 nested_elem_result.try_as_basic_value().left().unwrap()
                             };
 
-                            // Then bind variables in the nested pattern
-                            let rt_get_inner = self.get_or_declare_rt_get();
-                            for (ni, np) in nested_patterns.iter().enumerate() {
-                                match np {
-                                    Pattern::Identifier(name) => {
-                                        // Get element at index within nested list
-                                        let nested_idx_val = self.compile_integer(ni as i64);
-                                        let elem_result = self
-                                            .builder
-                                            .build_call(
-                                                rt_get_inner,
-                                                &[nested_idx_val.into(), nested_elem.into()],
-                                                &format!("nested_elem_{}_{}", i, ni),
-                                            )
-                                            .unwrap();
-                                        let elem_val =
-                                            elem_result.try_as_basic_value().left().unwrap();
-
-                                        let alloca = self
-                                            .builder
-                                            .build_alloca(self.context.i64_type(), name)
-                                            .unwrap();
-                                        self.builder.build_store(alloca, elem_val).unwrap();
-                                        self.variables.insert(name.clone(), alloca);
-                                    }
-                                    Pattern::Wildcard
-                                    | Pattern::Literal(_)
-                                    | Pattern::RestIdentifier(_) => {
-                                        // No binding needed
-                                    }
-                                    Pattern::List(_) => {
-                                        // Deeply nested list - for now return error
-                                        return Err(CompileError::UnsupportedPattern(
-                                            "Deeply nested list pattern binding not yet implemented".to_string()
-                                        ));
-                                    }
-                                    _ => {}
-                                }
-                            }
+                            // Bind variables in the nested pattern (supports deep nesting + rest)
+                            self.bind_pattern_variables(
+                                &Pattern::List(nested_patterns.clone()),
+                                nested_elem,
+                            )?;
                         }
                         _ => {}
                     }
@@ -3564,25 +2949,97 @@ impl<'ctx> CodegenContext<'ctx> {
         }
         let rt_get = self.get_or_declare_rt_get();
         let rt_skip = self.get_or_declare_rt_skip();
+        let rt_take = self.get_or_declare_rt_take();
+        let rt_size = self.get_or_declare_rt_size();
 
+        let rest_pos = patterns
+            .iter()
+            .position(|p| matches!(p, Pattern::RestIdentifier(_)));
+        let patterns_after_rest = if let Some(pos) = rest_pos {
+            patterns.len() - pos - 1
+        } else {
+            0
+        };
+
+        let actual_len = if rest_pos.is_some() {
+            let size_result = self
+                .builder
+                .build_call(rt_size, &[list_val.into()], "list_size")
+                .unwrap();
+            let size_val = size_result.try_as_basic_value().left().unwrap();
+            let size_int = size_val.into_int_value();
+            Some(
+                self.builder
+                    .build_right_shift(
+                        size_int,
+                        self.context.i64_type().const_int(3, false),
+                        false,
+                        "actual_len",
+                    )
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+
+        let mut after_rest_offset = 0usize;
         for (i, pat) in patterns.iter().enumerate() {
+            let is_after_rest = rest_pos.is_some_and(|pos| i > pos);
+
             match pat {
                 Pattern::Identifier(name) => {
-                    // Get element at index i
-                    let index_val = self.compile_integer(i as i64);
-                    let elem = self
-                        .builder
-                        .build_call(
-                            rt_get,
-                            &[index_val.into(), list_val.into()],
-                            &format!("destructure_{}", name),
-                        )
-                        .unwrap()
-                        .try_as_basic_value()
-                        .left()
-                        .unwrap();
+                    let elem = if is_after_rest {
+                        let actual_len = actual_len.expect("rest position requires list length");
+                        let offset_from_end = (patterns_after_rest - after_rest_offset) as u64;
+                        let idx_from_end = self
+                            .builder
+                            .build_int_sub(
+                                actual_len,
+                                self.context.i64_type().const_int(offset_from_end, false),
+                                "idx_from_end",
+                            )
+                            .unwrap();
 
-                    // Create alloca and store
+                        let tagged_idx = self
+                            .builder
+                            .build_left_shift(
+                                idx_from_end,
+                                self.context.i64_type().const_int(3, false),
+                                "shift_idx",
+                            )
+                            .unwrap();
+                        let tagged_idx = self
+                            .builder
+                            .build_or(
+                                tagged_idx,
+                                self.context.i64_type().const_int(0b001, false),
+                                "tag_idx",
+                            )
+                            .unwrap();
+
+                        let elem_result = self
+                            .builder
+                            .build_call(
+                                rt_get,
+                                &[tagged_idx.into(), list_val.into()],
+                                &format!("destructure_from_end_{}", after_rest_offset),
+                            )
+                            .unwrap();
+                        after_rest_offset += 1;
+                        elem_result.try_as_basic_value().left().unwrap()
+                    } else {
+                        let index_val = self.compile_integer(i as i64);
+                        let elem_result = self
+                            .builder
+                            .build_call(
+                                rt_get,
+                                &[index_val.into(), list_val.into()],
+                                &format!("destructure_{}", name),
+                            )
+                            .unwrap();
+                        elem_result.try_as_basic_value().left().unwrap()
+                    };
+
                     let alloca = self
                         .builder
                         .build_alloca(self.context.i64_type(), name)
@@ -3591,51 +3048,129 @@ impl<'ctx> CodegenContext<'ctx> {
                     self.variables.insert(name.clone(), alloca);
                 }
                 Pattern::Wildcard => {
-                    // Ignore this element
+                    if is_after_rest {
+                        after_rest_offset += 1;
+                    }
                 }
                 Pattern::List(nested_patterns) => {
-                    // Get element at index i (which should be a list)
-                    let index_val = self.compile_integer(i as i64);
-                    let nested_list = self
-                        .builder
-                        .build_call(
-                            rt_get,
-                            &[index_val.into(), list_val.into()],
-                            &format!("destructure_nested_{}", i),
-                        )
-                        .unwrap()
-                        .try_as_basic_value()
-                        .left()
-                        .unwrap();
+                    let nested_list = if is_after_rest {
+                        let actual_len = actual_len.expect("rest position requires list length");
+                        let offset_from_end = (patterns_after_rest - after_rest_offset) as u64;
+                        let idx_from_end = self
+                            .builder
+                            .build_int_sub(
+                                actual_len,
+                                self.context.i64_type().const_int(offset_from_end, false),
+                                "nested_idx_from_end",
+                            )
+                            .unwrap();
 
-                    // Recursively bind the nested patterns
+                        let tagged_idx = self
+                            .builder
+                            .build_left_shift(
+                                idx_from_end,
+                                self.context.i64_type().const_int(3, false),
+                                "shift_nested_idx",
+                            )
+                            .unwrap();
+                        let tagged_idx = self
+                            .builder
+                            .build_or(
+                                tagged_idx,
+                                self.context.i64_type().const_int(0b001, false),
+                                "tag_nested_idx",
+                            )
+                            .unwrap();
+
+                        let nested_elem_result = self
+                            .builder
+                            .build_call(
+                                rt_get,
+                                &[tagged_idx.into(), list_val.into()],
+                                &format!("destructure_nested_from_end_{}", after_rest_offset),
+                            )
+                            .unwrap();
+                        after_rest_offset += 1;
+                        nested_elem_result.try_as_basic_value().left().unwrap()
+                    } else {
+                        let index_val = self.compile_integer(i as i64);
+                        let nested_elem_result = self
+                            .builder
+                            .build_call(
+                                rt_get,
+                                &[index_val.into(), list_val.into()],
+                                &format!("destructure_nested_{}", i),
+                            )
+                            .unwrap();
+                        nested_elem_result.try_as_basic_value().left().unwrap()
+                    };
+
                     self.compile_pattern_binding_list(nested_patterns, nested_list)?;
                 }
                 Pattern::RestIdentifier(name) => {
-                    // Get the rest of the list starting at index i
+                    if name.is_empty() {
+                        // Bare rest (..) ignores remaining elements
+                        continue;
+                    }
                     let skip_count = self.compile_integer(i as i64);
-                    let rest = self
+                    let after_skip = self
                         .builder
                         .build_call(
                             rt_skip,
                             &[skip_count.into(), list_val.into()],
                             &format!("destructure_rest_{}", name),
                         )
-                        .unwrap()
-                        .try_as_basic_value()
-                        .left()
                         .unwrap();
+                    let after_skip_val = after_skip.try_as_basic_value().left().unwrap();
 
-                    // Create alloca and store
+                    let rest_val = if patterns_after_rest == 0 {
+                        after_skip_val
+                    } else {
+                        let actual_len =
+                            actual_len.expect("rest position requires list length");
+                        let total_skip = self
+                            .context
+                            .i64_type()
+                            .const_int((i + patterns_after_rest) as u64, false);
+                        let rest_len = self
+                            .builder
+                            .build_int_sub(actual_len, total_skip, "rest_len")
+                            .unwrap();
+
+                        let tagged_rest_len = self
+                            .builder
+                            .build_left_shift(
+                                rest_len,
+                                self.context.i64_type().const_int(3, false),
+                                "shift_rest_len",
+                            )
+                            .unwrap();
+                        let tagged_rest_len = self
+                            .builder
+                            .build_or(
+                                tagged_rest_len,
+                                self.context.i64_type().const_int(0b001, false),
+                                "tag_rest_len",
+                            )
+                            .unwrap();
+
+                        let rest_result = self
+                            .builder
+                            .build_call(
+                                rt_take,
+                                &[tagged_rest_len.into(), after_skip_val.into()],
+                                "rest_val",
+                            )
+                            .unwrap();
+                        rest_result.try_as_basic_value().left().unwrap()
+                    };
+
                     let alloca = self
                         .builder
                         .build_alloca(self.context.i64_type(), name)
                         .unwrap();
-                    self.builder.build_store(alloca, rest).unwrap();
+                    self.builder.build_store(alloca, rest_val).unwrap();
                     self.variables.insert(name.clone(), alloca);
-
-                    // Rest pattern should be last in the list - stop processing
-                    break;
                 }
                 _ => {
                     return Err(CompileError::UnsupportedPattern(format!(
@@ -3646,6 +3181,261 @@ impl<'ctx> CodegenContext<'ctx> {
             }
         }
         Ok(())
+    }
+
+    fn compile_list_pattern_match(
+        &mut self,
+        subject: BasicValueEnum<'ctx>,
+        patterns: &[Pattern],
+        no_match_bb: inkwell::basic_block::BasicBlock<'ctx>,
+        name_prefix: &str,
+    ) -> Result<inkwell::basic_block::BasicBlock<'ctx>, CompileError> {
+        let current_fn = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+
+        let rt_is_list = self.get_or_declare_rt_is_list();
+        let is_list_val = self
+            .builder
+            .build_call(rt_is_list, &[subject.into()], "is_list")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_int_value();
+        let is_list_bool = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                is_list_val,
+                self.context.i64_type().const_zero(),
+                "is_list_bool",
+            )
+            .unwrap();
+        let list_check_bb = self
+            .context
+            .append_basic_block(current_fn, &format!("{name_prefix}_list_check"));
+        self.builder
+            .build_conditional_branch(is_list_bool, list_check_bb, no_match_bb)
+            .unwrap();
+        self.builder.position_at_end(list_check_bb);
+
+        let mut fixed_count = 0usize;
+        let mut rest_position = None;
+        for (i, p) in patterns.iter().enumerate() {
+            if matches!(p, Pattern::RestIdentifier(_)) {
+                rest_position = Some(i);
+            } else {
+                fixed_count += 1;
+            }
+        }
+        let has_rest = rest_position.is_some();
+
+        let rt_size = self.get_or_declare_rt_size();
+        let size_result = self
+            .builder
+            .build_call(rt_size, &[subject.into()], "list_size")
+            .unwrap();
+        let size_val = size_result.try_as_basic_value().left().unwrap();
+        let size_int = size_val.into_int_value();
+        let actual_len = self
+            .builder
+            .build_right_shift(
+                size_int,
+                self.context.i64_type().const_int(3, false),
+                false,
+                "actual_len",
+            )
+            .unwrap();
+
+        let expected_len = self.context.i64_type().const_int(fixed_count as u64, false);
+        let len_ok = if has_rest {
+            self.builder
+                .build_int_compare(IntPredicate::UGE, actual_len, expected_len, "len_ge")
+                .unwrap()
+        } else {
+            self.builder
+                .build_int_compare(IntPredicate::EQ, actual_len, expected_len, "len_eq")
+                .unwrap()
+        };
+
+        let check_elements_bb = self
+            .context
+            .append_basic_block(current_fn, &format!("{name_prefix}_check_elements"));
+        self.builder
+            .build_conditional_branch(len_ok, check_elements_bb, no_match_bb)
+            .unwrap();
+        self.builder.position_at_end(check_elements_bb);
+
+        let patterns_after_rest = if let Some(rest_pos) = rest_position {
+            patterns.len() - rest_pos - 1
+        } else {
+            0
+        };
+
+        let rt_get = self.get_or_declare_rt_get();
+        let mut elem_idx = 0usize;
+        let mut after_rest_offset = 0usize;
+        for (i, p) in patterns.iter().enumerate() {
+            if matches!(p, Pattern::RestIdentifier(_)) {
+                continue;
+            }
+
+            let is_after_rest = rest_position.is_some_and(|pos| i > pos);
+            let elem_val = if is_after_rest {
+                let offset_from_end = (patterns_after_rest - after_rest_offset) as u64;
+                let idx_from_end = self
+                    .builder
+                    .build_int_sub(
+                        actual_len,
+                        self.context.i64_type().const_int(offset_from_end, false),
+                        "idx_from_end",
+                    )
+                    .unwrap();
+                let tagged_idx = self
+                    .builder
+                    .build_left_shift(
+                        idx_from_end,
+                        self.context.i64_type().const_int(3, false),
+                        "shift_idx",
+                    )
+                    .unwrap();
+                let tagged_idx = self
+                    .builder
+                    .build_or(
+                        tagged_idx,
+                        self.context.i64_type().const_int(0b001, false),
+                        "tag_idx",
+                    )
+                    .unwrap();
+                let elem_result = self
+                    .builder
+                    .build_call(
+                        rt_get,
+                        &[tagged_idx.into(), subject.into()],
+                        &format!("{name_prefix}_elem_from_end_{after_rest_offset}"),
+                    )
+                    .unwrap();
+                after_rest_offset += 1;
+                elem_result.try_as_basic_value().left().unwrap()
+            } else {
+                let idx_val = self.compile_integer(i as i64);
+                let elem_result = self
+                    .builder
+                    .build_call(
+                        rt_get,
+                        &[idx_val.into(), subject.into()],
+                        &format!("{name_prefix}_elem_{i}"),
+                    )
+                    .unwrap();
+                elem_result.try_as_basic_value().left().unwrap()
+            };
+
+            match p {
+                Pattern::Wildcard | Pattern::Identifier(_) => {
+                    // Always matches
+                }
+                Pattern::Literal(lit) => {
+                    let lit_val = self.compile_literal(lit);
+                    let rt_eq = self.get_or_declare_rt_eq();
+                    let eq_result = self
+                        .builder
+                        .build_call(rt_eq, &[elem_val.into(), lit_val.into()], "elem_eq")
+                        .unwrap();
+                    let eq_val = eq_result.try_as_basic_value().left().unwrap();
+                    let eq_bool = self.value_to_bool(eq_val);
+
+                    let next_bb = self.context.append_basic_block(
+                        current_fn,
+                        &format!("{name_prefix}_check_elem_{}", elem_idx + 1),
+                    );
+                    self.builder
+                        .build_conditional_branch(eq_bool, next_bb, no_match_bb)
+                        .unwrap();
+                    self.builder.position_at_end(next_bb);
+                }
+                Pattern::Range {
+                    start,
+                    end,
+                    inclusive,
+                } => {
+                    let rt_expect_integer = self.get_or_declare_rt_expect_integer();
+                    let elem_checked = self
+                        .builder
+                        .build_call(rt_expect_integer, &[elem_val.into()], "elem_int")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap();
+                    let start_val = self.compile_integer(*start);
+                    let elem_int = elem_checked.into_int_value();
+                    let start_int = start_val.into_int_value();
+
+                    let ge_start = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::SGE,
+                            elem_int,
+                            start_int,
+                            "elem_ge_start",
+                        )
+                        .unwrap();
+
+                    let in_range = if let Some(e) = end {
+                        let end_val = self.compile_integer(*e);
+                        let end_int = end_val.into_int_value();
+
+                        let cmp = if *inclusive {
+                            IntPredicate::SLE
+                        } else {
+                            IntPredicate::SLT
+                        };
+                        let lt_end = self
+                            .builder
+                            .build_int_compare(cmp, elem_int, end_int, "elem_lt_end")
+                            .unwrap();
+
+                        self.builder
+                            .build_and(ge_start, lt_end, "in_range")
+                            .unwrap()
+                    } else {
+                        ge_start
+                    };
+
+                    let next_bb = self.context.append_basic_block(
+                        current_fn,
+                        &format!("{name_prefix}_check_elem_{}", elem_idx + 1),
+                    );
+                    self.builder
+                        .build_conditional_branch(in_range, next_bb, no_match_bb)
+                        .unwrap();
+                    self.builder.position_at_end(next_bb);
+                }
+                Pattern::List(nested_patterns) => {
+                    let nested_prefix = format!("{name_prefix}_nested_{i}");
+                    let nested_success = self.compile_list_pattern_match(
+                        elem_val,
+                        nested_patterns,
+                        no_match_bb,
+                        &nested_prefix,
+                    )?;
+                    self.builder.position_at_end(nested_success);
+                }
+                _ => {
+                    return Err(CompileError::UnsupportedPattern(format!(
+                        "Pattern type not supported in list: {:?}",
+                        p
+                    )));
+                }
+            }
+
+            elem_idx += 1;
+        }
+
+        Ok(self.builder.get_insert_block().unwrap())
     }
 
     // ===== Phase 9: Closures & Function Calls =====
@@ -4606,7 +4396,9 @@ impl<'ctx> CodegenContext<'ctx> {
                 vars.insert(name.clone());
             }
             Pattern::RestIdentifier(name) => {
-                vars.insert(name.clone());
+                if !name.is_empty() {
+                    vars.insert(name.clone());
+                }
             }
             Pattern::List(patterns) => {
                 for p in patterns {
@@ -4807,7 +4599,9 @@ impl<'ctx> CodegenContext<'ctx> {
                 bound.insert(name.clone());
             }
             Pattern::RestIdentifier(name) => {
-                bound.insert(name.clone());
+                if !name.is_empty() {
+                    bound.insert(name.clone());
+                }
             }
             Pattern::List(patterns) => {
                 for p in patterns {
@@ -5361,13 +5155,6 @@ impl<'ctx> CodegenContext<'ctx> {
     /// Arity used when a builtin is referenced as a function value.
     fn builtin_value_arity(name: &str) -> Option<usize> {
         builtin_spec(name).and_then(|spec| spec.value_arity)
-    }
-
-    /// Whether this builtin should receive the piped value as the last argument.
-    fn is_pipeline_builtin(name: &str) -> bool {
-        builtin_spec(name)
-            .map(|spec| spec.pipeline)
-            .unwrap_or(false)
     }
 
     /// Builtins are protected and cannot be shadowed.

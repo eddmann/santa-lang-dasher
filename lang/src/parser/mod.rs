@@ -1521,50 +1521,78 @@ impl Parser {
                         TokenKind::DotDot => {
                             self.advance(); // consume '..'
                             // Check for end value (optional for unbounded range)
-                            if let Ok(end_token) = self.current_token() {
-                                if let TokenKind::Integer(end) = end_token.kind {
-                                    self.advance();
-                                    return Ok(Pattern::Range {
-                                        start,
-                                        end: Some(end),
-                                        inclusive: false,
-                                    });
-                                }
-                            }
-                            // Unbounded range pattern (8..)
+                            let end = self.parse_range_end_integer(false)?;
                             return Ok(Pattern::Range {
                                 start,
-                                end: None,
+                                end,
                                 inclusive: false,
                             });
                         }
                         TokenKind::DotDotEqual => {
                             self.advance(); // consume '..='
                             // Inclusive range requires end value
-                            let end_token = self.current_token()?;
-                            if let TokenKind::Integer(end) = end_token.kind {
-                                self.advance();
-                                return Ok(Pattern::Range {
-                                    start,
-                                    end: Some(end),
-                                    inclusive: true,
-                                });
-                            } else {
-                                return Err(ParseError {
-                                    message: format!(
-                                        "Expected integer after '..=' in range pattern, got {:?}",
-                                        end_token.kind
-                                    ),
-                                    line: end_token.span.start.line as usize,
-                                    column: end_token.span.start.column as usize,
-                                });
-                            }
+                            let end = self.parse_range_end_integer(true)?.unwrap();
+                            return Ok(Pattern::Range {
+                                start,
+                                end: Some(end),
+                                inclusive: true,
+                            });
                         }
                         _ => {}
                     }
                 }
 
                 Ok(Pattern::Literal(Literal::Integer(start)))
+            }
+            TokenKind::Minus => {
+                self.advance(); // consume '-'
+                let next = self.current_token()?;
+                match &next.kind {
+                    TokenKind::Integer(n) => {
+                        let start = -*n;
+                        self.advance(); // consume integer
+
+                        // Check for range pattern: -8..12, -8..=12, or -8..
+                        if let Ok(next) = self.current_token() {
+                            match next.kind {
+                                TokenKind::DotDot => {
+                                    self.advance(); // consume '..'
+                                    let end = self.parse_range_end_integer(false)?;
+                                    return Ok(Pattern::Range {
+                                        start,
+                                        end,
+                                        inclusive: false,
+                                    });
+                                }
+                                TokenKind::DotDotEqual => {
+                                    self.advance(); // consume '..='
+                                    let end = self.parse_range_end_integer(true)?.unwrap();
+                                    return Ok(Pattern::Range {
+                                        start,
+                                        end: Some(end),
+                                        inclusive: true,
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        Ok(Pattern::Literal(Literal::Integer(start)))
+                    }
+                    TokenKind::Decimal(f) => {
+                        let value = -*f;
+                        self.advance(); // consume decimal
+                        Ok(Pattern::Literal(Literal::Decimal(value)))
+                    }
+                    _ => Err(ParseError {
+                        message: format!(
+                            "Expected numeric literal after '-' in pattern, got {:?}",
+                            next.kind
+                        ),
+                        line: next.span.start.line as usize,
+                        column: next.span.start.column as usize,
+                    }),
+                }
             }
             TokenKind::Decimal(f) => {
                 let pattern = Pattern::Literal(Literal::Decimal(*f));
@@ -1622,11 +1650,19 @@ impl Parser {
                     self.advance(); // consume '..'
                     let token = self.current_token()?;
                     let name = match &token.kind {
-                        TokenKind::Identifier(name) => name.clone(),
+                        TokenKind::Identifier(name) => {
+                            let name = name.clone();
+                            self.advance(); // consume identifier
+                            name
+                        }
+                        TokenKind::RightBracket | TokenKind::Comma => {
+                            // Bare rest pattern: `..` (ignore rest)
+                            String::new()
+                        }
                         _ => {
                             return Err(ParseError {
                                 message: format!(
-                                    "Expected identifier after '..' in rest pattern, got {:?}",
+                                    "Expected identifier or ']' after '..' in rest pattern, got {:?}",
                                     token.kind
                                 ),
                                 line: token.span.start.line as usize,
@@ -1634,7 +1670,6 @@ impl Parser {
                             });
                         }
                     };
-                    self.advance(); // consume identifier
                     let rest_pattern = Pattern::RestIdentifier(name);
                     patterns.push(rest_pattern);
                     seen_rest = true;
@@ -1694,6 +1729,61 @@ impl Parser {
         }
 
         Ok(Pattern::List(patterns))
+    }
+
+    /// Parse the end value of a range pattern (integer only, optional minus).
+    /// If `required` is true and no valid integer is found, returns an error.
+    fn parse_range_end_integer(&mut self, required: bool) -> Result<Option<i64>, ParseError> {
+        if self.is_at_end() {
+            if required {
+                return Err(ParseError {
+                    message: "Expected integer in range pattern".to_string(),
+                    line: 0,
+                    column: 0,
+                });
+            }
+            return Ok(None);
+        }
+
+        let token = self.current_token()?;
+        match &token.kind {
+            TokenKind::Integer(n) => {
+                let end = *n;
+                self.advance();
+                Ok(Some(end))
+            }
+            TokenKind::Minus => {
+                self.advance(); // consume '-'
+                let next = self.current_token()?;
+                if let TokenKind::Integer(n) = next.kind {
+                    self.advance();
+                    Ok(Some(-n))
+                } else {
+                    Err(ParseError {
+                        message: format!(
+                            "Expected integer after '-' in range pattern, got {:?}",
+                            next.kind
+                        ),
+                        line: next.span.start.line as usize,
+                        column: next.span.start.column as usize,
+                    })
+                }
+            }
+            _ => {
+                if required {
+                    Err(ParseError {
+                        message: format!(
+                            "Expected integer in range pattern, got {:?}",
+                            token.kind
+                        ),
+                        line: token.span.start.line as usize,
+                        column: token.span.start.column as usize,
+                    })
+                } else {
+                    Ok(None)
+                }
+            }
+        }
     }
 
     fn parse_return_statement(&mut self) -> Result<Stmt, ParseError> {

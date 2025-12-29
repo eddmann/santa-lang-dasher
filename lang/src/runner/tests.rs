@@ -462,6 +462,166 @@ test: {
 }
 
 #[test]
+fn execute_test_let_destructuring_rest_middle() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let [a, ..mid, b] = [1, 2, 3, 4, 5]
+  a + sum(mid) + b
+}
+
+test: {
+  input: 0
+  part_one: 15
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(15)));
+}
+
+#[test]
+fn execute_test_let_destructuring_bare_rest_middle() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let [x, .., y] = [10, 20, 30, 40]
+  x + y
+}
+
+test: {
+  input: 0
+  part_one: 50
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(50)));
+}
+
+#[test]
+fn execute_test_let_destructuring_rest_nested_after() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let [a, .., [x, y]] = [10, 20, [30, 40]]
+  a + x + y
+}
+
+test: {
+  input: 0
+  part_one: 80
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(80)));
+}
+
+#[test]
+fn execute_test_let_destructuring_rest_nested_before() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let [[x, y], .., tail] = [[1, 2], 3, 4]
+  x + y + tail
+}
+
+test: {
+  input: 0
+  part_one: 7
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(7)));
+}
+
+#[test]
+fn execute_test_let_destructuring_rest_nested_inner() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let [[a, ..b], c] = [[1, 2, 3], 4]
+  a + sum(b) + c
+}
+
+test: {
+  input: 0
+  part_one: 10
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(10)));
+}
+
+#[test]
+fn execute_test_match_deep_nested_list_pattern() {
+    let program = parse_program(
+        r#"
+part_one: match [[[1], 2], 3] {
+  [[[a], b], c] { a + b + c }
+}
+
+test: {
+  input: 0
+  part_one: 6
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(6)));
+}
+
+#[test]
+fn execute_test_param_deep_nested_list_pattern_with_rest() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let f = |[[a, ..b], c]| a + sum(b) + c
+  f([[1, 2, 3], 4])
+}
+
+test: {
+  input: 0
+  part_one: 10
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(10)));
+}
+
+#[test]
 fn execute_test_range_pattern_non_integer_errors() {
     let program = parse_program(
         r#"

@@ -713,18 +713,30 @@ pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -
 
     // Try partial application first - combine args and recurse
     if let Some(partial) = callee.as_partial_application() {
+        let total_argc = partial.args.len() + new_args.len();
+        let expected = partial.args.len() + partial.remaining_arity as usize;
+        if total_argc > expected {
+            runtime_error(&format!(
+                "wrong function arity: expected {}, got {}",
+                expected, total_argc
+            ));
+        }
         // Combine accumulated args with new args
         let mut all_args = partial.args.clone();
         all_args.extend(new_args);
 
-        let total_argc = all_args.len() as u32;
-
         // Recurse with combined args on the original closure
-        return rt_call(partial.closure, total_argc, all_args.as_ptr());
+        return rt_call(partial.closure, all_args.len() as u32, all_args.as_ptr());
     }
 
     // Try regular closure
     if let Some(closure) = callee.as_closure() {
+        if argc > closure.arity {
+            runtime_error(&format!(
+                "wrong function arity: expected {}, got {}",
+                closure.arity, argc
+            ));
+        }
         // Check if we have enough arguments (auto-currying support)
         if argc < closure.arity {
             // Create a partial application
@@ -743,6 +755,17 @@ pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -
 
     // Try memoized closure
     if let Some(memoized) = callee.as_memoized_closure() {
+        if argc > memoized.arity {
+            runtime_error(&format!(
+                "wrong function arity: expected {}, got {}",
+                memoized.arity, argc
+            ));
+        }
+        if argc < memoized.arity {
+            let remaining = memoized.arity - argc;
+            let partial = PartialApplicationObject::new(callee, new_args, remaining);
+            return Value::from_partial_application(partial);
+        }
         // Check cache first
         if let Some(cached) = memoized.get_cached(&new_args) {
             return cached;
