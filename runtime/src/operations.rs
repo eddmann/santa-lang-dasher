@@ -415,6 +415,27 @@ pub extern "C" fn rt_is_truthy(value: Value) -> i64 {
     }
 }
 
+/// Check if a value is a list.
+/// Returns 1 if list, 0 otherwise.
+#[no_mangle]
+pub extern "C" fn rt_is_list(value: Value) -> i64 {
+    if value.as_list().is_some() {
+        1
+    } else {
+        0
+    }
+}
+
+/// Ensure a value is an integer or raise a RuntimeErr.
+#[no_mangle]
+pub extern "C-unwind" fn rt_expect_integer(value: Value) -> Value {
+    if value.as_integer().is_some() {
+        value
+    } else {
+        runtime_error("Range patterns require Integer values");
+    }
+}
+
 /// Logical NOT operation
 ///
 /// Per LANG.txt §4.2: `!x` returns the logical negation of x's truthiness.

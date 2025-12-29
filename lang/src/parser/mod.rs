@@ -1600,6 +1600,7 @@ impl Parser {
         self.advance(); // consume '['
 
         let mut patterns = Vec::new();
+        let mut seen_rest = false;
 
         loop {
             let token = self.current_token()?;
@@ -1611,6 +1612,13 @@ impl Parser {
                 }
                 TokenKind::DotDot => {
                     // Rest pattern: ..rest (DotDot followed by identifier)
+                    if seen_rest {
+                        return Err(ParseError {
+                            message: "Multiple rest patterns are not allowed".to_string(),
+                            line: token.span.start.line as usize,
+                            column: token.span.start.column as usize,
+                        });
+                    }
                     self.advance(); // consume '..'
                     let token = self.current_token()?;
                     let name = match &token.kind {
@@ -1629,6 +1637,7 @@ impl Parser {
                     self.advance(); // consume identifier
                     let rest_pattern = Pattern::RestIdentifier(name);
                     patterns.push(rest_pattern);
+                    seen_rest = true;
 
                     // After rest pattern, expect ] or ,
                     let next = self.current_token()?;

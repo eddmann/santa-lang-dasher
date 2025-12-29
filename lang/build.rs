@@ -16,6 +16,18 @@ fn main() {
     // Find the runtime library
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let project_root = PathBuf::from(&manifest_dir).parent().unwrap().to_path_buf();
+    println!(
+        "cargo:rerun-if-changed={}",
+        project_root
+            .join("target/release/libsanta_lang_runtime.a")
+            .display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        project_root
+            .join("target/debug/libsanta_lang_runtime.a")
+            .display()
+    );
 
     // Try release first, then debug
     let runtime_lib = project_root.join("target/release/libsanta_lang_runtime.a");

@@ -973,6 +973,14 @@ fn parse_let_destructuring_list() {
 }
 
 #[test]
+fn parse_list_pattern_multiple_rest_errors() {
+    let tokens = lex("let [..a, ..b] = [1, 2]").unwrap();
+    let mut parser = Parser::new(tokens);
+    let err = parser.parse_statement().unwrap_err();
+    assert!(err.message.contains("Multiple rest patterns"));
+}
+
+#[test]
 fn parse_let_destructuring_with_rest() {
     // Test list destructuring with rest: let [a, ..rest] = [1, 2, 3];
     let stmt = parse_stmt("let [a, ..rest] = [1, 2, 3]").unwrap();

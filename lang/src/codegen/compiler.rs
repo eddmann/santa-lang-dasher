@@ -908,6 +908,34 @@ impl<'ctx> CodegenContext<'ctx> {
         self.module.add_function(fn_name, fn_type, None)
     }
 
+    /// Get or declare the rt_is_list runtime function
+    fn get_or_declare_rt_is_list(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_is_list";
+
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Declare: extern "C" fn(Value) -> i64 (returns 1 for list, 0 otherwise)
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_expect_integer runtime function
+    fn get_or_declare_rt_expect_integer(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_expect_integer";
+
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Declare: extern "C-unwind" fn(Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
     /// Get or declare the rt_add runtime function
     fn get_or_declare_rt_add(&self) -> inkwell::values::FunctionValue<'ctx> {
         self.get_or_declare_rt_binop("rt_add")
@@ -2440,8 +2468,16 @@ impl<'ctx> CodegenContext<'ctx> {
                 inclusive,
             } => {
                 // Check if subject is >= start and (< end or <= end depending on inclusive)
+                let rt_expect_integer = self.get_or_declare_rt_expect_integer();
+                let subject_checked = self
+                    .builder
+                    .build_call(rt_expect_integer, &[subject.into()], "range_subject")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap();
                 let start_val = self.compile_integer(*start);
-                let subject_int = subject.into_int_value();
+                let subject_int = subject_checked.into_int_value();
                 let start_int = start_val.into_int_value();
 
                 // subject >= start
@@ -2512,6 +2548,37 @@ impl<'ctx> CodegenContext<'ctx> {
                 // 2. Check length matches expected count (if no rest pattern)
                 // 3. Check each element matches its pattern
 
+                let current_fn = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap();
+
+                let rt_is_list = self.get_or_declare_rt_is_list();
+                let is_list_val = self
+                    .builder
+                    .build_call(rt_is_list, &[subject.into()], "is_list")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_int_value();
+                let is_list_bool = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::NE,
+                        is_list_val,
+                        self.context.i64_type().const_zero(),
+                        "is_list_bool",
+                    )
+                    .unwrap();
+                let list_check_bb = self.context.append_basic_block(current_fn, "list_check");
+                self.builder
+                    .build_conditional_branch(is_list_bool, list_check_bb, no_match_bb)
+                    .unwrap();
+                self.builder.position_at_end(list_check_bb);
+
                 // Count non-rest patterns and find rest pattern position
                 let mut fixed_count = 0usize;
                 let mut has_rest = false;
@@ -2561,12 +2628,6 @@ impl<'ctx> CodegenContext<'ctx> {
                 };
 
                 // If length doesn't match, go to no_match
-                let current_fn = self
-                    .builder
-                    .get_insert_block()
-                    .unwrap()
-                    .get_parent()
-                    .unwrap();
                 let check_elements_bb = self
                     .context
                     .append_basic_block(current_fn, "check_elements");
@@ -2696,8 +2757,16 @@ impl<'ctx> CodegenContext<'ctx> {
                             inclusive,
                         } => {
                             // Range pattern inside list: check if element is in range
+                            let rt_expect_integer = self.get_or_declare_rt_expect_integer();
+                            let elem_checked = self
+                                .builder
+                                .build_call(rt_expect_integer, &[elem_val.into()], "elem_int")
+                                .unwrap()
+                                .try_as_basic_value()
+                                .left()
+                                .unwrap();
                             let start_val = self.compile_integer(*start);
-                            let elem_int = elem_val.into_int_value();
+                            let elem_int = elem_checked.into_int_value();
                             let start_int = start_val.into_int_value();
 
                             // elem >= start
@@ -2745,6 +2814,37 @@ impl<'ctx> CodegenContext<'ctx> {
                         Pattern::List(nested_patterns) => {
                             // Nested list pattern - recursively check the nested pattern
                             // We already have elem_val from above
+
+                            let rt_is_list = self.get_or_declare_rt_is_list();
+                            let nested_is_list_val = self
+                                .builder
+                                .build_call(rt_is_list, &[elem_val.into()], "nested_is_list")
+                                .unwrap()
+                                .try_as_basic_value()
+                                .left()
+                                .unwrap()
+                                .into_int_value();
+                            let nested_is_list_bool = self
+                                .builder
+                                .build_int_compare(
+                                    IntPredicate::NE,
+                                    nested_is_list_val,
+                                    self.context.i64_type().const_zero(),
+                                    "nested_is_list_bool",
+                                )
+                                .unwrap();
+                            let nested_list_bb = self.context.append_basic_block(
+                                current_fn,
+                                &format!("check_nested_list_{}", i),
+                            );
+                            self.builder
+                                .build_conditional_branch(
+                                    nested_is_list_bool,
+                                    nested_list_bb,
+                                    no_match_bb,
+                                )
+                                .unwrap();
+                            self.builder.position_at_end(nested_list_bb);
 
                             // Check the nested list's length
                             let nested_size_result = self
@@ -2881,8 +2981,21 @@ impl<'ctx> CodegenContext<'ctx> {
                                         let nested_elem_val =
                                             nested_elem_result.try_as_basic_value().left().unwrap();
 
+                                        let rt_expect_integer =
+                                            self.get_or_declare_rt_expect_integer();
+                                        let nested_checked = self
+                                            .builder
+                                            .build_call(
+                                                rt_expect_integer,
+                                                &[nested_elem_val.into()],
+                                                "nested_elem_int",
+                                            )
+                                            .unwrap()
+                                            .try_as_basic_value()
+                                            .left()
+                                            .unwrap();
                                         let start_val = self.compile_integer(*start);
-                                        let nested_int = nested_elem_val.into_int_value();
+                                        let nested_int = nested_checked.into_int_value();
                                         let start_int = start_val.into_int_value();
 
                                         // nested_elem >= start

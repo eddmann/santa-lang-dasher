@@ -439,6 +439,48 @@ test: {
 }
 
 #[test]
+fn execute_test_match_list_pattern_only_matches_list() {
+    let program = parse_program(
+        r#"
+part_one: match 1 {
+  [] { 1 }
+  _ { 2 }
+}
+
+test: {
+  input: 0
+  part_one: 2
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(2)));
+}
+
+#[test]
+fn execute_test_range_pattern_non_integer_errors() {
+    let program = parse_program(
+        r#"
+part_one: match "a" {
+  0..5 { 1 }
+}
+
+test: {
+  input: 0
+  part_one: 1
+}
+"#,
+    );
+    let runner = Runner::new();
+    let result = runner.execute_tests(&program);
+    assert!(matches!(result, Err(RunnerError::RuntimeError(_))));
+}
+
+#[test]
 fn execute_test_immutable_assignment_errors() {
     let program = parse_program(
         r#"
