@@ -52,7 +52,7 @@ impl BuiltinSignature {
 
 /// Built-in signature database
 ///
-/// This returns type signatures for all 65 built-in functions (excluding `evaluate`).
+/// This returns type signatures for all built-in functions in the registry.
 /// The signatures are used to infer return types for function calls.
 pub fn builtin_signatures() -> HashMap<&'static str, BuiltinSignature> {
     let mut sigs = HashMap::new();
@@ -384,8 +384,6 @@ fn builtin_signature_for(name: &'static str) -> BuiltinSignature {
         ),
         "or" => sig!(vec![ParamType::Any, ParamType::Any], ReturnType::Dynamic),
         "and" => sig!(vec![ParamType::Any, ParamType::Any], ReturnType::Dynamic),
-        // Note: evaluate() is out of scope for Dasher (AOT limitation)
-
         // ===== External Functions =====
         "puts" => sig!(vec![ParamType::Any], ReturnType::Concrete(Type::Nil)),
         "read" => sig!(
