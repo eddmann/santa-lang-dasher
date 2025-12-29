@@ -853,6 +853,46 @@ fn parse_mutable_binding() {
 }
 
 #[test]
+fn parse_let_expression_in_parens() {
+    let expr = parse_expr("let a = (let b = 5)").unwrap();
+    match expr {
+        Expr::Block(stmts) => {
+            assert_eq!(stmts.len(), 1);
+            match &stmts[0] {
+                Stmt::Let {
+                    mutable,
+                    pattern,
+                    value,
+                } => {
+                    assert!(!*mutable);
+                    assert!(matches!(pattern, Pattern::Identifier(name) if name == "a"));
+                    match value {
+                        Expr::Block(inner) => {
+                            assert_eq!(inner.len(), 1);
+                            match &inner[0] {
+                                Stmt::Let {
+                                    mutable,
+                                    pattern,
+                                    value,
+                                } => {
+                                    assert!(!*mutable);
+                                    assert!(matches!(pattern, Pattern::Identifier(name) if name == "b"));
+                                    assert!(matches!(value, Expr::Integer(5)));
+                                }
+                                _ => panic!("Expected inner let statement"),
+                            }
+                        }
+                        _ => panic!("Expected let expression to be a block"),
+                    }
+                }
+                _ => panic!("Expected let statement"),
+            }
+        }
+        _ => panic!("Expected let expression to parse as a block"),
+    }
+}
+
+#[test]
 fn parse_return_statement() {
     // Test return statement: return 42;
     let stmt = parse_stmt("return 42").unwrap();

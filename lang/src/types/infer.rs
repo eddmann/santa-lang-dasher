@@ -662,8 +662,8 @@ impl TypeInference {
                 // Bind pattern variables to their types in the environment
                 self.bind_pattern(pattern, &value_ty);
 
-                // Let statement itself has type Nil (it's a side-effect)
-                Ok(Type::Nil)
+                // Let statement evaluates to the bound value
+                Ok(value_ty)
             }
 
             // Return/Break: type is Never (doesn't produce value at this point)

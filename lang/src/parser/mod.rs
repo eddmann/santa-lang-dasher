@@ -77,6 +77,7 @@ impl Parser {
                     | TokenKind::HashBrace
                     | TokenKind::VerticalBar
                     | TokenKind::OrOr
+                    | TokenKind::Let
                     | TokenKind::If
                     | TokenKind::Match
                     | TokenKind::Bang
@@ -408,6 +409,7 @@ impl Parser {
 
                 Ok(Expr::Identifier(value))
             }
+            TokenKind::Let => self.parse_let_expression(),
             TokenKind::Underscore => {
                 self.advance();
                 Ok(Expr::Placeholder)
@@ -1695,6 +1697,11 @@ impl Parser {
         self.advance(); // consume 'break'
         let expr = self.parse_expression()?;
         Ok(Stmt::Break(expr))
+    }
+
+    fn parse_let_expression(&mut self) -> Result<Expr, ParseError> {
+        let stmt = self.parse_let_statement()?;
+        Ok(Expr::Block(vec![stmt]))
     }
 
     fn parse_if(&mut self) -> Result<Expr, ParseError> {

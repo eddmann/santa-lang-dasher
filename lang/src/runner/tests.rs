@@ -419,6 +419,26 @@ test: {
 }
 
 #[test]
+fn execute_test_let_expression_returns_value() {
+    let program = parse_program(
+        r#"
+part_one: let a = (let b = 5)
+
+test: {
+  input: 0
+  part_one: 5
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(5)));
+}
+
+#[test]
 fn execute_test_immutable_assignment_errors() {
     let program = parse_program(
         r#"
