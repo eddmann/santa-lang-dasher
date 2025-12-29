@@ -5748,6 +5748,14 @@ pub extern "C" fn rt_read(path: Value) -> Value {
     }
 }
 
+/// `env()` → Nil
+///
+/// REPL-only in LANG.txt; in AOT/CLI it is a no-op that returns nil.
+#[no_mangle]
+pub extern "C" fn rt_env() -> Value {
+    Value::nil()
+}
+
 // ============================================================================
 // §11.16 Memoization
 // ============================================================================

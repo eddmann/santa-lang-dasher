@@ -1605,7 +1605,7 @@ fn codegen_match_list_with_rest_at_beginning() {
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
     let _function = codegen.create_test_function();
 
-    // match [1, 2, 3, 4] { [..rest, last] { last } _ { 0 } }
+    // match [1, 2, 3, 4] { [..tail, end] { end } _ { 0 } }
     // Tests rest pattern at the beginning per LANG.txt §9
     // Expected: last = 4
     let expr = TypedExpr {
@@ -1619,11 +1619,11 @@ fn codegen_match_list_with_rest_at_beginning() {
             arms: vec![
                 MatchArm {
                     pattern: Pattern::List(vec![
-                        Pattern::RestIdentifier("rest".to_string()),
-                        Pattern::Identifier("last".to_string()),
+                        Pattern::RestIdentifier("tail".to_string()),
+                        Pattern::Identifier("end".to_string()),
                     ]),
                     guard: None,
-                    body: Expr::Identifier("last".to_string()),
+                    body: Expr::Identifier("end".to_string()),
                 },
                 MatchArm {
                     pattern: Pattern::Wildcard,
@@ -1652,9 +1652,9 @@ fn codegen_match_list_with_rest_in_middle() {
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
     let _function = codegen.create_test_function();
 
-    // match [1, 2, 3, 4, 5] { [first, ..middle, last] { first + last } _ { 0 } }
+    // match [1, 2, 3, 4, 5] { [start, ..mid, end] { start + end } _ { 0 } }
     // Tests rest pattern in the middle per LANG.txt §9
-    // Expected: first = 1, middle = [2, 3, 4], last = 5
+    // Expected: start = 1, mid = [2, 3, 4], end = 5
     let expr = TypedExpr {
         expr: Expr::Match {
             subject: Box::new(Expr::List(vec![
@@ -1667,15 +1667,15 @@ fn codegen_match_list_with_rest_in_middle() {
             arms: vec![
                 MatchArm {
                     pattern: Pattern::List(vec![
-                        Pattern::Identifier("first".to_string()),
-                        Pattern::RestIdentifier("middle".to_string()),
-                        Pattern::Identifier("last".to_string()),
+                        Pattern::Identifier("start".to_string()),
+                        Pattern::RestIdentifier("mid".to_string()),
+                        Pattern::Identifier("end".to_string()),
                     ]),
                     guard: None,
                     body: Expr::Infix {
-                        left: Box::new(Expr::Identifier("first".to_string())),
+                        left: Box::new(Expr::Identifier("start".to_string())),
                         op: InfixOp::Add,
-                        right: Box::new(Expr::Identifier("last".to_string())),
+                        right: Box::new(Expr::Identifier("end".to_string())),
                     },
                 },
                 MatchArm {
@@ -1764,12 +1764,10 @@ fn codegen_get_ir() {
 }
 
 // ===== Phase 7: Builtin Name Shadowing =====
-// Note: Builtins are NOT protected. Users can shadow them with their own bindings.
-// Per reference implementations (blitzen, rs), the runtime resolves user globals
-// first, then falls back to builtins.
+// Builtins are protected per LANG.txt and cannot be shadowed.
 
 #[test]
-fn codegen_builtin_name_shadowing_sum_succeeds() {
+fn codegen_builtin_name_shadowing_sum_errors() {
     use crate::parser::ast::{Pattern, Stmt};
 
     let context = Context::create();
@@ -1784,14 +1782,11 @@ fn codegen_builtin_name_shadowing_sum_succeeds() {
     };
 
     let result = codegen.compile_stmt(&let_stmt);
-    assert!(
-        result.is_ok(),
-        "Binding to builtin name 'sum' should succeed"
-    );
+    assert!(result.is_err(), "Binding to builtin name 'sum' should error");
 }
 
 #[test]
-fn codegen_builtin_name_shadowing_map_succeeds() {
+fn codegen_builtin_name_shadowing_map_errors() {
     use crate::parser::ast::{Pattern, Stmt};
 
     let context = Context::create();
@@ -1806,10 +1801,7 @@ fn codegen_builtin_name_shadowing_map_succeeds() {
     };
 
     let result = codegen.compile_stmt(&let_stmt);
-    assert!(
-        result.is_ok(),
-        "Binding to builtin name 'map' should succeed"
-    );
+    assert!(result.is_err(), "Binding to builtin name 'map' should error");
 }
 
 #[test]

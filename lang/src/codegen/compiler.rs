@@ -1,5 +1,6 @@
 use super::context::CodegenContext;
 use crate::parser::ast::{Expr, InfixOp, Literal, MatchArm, Param, Pattern, PrefixOp, Stmt};
+use crate::runtime::builtin_registry::builtin_spec;
 use crate::types::{Type, TypedExpr};
 use inkwell::values::BasicValueEnum;
 use inkwell::IntPredicate;
@@ -12,9 +13,7 @@ pub enum CompileError {
     UnsupportedPattern(String),
 }
 
-// Note: Builtins are NOT protected. Per reference implementations (blitzen, rs),
-// user-defined variables/functions can shadow builtins. The runtime resolves
-// user globals first, then falls back to builtins.
+// Builtin names are protected per LANG.txt and cannot be shadowed by bindings.
 
 impl<'ctx> CodegenContext<'ctx> {
     pub fn compile_expr(&mut self, expr: &TypedExpr) -> Result<BasicValueEnum<'ctx>, CompileError> {
@@ -42,25 +41,13 @@ impl<'ctx> CodegenContext<'ctx> {
                     } else {
                         Ok(load)
                     }
-                } else if let Some(arity) = Self::get_builtin_arity(name) {
+                } else if let Some(arity) = Self::builtin_value_arity(name) {
                     // Builtin function referenced without being called - create a function value
-                    // e.g., `map(ints, ...)` where `ints` is a builtin
                     if let Some(result) = self.compile_partial_builtin(name, &[], arity)? {
                         Ok(result)
                     } else {
                         Err(CompileError::UnsupportedExpression(format!(
                             "Failed to create function value for builtin: {}",
-                            name
-                        )))
-                    }
-                } else if Self::is_variadic_builtin_function(name) {
-                    // Variadic builtins used as function values (e.g., union, intersection)
-                    // Treat as 1-arg functions that take a list/collection
-                    if let Some(result) = self.compile_partial_builtin(name, &[], 1)? {
-                        Ok(result)
-                    } else {
-                        Err(CompileError::UnsupportedExpression(format!(
-                            "Failed to create function value for variadic builtin: {}",
                             name
                         )))
                     }
@@ -550,72 +537,7 @@ impl<'ctx> CodegenContext<'ctx> {
         {
             // Check if the inner function is a builtin that takes a collection as last arg
             let is_known_builtin = if let Expr::Identifier(name) = inner_fn.as_ref() {
-                matches!(
-                    name.as_str(),
-                    "map"
-                        | "filter"
-                        | "fold"
-                        | "reduce"
-                        | "find"
-                        | "any?"
-                        | "all?"
-                        | "each"
-                        | "scan"
-                        | "take"
-                        | "skip"
-                        | "zip"
-                        | "count"
-                        | "sum"
-                        | "max"
-                        | "min"
-                        | "first"
-                        | "second"
-                        | "last"
-                        | "rest"
-                        | "push"
-                        | "assoc"
-                        | "update"
-                        | "update_d"
-                        | "get"
-                        | "keys"
-                        | "values"
-                        | "filter_map"
-                        | "find_map"
-                        | "includes?"
-                        | "excludes?"
-                        | "sort"
-                        | "reverse"
-                        | "list"
-                        | "set"
-                        | "dict"
-                        | "size"
-                        | "split"
-                        | "join"
-                        | "rotate"
-                        | "combinations"
-                        | "flat_map"
-                        | "collect"
-                        | "flat"
-                        | "flatten"
-                        | "chunk"
-                        | "windows"
-                        | "group_by"
-                        | "partition"
-                        | "take_while"
-                        | "drop_while"
-                        | "zip_with"
-                        | "interleave"
-                        | "intersperse"
-                        | "transpose"
-                        | "unique"
-                        | "frequencies"
-                        | "index_of"
-                        | "find_index"
-                        | "sorted"
-                        | "group"
-                        | "nth"
-                        | "range"
-                )
+                Self::is_pipeline_builtin(name)
             } else {
                 false
             };
@@ -3110,11 +3032,34 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Bind pattern variables to the subject value
+    fn validate_pattern_bindings(&self, pattern: &Pattern) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Identifier(name) | Pattern::RestIdentifier(name) => {
+                if Self::is_protected_builtin_name(name) {
+                    return Err(CompileError::UnsupportedPattern(format!(
+                        "Cannot bind protected builtin name: {}",
+                        name
+                    )));
+                }
+                Ok(())
+            }
+            Pattern::List(patterns) => {
+                for pat in patterns {
+                    self.validate_pattern_bindings(pat)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Bind pattern variables to the subject value
     fn bind_pattern_variables(
         &mut self,
         pattern: &Pattern,
         subject: BasicValueEnum<'ctx>,
     ) -> Result<(), CompileError> {
+        self.validate_pattern_bindings(pattern)?;
         match pattern {
             Pattern::Wildcard => {
                 // Nothing to bind
@@ -3481,6 +3426,7 @@ impl<'ctx> CodegenContext<'ctx> {
         value: &Expr,
         mutable: bool,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        self.validate_pattern_bindings(pattern)?;
         self.set_pattern_mutability(pattern, mutable);
         match pattern {
             Pattern::Identifier(name) => {
@@ -3613,6 +3559,9 @@ impl<'ctx> CodegenContext<'ctx> {
         patterns: &[Pattern],
         list_val: BasicValueEnum<'ctx>,
     ) -> Result<(), CompileError> {
+        for pat in patterns {
+            self.validate_pattern_bindings(pat)?;
+        }
         let rt_get = self.get_or_declare_rt_get();
         let rt_skip = self.get_or_declare_rt_skip();
 
@@ -3726,6 +3675,9 @@ impl<'ctx> CodegenContext<'ctx> {
         body: &Expr,
         self_name: Option<String>,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        for param in params {
+            self.validate_pattern_bindings(&param.pattern)?;
+        }
         // Generate a unique name for this closure function
         static CLOSURE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let closure_id = CLOSURE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -5401,40 +5353,26 @@ impl<'ctx> CodegenContext<'ctx> {
         Ok(call_result.try_as_basic_value().left().unwrap())
     }
 
-    /// Check if a name is a variadic builtin that can be used as a function value.
-    /// These are builtins like union/intersection that accept a variable number of collections.
-    fn is_variadic_builtin_function(name: &str) -> bool {
-        matches!(name, "union" | "intersection")
+    /// Arity used for partial application of builtins.
+    fn get_builtin_arity(name: &str) -> Option<usize> {
+        builtin_spec(name).and_then(|spec| spec.partial_arity)
     }
 
-    /// Get the arity (expected argument count) for a builtin function.
-    /// Returns None if not a known builtin or if it's variadic.
-    fn get_builtin_arity(name: &str) -> Option<usize> {
-        match name {
-            // 1-arg builtins
-            "size" | "int" | "ints" | "list" | "set" | "dict" | "type" | "str" | "sum" | "max"
-            | "min" | "reverse" | "keys" | "values" | "abs" | "floor" | "ceil" | "sqrt" | "sin"
-            | "cos" | "tan" | "first" | "second" | "last" | "rest" | "lines" | "dec" | "ord"
-            | "chr" | "upper" | "lower" | "trim" | "id" | "repeat" | "cycle" => Some(1),
-            // 2-arg builtins
-            "split" | "join" | "map" | "filter" | "reduce" | "find" | "count" | "any" | "all"
-            | "take" | "skip" | "sort" | "rotate" | "chunk" | "includes" | "excludes" | "get"
-            | "push" | "flat_map" | "filter_map" | "find_map" | "each" | "combinations"
-            | "includes?" | "excludes?" | "any?" | "all?" => Some(2),
-            // Variadic builtins (any number of args, handled specially)
-            "union" | "intersection" => None,
-            // 2-arg builtins (additional)
-            "regex_match" | "regex_match_all" | "iterate" => Some(2),
-            // 3-arg builtins
-            "fold" | "scan" | "slice" | "fold_s" | "update" | "assoc" | "replace" => Some(3),
-            // 4-arg builtins
-            "update_d" => Some(4),
-            // range supports 2 or 3 args, handled specially
-            "range" => None,
-            // Variadic or special
-            "puts" | "zip" | "read" | "hash" | "memoize" | "regex" => None,
-            _ => None,
-        }
+    /// Arity used when a builtin is referenced as a function value.
+    fn builtin_value_arity(name: &str) -> Option<usize> {
+        builtin_spec(name).and_then(|spec| spec.value_arity)
+    }
+
+    /// Whether this builtin should receive the piped value as the last argument.
+    fn is_pipeline_builtin(name: &str) -> bool {
+        builtin_spec(name)
+            .map(|spec| spec.pipeline)
+            .unwrap_or(false)
+    }
+
+    /// Builtins are protected and cannot be shadowed.
+    fn is_protected_builtin_name(name: &str) -> bool {
+        builtin_spec(name).is_some()
     }
 
     /// Compile a builtin variadic function call with a spread argument.
@@ -6791,6 +6729,18 @@ impl<'ctx> CodegenContext<'ctx> {
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
+            "env" => {
+                // env() - REPL environment (no-op in AOT)
+                if !args.is_empty() {
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "env expects 0 arguments, got {}",
+                        args.len()
+                    )));
+                }
+                let rt_env = self.get_or_declare_rt_env();
+                let result = self.builder.build_call(rt_env, &[], "env_result").unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
             "push" => {
                 // push(value, collection) - add value to collection
                 if args.len() != 2 {
@@ -7081,39 +7031,27 @@ impl<'ctx> CodegenContext<'ctx> {
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "range" => {
-                // range(from, to) - generate range with step 1 (exclusive end)
                 // range(from, to, step) - generate range with custom step
-                if args.len() == 2 {
-                    // 2-arg: range(from, to) - equivalent to from..to
-                    let from = self.compile_arg(&args[0])?;
-                    let to = self.compile_arg(&args[1])?;
-                    let rt_range = self.get_or_declare_rt_range_exclusive();
-                    let result = self
-                        .builder
-                        .build_call(rt_range, &[from.into(), to.into()], "range_result")
-                        .unwrap();
-                    Ok(Some(result.try_as_basic_value().left().unwrap()))
-                } else if args.len() == 3 {
-                    // 3-arg: range(from, to, step)
-                    let from = self.compile_arg(&args[0])?;
-                    let to = self.compile_arg(&args[1])?;
-                    let step = self.compile_arg(&args[2])?;
-                    let rt_range = self.get_or_declare_rt_range();
-                    let result = self
-                        .builder
-                        .build_call(
-                            rt_range,
-                            &[from.into(), to.into(), step.into()],
-                            "range_result",
-                        )
-                        .unwrap();
-                    Ok(Some(result.try_as_basic_value().left().unwrap()))
-                } else {
-                    Err(CompileError::UnsupportedExpression(format!(
-                        "range expects 2 or 3 arguments, got {}",
+                if args.len() != 3 {
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "range expects 3 arguments, got {}",
                         args.len()
-                    )))
+                    )));
                 }
+
+                let from = self.compile_arg(&args[0])?;
+                let to = self.compile_arg(&args[1])?;
+                let step = self.compile_arg(&args[2])?;
+                let rt_range = self.get_or_declare_rt_range();
+                let result = self
+                    .builder
+                    .build_call(
+                        rt_range,
+                        &[from.into(), to.into(), step.into()],
+                        "range_result",
+                    )
+                    .unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "zip" => {
                 // zip(collection, ..collections) - zip multiple collections
@@ -8167,6 +8105,18 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_env runtime function
+    fn get_or_declare_rt_env(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_env";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[], false);
         self.module.add_function(fn_name, fn_type, None)
     }
 

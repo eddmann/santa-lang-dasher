@@ -814,3 +814,16 @@ fn infer_lambda_param_string_list() {
     let ty = infer_type("map(|s| s + \"!\", [\"a\", \"b\"])");
     assert_eq!(ty, Type::List(Box::new(Type::String)));
 }
+
+#[test]
+fn builtin_registry_matches_type_signatures() {
+    use crate::runtime::builtin_registry::BUILTIN_SPECS;
+    use crate::types::builtins::builtin_signatures;
+    use std::collections::HashSet;
+
+    let registry: HashSet<&'static str> = BUILTIN_SPECS.iter().map(|spec| spec.name).collect();
+    let sigs = builtin_signatures();
+    let sig_names: HashSet<&'static str> = sigs.keys().copied().collect();
+
+    assert_eq!(registry, sig_names);
+}

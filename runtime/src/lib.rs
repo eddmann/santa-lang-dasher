@@ -1,4 +1,5 @@
 pub mod break_handling;
+pub mod builtin_registry;
 pub mod builtins;
 pub mod collections;
 pub mod heap;

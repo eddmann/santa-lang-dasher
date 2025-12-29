@@ -261,9 +261,9 @@ fn execute_test_decimal_value_flow() {
 part_one: {
   let x = 2.5
   let f = |y| y + x
-  let list = [1.0, x, f(1.0)]
-  puts("DEC", list)
-  list[2]
+  let items = [1.0, x, f(1.0)]
+  puts("DEC", items)
+  items[2]
 }
 
 test: {
@@ -478,6 +478,32 @@ test: {
     let runner = Runner::new();
     let result = runner.execute_tests(&program);
     assert!(matches!(result, Err(RunnerError::RuntimeError(_))));
+}
+
+#[test]
+fn execute_test_range_builtin_as_value() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let r = range;
+  r(0, 5, 1) |> take(3)
+}
+
+test: {
+  input: 0
+  part_one: [0, 1, 2]
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(
+        results[0].part_one_actual,
+        Some(Value::from_string("[0, 1, 2]"))
+    );
 }
 
 #[test]

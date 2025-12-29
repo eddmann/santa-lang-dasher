@@ -1,0 +1,577 @@
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuiltinCallArity {
+    Fixed(usize),
+    Variadic { min: usize },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BuiltinSpec {
+    pub name: &'static str,
+    pub call_arity: BuiltinCallArity,
+    // Arity used for partial application (None disables partials for this builtin).
+    pub partial_arity: Option<usize>,
+    // Arity used when a builtin is referenced as a function value.
+    pub value_arity: Option<usize>,
+    // Whether pipeline calls should append the piped value as the last argument.
+    pub pipeline: bool,
+}
+
+pub const BUILTIN_SPECS: &[BuiltinSpec] = &[
+    // 11.1 Type Conversion
+    BuiltinSpec {
+        name: "int",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "ints",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "list",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "set",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "dict",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    // 11.2 Collection Access
+    BuiltinSpec {
+        name: "get",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "size",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "first",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "second",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "last",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "rest",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "keys",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "values",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    // 11.3 Collection Modification
+    BuiltinSpec {
+        name: "push",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "assoc",
+        call_arity: BuiltinCallArity::Fixed(3),
+        partial_arity: Some(3),
+        value_arity: Some(3),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "update",
+        call_arity: BuiltinCallArity::Fixed(3),
+        partial_arity: Some(3),
+        value_arity: Some(3),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "update_d",
+        call_arity: BuiltinCallArity::Fixed(4),
+        partial_arity: Some(4),
+        value_arity: Some(4),
+        pipeline: true,
+    },
+    // 11.4 Transformation
+    BuiltinSpec {
+        name: "map",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "filter",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "flat_map",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "filter_map",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "find_map",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    // 11.5 Reduction
+    BuiltinSpec {
+        name: "reduce",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "fold",
+        call_arity: BuiltinCallArity::Fixed(3),
+        partial_arity: Some(3),
+        value_arity: Some(3),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "fold_s",
+        call_arity: BuiltinCallArity::Fixed(3),
+        partial_arity: Some(3),
+        value_arity: Some(3),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "scan",
+        call_arity: BuiltinCallArity::Fixed(3),
+        partial_arity: Some(3),
+        value_arity: Some(3),
+        pipeline: true,
+    },
+    // 11.6 Iteration
+    BuiltinSpec {
+        name: "each",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    // 11.7 Search
+    BuiltinSpec {
+        name: "find",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "count",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    // 11.8 Aggregation
+    BuiltinSpec {
+        name: "sum",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "max",
+        call_arity: BuiltinCallArity::Variadic { min: 1 },
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "min",
+        call_arity: BuiltinCallArity::Variadic { min: 1 },
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    // 11.9 Slicing & Ordering
+    BuiltinSpec {
+        name: "skip",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "take",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "sort",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "reverse",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "rotate",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "chunk",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    // 11.10 Set Operations
+    BuiltinSpec {
+        name: "union",
+        call_arity: BuiltinCallArity::Variadic { min: 1 },
+        partial_arity: None,
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "intersection",
+        call_arity: BuiltinCallArity::Variadic { min: 1 },
+        partial_arity: None,
+        value_arity: Some(1),
+        pipeline: true,
+    },
+    // 11.11 Predicates
+    BuiltinSpec {
+        name: "includes?",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "excludes?",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "any?",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "all?",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    // 11.12 Generators
+    BuiltinSpec {
+        name: "zip",
+        call_arity: BuiltinCallArity::Variadic { min: 1 },
+        partial_arity: None,
+        value_arity: None,
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "repeat",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "cycle",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "iterate",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "combinations",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "range",
+        call_arity: BuiltinCallArity::Fixed(3),
+        partial_arity: Some(3),
+        value_arity: Some(3),
+        pipeline: false,
+    },
+    // 11.14 String Functions
+    BuiltinSpec {
+        name: "lines",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "split",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    BuiltinSpec {
+        name: "regex_match",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "regex_match_all",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "md5",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "upper",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "lower",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "replace",
+        call_arity: BuiltinCallArity::Fixed(3),
+        partial_arity: Some(3),
+        value_arity: Some(3),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "join",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: true,
+    },
+    // 11.15 Math Functions
+    BuiltinSpec {
+        name: "abs",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "signum",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "vec_add",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: false,
+    },
+    // 11.16 Bitwise Functions
+    BuiltinSpec {
+        name: "bit_and",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "bit_or",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "bit_xor",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "bit_not",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "bit_shift_left",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "bit_shift_right",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: false,
+    },
+    // 11.17 Utility Functions
+    BuiltinSpec {
+        name: "id",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "type",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "memoize",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "or",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "and",
+        call_arity: BuiltinCallArity::Fixed(2),
+        partial_arity: Some(2),
+        value_arity: Some(2),
+        pipeline: false,
+    },
+    // External Functions
+    BuiltinSpec {
+        name: "puts",
+        call_arity: BuiltinCallArity::Variadic { min: 0 },
+        partial_arity: None,
+        value_arity: None,
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "read",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
+        name: "env",
+        call_arity: BuiltinCallArity::Fixed(0),
+        partial_arity: Some(0),
+        value_arity: Some(0),
+        pipeline: false,
+    },
+];
+
+pub fn builtin_spec(name: &str) -> Option<&'static BuiltinSpec> {
+    BUILTIN_SPECS.iter().find(|spec| spec.name == name)
+}
+
+pub fn is_builtin(name: &str) -> bool {
+    builtin_spec(name).is_some()
+}

@@ -1,3 +1,4 @@
+use crate::runtime::builtin_registry::BUILTIN_SPECS;
 use crate::types::ty::Type;
 use std::collections::HashMap;
 
@@ -55,422 +56,346 @@ impl BuiltinSignature {
 /// The signatures are used to infer return types for function calls.
 pub fn builtin_signatures() -> HashMap<&'static str, BuiltinSignature> {
     let mut sigs = HashMap::new();
+    for spec in BUILTIN_SPECS {
+        let sig = builtin_signature_for(spec.name);
+        sigs.insert(spec.name, sig);
+    }
 
-    // Helper macro to insert signatures
+    sigs
+}
+
+fn builtin_signature_for(name: &'static str) -> BuiltinSignature {
     macro_rules! sig {
-        ($name:expr, $params:expr, $ret:expr) => {
-            sigs.insert($name, BuiltinSignature::new($name, $params, $ret));
+        ($params:expr, $ret:expr) => {
+            BuiltinSignature::new(name, $params, $ret)
         };
     }
 
-    // ===== 11.1 Type Conversion =====
-    sig!("int", vec![ParamType::Any], ReturnType::Concrete(Type::Int));
-    sig!(
-        "ints",
-        vec![ParamType::Concrete(Type::String)],
-        ReturnType::Concrete(Type::List(Box::new(Type::Int)))
-    );
-    sig!("list", vec![ParamType::Collection], ReturnType::Dynamic); // Returns List but element type varies
-    sig!("set", vec![ParamType::Collection], ReturnType::Dynamic);
-    sig!("dict", vec![ParamType::Any], ReturnType::Dynamic);
+    match name {
+        // ===== 11.1 Type Conversion =====
+        "int" => sig!(vec![ParamType::Any], ReturnType::Concrete(Type::Int)),
+        "ints" => sig!(
+            vec![ParamType::Concrete(Type::String)],
+            ReturnType::Concrete(Type::List(Box::new(Type::Int)))
+        ),
+        "list" => sig!(vec![ParamType::Collection], ReturnType::Dynamic),
+        "set" => sig!(vec![ParamType::Collection], ReturnType::Dynamic),
+        "dict" => sig!(vec![ParamType::Any], ReturnType::Dynamic),
 
-    // ===== 11.2 Collection Access =====
-    sig!(
-        "get",
-        vec![ParamType::Any, ParamType::Collection],
-        ReturnType::Dynamic
-    );
-    sig!(
-        "size",
-        vec![ParamType::Collection],
-        ReturnType::Concrete(Type::Int)
-    );
-    sig!(
-        "first",
-        vec![ParamType::Collection],
-        ReturnType::ElementOf(0)
-    );
-    sig!(
-        "second",
-        vec![ParamType::Collection],
-        ReturnType::ElementOf(0)
-    );
-    sig!(
-        "last",
-        vec![ParamType::Collection],
-        ReturnType::ElementOf(0)
-    );
-    sig!("rest", vec![ParamType::Collection], ReturnType::SameAs(0));
-    sig!("keys", vec![ParamType::Any], ReturnType::Dynamic); // Dict -> List of key types
-    sig!("values", vec![ParamType::Any], ReturnType::Dynamic); // Dict -> List of value types
+        // ===== 11.2 Collection Access =====
+        "get" => sig!(
+            vec![ParamType::Any, ParamType::Collection],
+            ReturnType::Dynamic
+        ),
+        "size" => sig!(
+            vec![ParamType::Collection],
+            ReturnType::Concrete(Type::Int)
+        ),
+        "first" => sig!(vec![ParamType::Collection], ReturnType::ElementOf(0)),
+        "second" => sig!(vec![ParamType::Collection], ReturnType::ElementOf(0)),
+        "last" => sig!(vec![ParamType::Collection], ReturnType::ElementOf(0)),
+        "rest" => sig!(vec![ParamType::Collection], ReturnType::SameAs(0)),
+        "keys" => sig!(vec![ParamType::Any], ReturnType::Dynamic),
+        "values" => sig!(vec![ParamType::Any], ReturnType::Dynamic),
 
-    // ===== 11.3 Collection Modification =====
-    sig!(
-        "push",
-        vec![ParamType::Any, ParamType::Collection],
-        ReturnType::SameAs(1)
-    );
-    sig!(
-        "assoc",
-        vec![ParamType::Any, ParamType::Any, ParamType::Collection],
-        ReturnType::SameAs(2)
-    );
-    sig!(
-        "update",
-        vec![
-            ParamType::Any,
-            ParamType::Function(1),
-            ParamType::Collection
-        ],
-        ReturnType::SameAs(2)
-    );
-    sig!(
-        "update_d",
-        vec![
-            ParamType::Any,
-            ParamType::Any,
-            ParamType::Function(1),
-            ParamType::Collection
-        ],
-        ReturnType::SameAs(3)
-    );
+        // ===== 11.3 Collection Modification =====
+        "push" => sig!(
+            vec![ParamType::Any, ParamType::Collection],
+            ReturnType::SameAs(1)
+        ),
+        "assoc" => sig!(
+            vec![ParamType::Any, ParamType::Any, ParamType::Collection],
+            ReturnType::SameAs(2)
+        ),
+        "update" => sig!(
+            vec![ParamType::Any, ParamType::Function(1), ParamType::Collection],
+            ReturnType::SameAs(2)
+        ),
+        "update_d" => sig!(
+            vec![
+                ParamType::Any,
+                ParamType::Any,
+                ParamType::Function(1),
+                ParamType::Collection
+            ],
+            ReturnType::SameAs(3)
+        ),
 
-    // ===== 11.4 Transformation =====
-    sig!(
-        "map",
-        vec![ParamType::Function(1), ParamType::Collection],
-        ReturnType::ListOfFunctionReturn(0)
-    ); // List of mapper's return type
-    sig!(
-        "filter",
-        vec![ParamType::Function(1), ParamType::Collection],
-        ReturnType::SameAs(1)
-    );
-    sig!(
-        "flat_map",
-        vec![ParamType::Function(1), ParamType::Collection],
-        ReturnType::Dynamic
-    );
-    sig!(
-        "filter_map",
-        vec![ParamType::Function(1), ParamType::Collection],
-        ReturnType::Dynamic
-    );
-    sig!(
-        "find_map",
-        vec![ParamType::Function(1), ParamType::Collection],
-        ReturnType::Dynamic
-    );
+        // ===== 11.4 Transformation =====
+        "map" => sig!(
+            vec![ParamType::Function(1), ParamType::Collection],
+            ReturnType::ListOfFunctionReturn(0)
+        ),
+        "filter" => sig!(
+            vec![ParamType::Function(1), ParamType::Collection],
+            ReturnType::SameAs(1)
+        ),
+        "flat_map" => sig!(
+            vec![ParamType::Function(1), ParamType::Collection],
+            ReturnType::Dynamic
+        ),
+        "filter_map" => sig!(
+            vec![ParamType::Function(1), ParamType::Collection],
+            ReturnType::Dynamic
+        ),
+        "find_map" => sig!(
+            vec![ParamType::Function(1), ParamType::Collection],
+            ReturnType::Dynamic
+        ),
 
-    // ===== 11.5 Reduction =====
-    sig!(
-        "reduce",
-        vec![ParamType::Function(2), ParamType::Collection],
-        ReturnType::ElementOf(1)
-    );
-    sig!(
-        "fold",
-        vec![
-            ParamType::Any,
-            ParamType::Function(2),
-            ParamType::Collection
-        ],
-        ReturnType::SameAs(0)
-    );
-    sig!(
-        "fold_s",
-        vec![
-            ParamType::Any,
-            ParamType::Function(2),
-            ParamType::Collection
-        ],
-        ReturnType::SameAs(0)
-    );
-    sig!(
-        "scan",
-        vec![
-            ParamType::Any,
-            ParamType::Function(2),
-            ParamType::Collection
-        ],
-        ReturnType::Dynamic
-    );
+        // ===== 11.5 Reduction =====
+        "reduce" => sig!(
+            vec![ParamType::Function(2), ParamType::Collection],
+            ReturnType::ElementOf(1)
+        ),
+        "fold" => sig!(
+            vec![
+                ParamType::Any,
+                ParamType::Function(2),
+                ParamType::Collection
+            ],
+            ReturnType::SameAs(0)
+        ),
+        "fold_s" => sig!(
+            vec![
+                ParamType::Any,
+                ParamType::Function(2),
+                ParamType::Collection
+            ],
+            ReturnType::SameAs(0)
+        ),
+        "scan" => sig!(
+            vec![
+                ParamType::Any,
+                ParamType::Function(2),
+                ParamType::Collection
+            ],
+            ReturnType::Dynamic
+        ),
 
-    // ===== 11.6 Iteration =====
-    sig!(
-        "each",
-        vec![ParamType::Function(1), ParamType::Collection],
-        ReturnType::Concrete(Type::Nil)
-    );
+        // ===== 11.6 Iteration =====
+        "each" => sig!(
+            vec![ParamType::Function(1), ParamType::Collection],
+            ReturnType::Concrete(Type::Nil)
+        ),
 
-    // ===== 11.7 Search =====
-    sig!(
-        "find",
-        vec![ParamType::Function(1), ParamType::Collection],
-        ReturnType::ElementOf(1)
-    );
-    sig!(
-        "count",
-        vec![ParamType::Any, ParamType::Collection],
-        ReturnType::Concrete(Type::Int)
-    );
+        // ===== 11.7 Search =====
+        "find" => sig!(
+            vec![ParamType::Function(1), ParamType::Collection],
+            ReturnType::ElementOf(1)
+        ),
+        "count" => sig!(
+            vec![ParamType::Function(1), ParamType::Collection],
+            ReturnType::Concrete(Type::Int)
+        ),
 
-    // ===== 11.8 Aggregation =====
-    sig!("sum", vec![ParamType::Collection], ReturnType::Dynamic); // Int or Decimal depending on elements
-    sig!("max", vec![ParamType::Any], ReturnType::Dynamic); // Varargs or collection
-    sig!("min", vec![ParamType::Any], ReturnType::Dynamic);
+        // ===== 11.8 Aggregation =====
+        "sum" => sig!(vec![ParamType::Collection], ReturnType::Dynamic),
+        "max" => sig!(vec![ParamType::Any], ReturnType::Dynamic),
+        "min" => sig!(vec![ParamType::Any], ReturnType::Dynamic),
 
-    // ===== 11.9 Slicing & Ordering =====
-    sig!(
-        "skip",
-        vec![ParamType::Concrete(Type::Int), ParamType::Collection],
-        ReturnType::SameAs(1)
-    );
-    sig!(
-        "take",
-        vec![ParamType::Concrete(Type::Int), ParamType::Collection],
-        ReturnType::ListOf(1)
-    );
-    sig!("sort", vec![ParamType::Collection], ReturnType::SameAs(0));
-    sig!(
-        "reverse",
-        vec![ParamType::Collection],
-        ReturnType::SameAs(0)
-    );
-    sig!(
-        "rotate",
-        vec![ParamType::Concrete(Type::Int), ParamType::Collection],
-        ReturnType::SameAs(1)
-    );
-    sig!(
-        "chunk",
-        vec![ParamType::Concrete(Type::Int), ParamType::Collection],
-        ReturnType::Dynamic
-    );
+        // ===== 11.9 Slicing & Ordering =====
+        "skip" => sig!(
+            vec![ParamType::Concrete(Type::Int), ParamType::Collection],
+            ReturnType::SameAs(1)
+        ),
+        "take" => sig!(
+            vec![ParamType::Concrete(Type::Int), ParamType::Collection],
+            ReturnType::ListOf(1)
+        ),
+        "sort" => sig!(vec![ParamType::Collection], ReturnType::SameAs(0)),
+        "reverse" => sig!(vec![ParamType::Collection], ReturnType::SameAs(0)),
+        "rotate" => sig!(
+            vec![ParamType::Concrete(Type::Int), ParamType::Collection],
+            ReturnType::SameAs(1)
+        ),
+        "chunk" => sig!(
+            vec![ParamType::Concrete(Type::Int), ParamType::Collection],
+            ReturnType::Dynamic
+        ),
 
-    // ===== 11.10 Set Operations =====
-    sig!(
-        "union",
-        vec![ParamType::Collection, ParamType::Collection],
-        ReturnType::SameAs(0)
-    );
-    sig!(
-        "intersection",
-        vec![ParamType::Collection, ParamType::Collection],
-        ReturnType::SameAs(0)
-    );
+        // ===== 11.10 Set Operations =====
+        "union" => sig!(
+            vec![ParamType::Collection, ParamType::Collection],
+            ReturnType::SameAs(0)
+        ),
+        "intersection" => sig!(
+            vec![ParamType::Collection, ParamType::Collection],
+            ReturnType::SameAs(0)
+        ),
 
-    // ===== 11.11 Predicates =====
-    sig!(
-        "includes?",
-        vec![ParamType::Any, ParamType::Collection],
-        ReturnType::Concrete(Type::Bool)
-    );
-    sig!(
-        "excludes?",
-        vec![ParamType::Any, ParamType::Collection],
-        ReturnType::Concrete(Type::Bool)
-    );
-    sig!(
-        "any?",
-        vec![ParamType::Function(1), ParamType::Collection],
-        ReturnType::Concrete(Type::Bool)
-    );
-    sig!(
-        "all?",
-        vec![ParamType::Function(1), ParamType::Collection],
-        ReturnType::Concrete(Type::Bool)
-    );
+        // ===== 11.11 Predicates =====
+        "includes?" => sig!(
+            vec![ParamType::Collection, ParamType::Any],
+            ReturnType::Concrete(Type::Bool)
+        ),
+        "excludes?" => sig!(
+            vec![ParamType::Collection, ParamType::Any],
+            ReturnType::Concrete(Type::Bool)
+        ),
+        "any?" => sig!(
+            vec![ParamType::Function(1), ParamType::Collection],
+            ReturnType::Concrete(Type::Bool)
+        ),
+        "all?" => sig!(
+            vec![ParamType::Function(1), ParamType::Collection],
+            ReturnType::Concrete(Type::Bool)
+        ),
 
-    // ===== 11.12 Generators =====
-    sig!("zip", vec![ParamType::Collection], ReturnType::Dynamic); // Varargs collections
-    sig!(
-        "repeat",
-        vec![ParamType::Any],
-        ReturnType::Concrete(Type::LazySequence(Box::new(Type::Unknown)))
-    );
-    sig!(
-        "cycle",
-        vec![ParamType::Collection],
-        ReturnType::Concrete(Type::LazySequence(Box::new(Type::Unknown)))
-    );
-    sig!(
-        "iterate",
-        vec![ParamType::Function(1), ParamType::Any],
-        ReturnType::Concrete(Type::LazySequence(Box::new(Type::Unknown)))
-    );
-    sig!(
-        "combinations",
-        vec![ParamType::Concrete(Type::Int), ParamType::Collection],
-        ReturnType::Dynamic
-    );
-    sig!(
-        "range",
-        vec![
-            ParamType::Concrete(Type::Int),
-            ParamType::Concrete(Type::Int)
-        ],
-        ReturnType::Concrete(Type::LazySequence(Box::new(Type::Int)))
-    );
+        // ===== 11.12 Generators =====
+        "zip" => sig!(vec![ParamType::Collection], ReturnType::Dynamic),
+        "repeat" => sig!(
+            vec![ParamType::Any],
+            ReturnType::Concrete(Type::LazySequence(Box::new(Type::Unknown)))
+        ),
+        "cycle" => sig!(
+            vec![ParamType::Collection],
+            ReturnType::Concrete(Type::LazySequence(Box::new(Type::Unknown)))
+        ),
+        "iterate" => sig!(
+            vec![ParamType::Function(1), ParamType::Any],
+            ReturnType::Concrete(Type::LazySequence(Box::new(Type::Unknown)))
+        ),
+        "combinations" => sig!(
+            vec![ParamType::Concrete(Type::Int), ParamType::Collection],
+            ReturnType::Dynamic
+        ),
+        "range" => sig!(
+            vec![
+                ParamType::Concrete(Type::Int),
+                ParamType::Concrete(Type::Int),
+                ParamType::Concrete(Type::Int)
+            ],
+            ReturnType::Concrete(Type::LazySequence(Box::new(Type::Int)))
+        ),
 
-    // ===== 11.13 String Functions =====
-    sig!(
-        "lines",
-        vec![ParamType::Concrete(Type::String)],
-        ReturnType::Concrete(Type::List(Box::new(Type::String)))
-    );
-    sig!(
-        "split",
-        vec![
-            ParamType::Concrete(Type::String),
-            ParamType::Concrete(Type::String)
-        ],
-        ReturnType::Concrete(Type::List(Box::new(Type::String)))
-    );
-    sig!(
-        "regex_match",
-        vec![
-            ParamType::Concrete(Type::String),
-            ParamType::Concrete(Type::String)
-        ],
-        ReturnType::Dynamic
-    );
-    sig!(
-        "regex_match_all",
-        vec![
-            ParamType::Concrete(Type::String),
-            ParamType::Concrete(Type::String)
-        ],
-        ReturnType::Dynamic
-    );
-    sig!(
-        "md5",
-        vec![ParamType::Concrete(Type::String)],
-        ReturnType::Concrete(Type::String)
-    );
-    sig!(
-        "upper",
-        vec![ParamType::Concrete(Type::String)],
-        ReturnType::Concrete(Type::String)
-    );
-    sig!(
-        "lower",
-        vec![ParamType::Concrete(Type::String)],
-        ReturnType::Concrete(Type::String)
-    );
-    sig!(
-        "replace",
-        vec![
-            ParamType::Concrete(Type::String),
-            ParamType::Concrete(Type::String),
-            ParamType::Concrete(Type::String)
-        ],
-        ReturnType::Concrete(Type::String)
-    );
-    sig!(
-        "join",
-        vec![ParamType::Concrete(Type::String), ParamType::Collection],
-        ReturnType::Concrete(Type::String)
-    );
+        // ===== 11.13 String Functions =====
+        "lines" => sig!(
+            vec![ParamType::Concrete(Type::String)],
+            ReturnType::Concrete(Type::List(Box::new(Type::String)))
+        ),
+        "split" => sig!(
+            vec![
+                ParamType::Concrete(Type::String),
+                ParamType::Concrete(Type::String)
+            ],
+            ReturnType::Concrete(Type::List(Box::new(Type::String)))
+        ),
+        "regex_match" => sig!(
+            vec![
+                ParamType::Concrete(Type::String),
+                ParamType::Concrete(Type::String)
+            ],
+            ReturnType::Dynamic
+        ),
+        "regex_match_all" => sig!(
+            vec![
+                ParamType::Concrete(Type::String),
+                ParamType::Concrete(Type::String)
+            ],
+            ReturnType::Dynamic
+        ),
+        "md5" => sig!(
+            vec![ParamType::Concrete(Type::String)],
+            ReturnType::Concrete(Type::String)
+        ),
+        "upper" => sig!(
+            vec![ParamType::Concrete(Type::String)],
+            ReturnType::Concrete(Type::String)
+        ),
+        "lower" => sig!(
+            vec![ParamType::Concrete(Type::String)],
+            ReturnType::Concrete(Type::String)
+        ),
+        "replace" => sig!(
+            vec![
+                ParamType::Concrete(Type::String),
+                ParamType::Concrete(Type::String),
+                ParamType::Concrete(Type::String)
+            ],
+            ReturnType::Concrete(Type::String)
+        ),
+        "join" => sig!(
+            vec![ParamType::Concrete(Type::String), ParamType::Collection],
+            ReturnType::Concrete(Type::String)
+        ),
 
-    // ===== 11.14 Math Functions =====
-    sig!("abs", vec![ParamType::Any], ReturnType::SameAs(0)); // Preserves Int/Decimal
-    sig!(
-        "signum",
-        vec![ParamType::Any],
-        ReturnType::Concrete(Type::Int)
-    );
-    sig!(
-        "vec_add",
-        vec![ParamType::Collection, ParamType::Collection],
-        ReturnType::SameAs(0)
-    );
+        // ===== 11.14 Math Functions =====
+        "abs" => sig!(vec![ParamType::Any], ReturnType::SameAs(0)),
+        "signum" => sig!(
+            vec![ParamType::Any],
+            ReturnType::Concrete(Type::Int)
+        ),
+        "vec_add" => sig!(
+            vec![ParamType::Collection, ParamType::Collection],
+            ReturnType::SameAs(0)
+        ),
 
-    // ===== 11.15 Bitwise Functions =====
-    sig!(
-        "bit_and",
-        vec![
-            ParamType::Concrete(Type::Int),
-            ParamType::Concrete(Type::Int)
-        ],
-        ReturnType::Concrete(Type::Int)
-    );
-    sig!(
-        "bit_or",
-        vec![
-            ParamType::Concrete(Type::Int),
-            ParamType::Concrete(Type::Int)
-        ],
-        ReturnType::Concrete(Type::Int)
-    );
-    sig!(
-        "bit_xor",
-        vec![
-            ParamType::Concrete(Type::Int),
-            ParamType::Concrete(Type::Int)
-        ],
-        ReturnType::Concrete(Type::Int)
-    );
-    sig!(
-        "bit_not",
-        vec![ParamType::Concrete(Type::Int)],
-        ReturnType::Concrete(Type::Int)
-    );
-    sig!(
-        "bit_shift_left",
-        vec![
-            ParamType::Concrete(Type::Int),
-            ParamType::Concrete(Type::Int)
-        ],
-        ReturnType::Concrete(Type::Int)
-    );
-    sig!(
-        "bit_shift_right",
-        vec![
-            ParamType::Concrete(Type::Int),
-            ParamType::Concrete(Type::Int)
-        ],
-        ReturnType::Concrete(Type::Int)
-    );
+        // ===== 11.15 Bitwise Functions =====
+        "bit_and" => sig!(
+            vec![
+                ParamType::Concrete(Type::Int),
+                ParamType::Concrete(Type::Int)
+            ],
+            ReturnType::Concrete(Type::Int)
+        ),
+        "bit_or" => sig!(
+            vec![
+                ParamType::Concrete(Type::Int),
+                ParamType::Concrete(Type::Int)
+            ],
+            ReturnType::Concrete(Type::Int)
+        ),
+        "bit_xor" => sig!(
+            vec![
+                ParamType::Concrete(Type::Int),
+                ParamType::Concrete(Type::Int)
+            ],
+            ReturnType::Concrete(Type::Int)
+        ),
+        "bit_not" => sig!(
+            vec![ParamType::Concrete(Type::Int)],
+            ReturnType::Concrete(Type::Int)
+        ),
+        "bit_shift_left" => sig!(
+            vec![
+                ParamType::Concrete(Type::Int),
+                ParamType::Concrete(Type::Int)
+            ],
+            ReturnType::Concrete(Type::Int)
+        ),
+        "bit_shift_right" => sig!(
+            vec![
+                ParamType::Concrete(Type::Int),
+                ParamType::Concrete(Type::Int)
+            ],
+            ReturnType::Concrete(Type::Int)
+        ),
 
-    // ===== 11.16 Utility Functions =====
-    sig!("id", vec![ParamType::Any], ReturnType::SameAs(0));
-    sig!(
-        "type",
-        vec![ParamType::Any],
-        ReturnType::Concrete(Type::String)
-    );
-    sig!(
-        "memoize",
-        vec![ParamType::Function(1)],
-        ReturnType::SameAs(0)
-    );
-    sig!(
-        "or",
-        vec![ParamType::Any, ParamType::Any],
-        ReturnType::Dynamic
-    );
-    sig!(
-        "and",
-        vec![ParamType::Any, ParamType::Any],
-        ReturnType::Dynamic
-    );
-    // Note: evaluate() is out of scope for Dasher (AOT limitation)
+        // ===== 11.16 Utility Functions =====
+        "id" => sig!(vec![ParamType::Any], ReturnType::SameAs(0)),
+        "type" => sig!(
+            vec![ParamType::Any],
+            ReturnType::Concrete(Type::String)
+        ),
+        "memoize" => sig!(
+            vec![ParamType::Function(1)],
+            ReturnType::SameAs(0)
+        ),
+        "or" => sig!(vec![ParamType::Any, ParamType::Any], ReturnType::Dynamic),
+        "and" => sig!(vec![ParamType::Any, ParamType::Any], ReturnType::Dynamic),
+        // Note: evaluate() is out of scope for Dasher (AOT limitation)
 
-    // ===== External Functions =====
-    sig!(
-        "puts",
-        vec![ParamType::Any],
-        ReturnType::Concrete(Type::Nil)
-    );
-    sig!(
-        "read",
-        vec![ParamType::Concrete(Type::String)],
-        ReturnType::Concrete(Type::String)
-    );
-    sig!("env", vec![], ReturnType::Concrete(Type::Nil));
+        // ===== External Functions =====
+        "puts" => sig!(vec![ParamType::Any], ReturnType::Concrete(Type::Nil)),
+        "read" => sig!(
+            vec![ParamType::Concrete(Type::String)],
+            ReturnType::Concrete(Type::String)
+        ),
+        "env" => sig!(vec![], ReturnType::Concrete(Type::Nil)),
 
-    sigs
+        _ => panic!("Missing signature for builtin: {}", name),
+    }
 }
 
 /// Compute the concrete return type for a builtin call given argument types
@@ -558,8 +483,8 @@ fn compute_lambda_param_types(builtin_name: &str, arity: usize, arg_types: &[Typ
         // find(pred, collection) - pred takes element
         // any?(pred, collection) - pred takes element
         // all?(pred, collection) - pred takes element
-        "filter" | "map" | "flat_map" | "filter_map" | "find_map" | "each" | "find" | "any?"
-        | "all?" => {
+        "filter" | "map" | "flat_map" | "filter_map" | "find_map" | "each" | "find" | "count"
+        | "any?" | "all?" => {
             // Lambda is first arg (idx 0), collection is second arg (idx 1)
             if let Some(collection_ty) = arg_types.get(1) {
                 let elem_ty = element_type_of(collection_ty);
@@ -633,7 +558,7 @@ fn compute_lambda_param_types(builtin_name: &str, arity: usize, arg_types: &[Typ
 fn compute_lambda_return_type(builtin_name: &str, arg_types: &[Type]) -> Type {
     match builtin_name {
         // Predicates always return Bool
-        "filter" | "find" | "any?" | "all?" => Type::Bool,
+        "filter" | "find" | "count" | "any?" | "all?" => Type::Bool,
 
         // fold/scan return same type as accumulator
         "fold" | "fold_s" | "scan" | "reduce" => {
