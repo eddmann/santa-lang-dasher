@@ -884,6 +884,16 @@ impl Runner {
             .output()
             .map_err(|e| RunnerError::RuntimeError(format!("Execution failed: {}", e)))?;
 
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let message = if stderr.trim().is_empty() {
+                format!("Execution failed with status: {}", output.status)
+            } else {
+                stderr.trim().to_string()
+            };
+            return Err(RunnerError::RuntimeError(message));
+        }
+
         // Clean up executable
         std::fs::remove_file(&exe_path).ok();
 

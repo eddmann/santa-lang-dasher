@@ -1615,6 +1615,17 @@ pub extern "C" fn rt_find_map(mapper: Value, collection: Value) -> Value {
 /// - reduce(+, []) → RuntimeErr
 #[no_mangle]
 pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
+    use crate::break_handling::{break_occurred, enter_iteration, exit_iteration, take_break_value};
+
+    enter_iteration();
+    struct IterationGuard;
+    impl Drop for IterationGuard {
+        fn drop(&mut self) {
+            exit_iteration();
+        }
+    }
+    let _guard = IterationGuard;
+
     // Check if reducer is callable
     let arity = match get_callable_arity(&reducer) {
         Some(a) => a,
@@ -1623,13 +1634,22 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
 
     // Helper for the common reduction logic
     // Returns None if the collection is empty
-    fn do_reduce(reducer: Value, mut iter: impl Iterator<Item = Value>) -> Option<Value> {
+    fn do_reduce(
+        reducer: Value,
+        mut iter: impl Iterator<Item = Value>,
+    ) -> Option<Value> {
         // Get first element as initial accumulator
         let mut acc = iter.next()?;
 
         // Reduce over remaining elements
         for v in iter {
             acc = call_value(reducer, &[acc, v]);
+            if break_occurred() {
+                if let Some(break_val) = take_break_value() {
+                    return Some(break_val);
+                }
+                return Some(acc);
+            }
         }
 
         Some(acc)
@@ -1670,6 +1690,12 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
             } else {
                 call_value(reducer, &[acc, *v])
             };
+            if break_occurred() {
+                if let Some(break_val) = take_break_value() {
+                    return break_val;
+                }
+                return acc;
+            }
         }
 
         return acc;
@@ -1687,6 +1713,12 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
         for g in &graphemes[1..] {
             let char_val = Value::from_string((*g).to_string());
             acc = call_value(reducer, &[acc, char_val]);
+            if break_occurred() {
+                if let Some(break_val) = take_break_value() {
+                    return break_val;
+                }
+                return acc;
+            }
         }
 
         return acc;
@@ -1715,10 +1747,17 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
 /// - fold(0, +, []) → 0
 #[no_mangle]
 pub extern "C" fn rt_fold(initial: Value, folder: Value, collection: Value) -> Value {
-    use crate::break_handling::{break_occurred, reset_break_state, take_break_value};
+    use crate::break_handling::{break_occurred, enter_iteration, exit_iteration, take_break_value};
 
-    // Reset break state at the start of iteration
-    reset_break_state();
+    // Enter iteration context and reset break state
+    enter_iteration();
+    struct IterationGuard;
+    impl Drop for IterationGuard {
+        fn drop(&mut self) {
+            exit_iteration();
+        }
+    }
+    let _guard = IterationGuard;
 
     // Get the closure - if not a closure, return initial
     let closure = match folder.as_closure() {
@@ -3797,6 +3836,17 @@ pub extern "C" fn rt_all(predicate: Value, collection: Value) -> Value {
 /// - each(|v| acc = acc + v, [1, 2]) then acc is 3
 #[no_mangle]
 pub extern "C" fn rt_each(side_effect: Value, collection: Value) -> Value {
+    use crate::break_handling::{break_occurred, enter_iteration, exit_iteration, take_break_value};
+
+    enter_iteration();
+    struct IterationGuard;
+    impl Drop for IterationGuard {
+        fn drop(&mut self) {
+            exit_iteration();
+        }
+    }
+    let _guard = IterationGuard;
+
     // Get the closure - if not a closure, return nil
     let closure = match side_effect.as_closure() {
         Some(c) => c,
@@ -3807,6 +3857,12 @@ pub extern "C" fn rt_each(side_effect: Value, collection: Value) -> Value {
     if let Some(list) = collection.as_list() {
         for v in list.iter() {
             call_closure(closure, &[*v]);
+            if break_occurred() {
+                if let Some(break_val) = take_break_value() {
+                    return break_val;
+                }
+                return Value::nil();
+            }
         }
         return Value::nil();
     }
@@ -3815,6 +3871,12 @@ pub extern "C" fn rt_each(side_effect: Value, collection: Value) -> Value {
     if let Some(set) = collection.as_set() {
         for v in set.iter() {
             call_closure(closure, &[*v]);
+            if break_occurred() {
+                if let Some(break_val) = take_break_value() {
+                    return break_val;
+                }
+                return Value::nil();
+            }
         }
         return Value::nil();
     }
@@ -3828,6 +3890,12 @@ pub extern "C" fn rt_each(side_effect: Value, collection: Value) -> Value {
             } else {
                 call_closure(closure, &[*v]);
             }
+            if break_occurred() {
+                if let Some(break_val) = take_break_value() {
+                    return break_val;
+                }
+                return Value::nil();
+            }
         }
         return Value::nil();
     }
@@ -3838,6 +3906,12 @@ pub extern "C" fn rt_each(side_effect: Value, collection: Value) -> Value {
         for g in s.graphemes(true) {
             let char_val = Value::from_string(g.to_string());
             call_closure(closure, &[char_val]);
+            if break_occurred() {
+                if let Some(break_val) = take_break_value() {
+                    return break_val;
+                }
+                return Value::nil();
+            }
         }
         return Value::nil();
     }
@@ -3848,6 +3922,12 @@ pub extern "C" fn rt_each(side_effect: Value, collection: Value) -> Value {
         let mut current = lazy.clone();
         while let Some((val, next_lazy)) = current.next() {
             call_closure(closure, &[val]);
+            if break_occurred() {
+                if let Some(break_val) = take_break_value() {
+                    return break_val;
+                }
+                return Value::nil();
+            }
             current = *next_lazy;
         }
         return Value::nil();

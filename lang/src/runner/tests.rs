@@ -419,6 +419,90 @@ test: {
 }
 
 #[test]
+fn execute_test_immutable_assignment_errors() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let x = 1
+  x = 2
+  x
+}
+
+test: {
+  input: 0
+  part_one: 0
+}
+"#,
+    );
+    let runner = Runner::new();
+    let result = runner.execute_tests(&program);
+    assert!(matches!(result, Err(RunnerError::RuntimeError(_))));
+}
+
+#[test]
+fn execute_test_return_outside_function_errors() {
+    let program = parse_program(
+        r#"
+part_one: {
+  return 5
+  1
+}
+
+test: {
+  input: 0
+  part_one: 1
+}
+"#,
+    );
+    let runner = Runner::new();
+    let result = runner.execute_tests(&program);
+    assert!(matches!(result, Err(RunnerError::RuntimeError(_))));
+}
+
+#[test]
+fn execute_test_break_outside_iteration_errors() {
+    let program = parse_program(
+        r#"
+part_one: {
+  break 5
+  1
+}
+
+test: {
+  input: 0
+  part_one: 1
+}
+"#,
+    );
+    let runner = Runner::new();
+    let result = runner.execute_tests(&program);
+    assert!(matches!(result, Err(RunnerError::RuntimeError(_))));
+}
+
+#[test]
+fn execute_test_break_inside_fold_returns_value() {
+    let program = parse_program(
+        r#"
+part_one: {
+  fold(0, |acc, v| {
+    if v == 3 { break 99 } else { acc + v }
+  }, [1, 2, 3, 4])
+}
+
+test: {
+  input: 0
+  part_one: 99
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(99)));
+}
+
+#[test]
 fn execute_test_simple_failing() {
     // A test section with wrong expected value
     let program = parse_program(

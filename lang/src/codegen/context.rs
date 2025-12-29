@@ -36,6 +36,10 @@ pub struct CodegenContext<'ctx> {
     /// Variables that are stored in mutable cells (for closure capture of mutable vars)
     /// When a variable is in this set, reads go through rt_cell_get and writes through rt_cell_set
     pub cell_variables: HashSet<String>,
+    /// Variables that are mutable in the current scope (declared with `let mut`)
+    pub mutable_variables: HashSet<String>,
+    /// Depth of nested function compilation (0 = top-level)
+    pub function_depth: usize,
     /// Type environment from type inference pass
     /// Maps variable names to their inferred types for optimized code generation
     pub type_env: HashMap<String, Type>,
@@ -66,6 +70,8 @@ impl<'ctx> CodegenContext<'ctx> {
             tco_state: None,
             opt_level,
             cell_variables: HashSet::new(),
+            mutable_variables: HashSet::new(),
+            function_depth: 0,
             type_env: HashMap::new(),
         }
     }

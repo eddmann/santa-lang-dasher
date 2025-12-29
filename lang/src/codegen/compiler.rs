@@ -129,6 +129,13 @@ impl<'ctx> CodegenContext<'ctx> {
             ))
         })?;
 
+        if !self.mutable_variables.contains(name) {
+            return Err(CompileError::UnsupportedExpression(format!(
+                "Cannot assign to immutable binding: {}",
+                name
+            )));
+        }
+
         // Compile the value expression
         let value_ty = self.infer_expr_type(value);
         let value_typed = TypedExpr {
@@ -1900,8 +1907,10 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Save variables for scoping
         let saved_variables = self.variables.clone();
+        let saved_mutable_vars = self.mutable_variables.clone();
 
         // Bind pattern variables to the value
+        self.set_pattern_mutability(pattern, false);
         self.bind_pattern_variables(pattern, value_val)?;
 
         let then_ty = self.infer_expr_type(then_branch);
@@ -1917,6 +1926,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Restore variables
         self.variables = saved_variables;
+        self.mutable_variables = saved_mutable_vars;
 
         self.builder.build_unconditional_branch(merge_bb).unwrap();
         let then_end_bb = self.builder.get_insert_block().unwrap();
@@ -1962,6 +1972,8 @@ impl<'ctx> CodegenContext<'ctx> {
         let saved_cell_vars = self.cell_variables.clone();
         // Save the current variables to restore after block (for proper shadowing)
         let saved_variables = self.variables.clone();
+        // Save mutable variables for scope restoration
+        let saved_mutable_vars = self.mutable_variables.clone();
 
         // Pre-analyze block to find mutable variables that will be captured by nested closures
         // First, collect all mutable variables that will be declared in this block
@@ -1969,11 +1981,11 @@ impl<'ctx> CodegenContext<'ctx> {
         for stmt in stmts {
             if let Stmt::Let {
                 mutable: true,
-                pattern: Pattern::Identifier(name),
+                pattern,
                 ..
             } = stmt
             {
-                mutable_vars.insert(name.clone());
+                Self::collect_pattern_variables(pattern, &mut mutable_vars);
             }
         }
 
@@ -2039,6 +2051,11 @@ impl<'ctx> CodegenContext<'ctx> {
                     }
                 }
                 Stmt::Return(expr) => {
+                    if self.function_depth == 0 {
+                        return Err(CompileError::UnsupportedStatement(
+                            "return outside function".to_string(),
+                        ));
+                    }
                     // Compile the return value expression
                     let return_ty = self.infer_expr_type(expr);
                     let return_typed = TypedExpr {
@@ -2106,6 +2123,8 @@ impl<'ctx> CodegenContext<'ctx> {
         self.cell_variables = saved_cell_vars;
         // Restore the variables to restore proper scoping (inner scope variables go out of scope)
         self.variables = saved_variables;
+        // Restore mutable variable bindings
+        self.mutable_variables = saved_mutable_vars;
 
         // Return the last expression value, or nil if the last statement wasn't an expression
         Ok(last_val.unwrap_or_else(|| self.compile_nil()))
@@ -2254,8 +2273,10 @@ impl<'ctx> CodegenContext<'ctx> {
 
             // Save current variables for scoping
             let saved_variables = self.variables.clone();
+            let saved_mutable_vars = self.mutable_variables.clone();
 
-            // Bind pattern variables
+            // Bind pattern variables (pattern bindings are immutable)
+            self.set_pattern_mutability(&arm.pattern, false);
             self.bind_pattern_variables(&arm.pattern, subject_val)?;
 
             // Compile the body
@@ -2272,6 +2293,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
             // Restore variables (pattern bindings go out of scope)
             self.variables = saved_variables;
+            self.mutable_variables = saved_mutable_vars;
 
             // Get current block BEFORE branching (builder position changes after branch)
             let current_bb = self.builder.get_insert_block().unwrap();
@@ -2337,6 +2359,8 @@ impl<'ctx> CodegenContext<'ctx> {
                 if let Some(guard_expr) = guard {
                     // Need to bind the identifier first so guard can reference it
                     let saved_variables = self.variables.clone();
+                    let saved_mutable_vars = self.mutable_variables.clone();
+                    self.set_pattern_mutability(pattern, false);
                     self.bind_pattern_variables(pattern, subject)?;
 
                     let guard_ty = self.infer_expr_type(guard_expr);
@@ -2353,6 +2377,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
                     // Restore variables (they'll be re-bound in the arm body)
                     self.variables = saved_variables;
+                    self.mutable_variables = saved_mutable_vars;
 
                     self.builder
                         .build_conditional_branch(guard_bool, match_bb, no_match_bb)
@@ -2936,6 +2961,8 @@ impl<'ctx> CodegenContext<'ctx> {
                 if let Some(guard_expr) = guard {
                     // Bind variables for guard evaluation
                     let saved_variables = self.variables.clone();
+                    let saved_mutable_vars = self.mutable_variables.clone();
+                    self.set_pattern_mutability(pattern, false);
                     self.bind_pattern_variables(pattern, subject)?;
 
                     let guard_ty = self.infer_expr_type(guard_expr);
@@ -2951,6 +2978,7 @@ impl<'ctx> CodegenContext<'ctx> {
                     let guard_bool = self.value_to_bool(guard_val);
 
                     self.variables = saved_variables;
+                    self.mutable_variables = saved_mutable_vars;
                     self.builder
                         .build_conditional_branch(guard_bool, match_bb, no_match_bb)
                         .unwrap();
@@ -3338,8 +3366,9 @@ impl<'ctx> CodegenContext<'ctx> {
         &mut self,
         pattern: &Pattern,
         value: &Expr,
-        _mutable: bool,
+        mutable: bool,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        self.set_pattern_mutability(pattern, mutable);
         match pattern {
             Pattern::Identifier(name) => {
                 // For recursive function bindings, we need to pre-allocate the variable
@@ -3619,6 +3648,8 @@ impl<'ctx> CodegenContext<'ctx> {
         let saved_variables = self.variables.clone();
         let saved_tco_state = self.tco_state.clone();
         let saved_cell_vars = self.cell_variables.clone();
+        let saved_mutable_vars = self.mutable_variables.clone();
+        let saved_function_depth = self.function_depth;
 
         // Position builder at the closure function's entry
         self.builder.position_at_end(entry_block);
@@ -3630,6 +3661,8 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Clear variables for the closure's scope
         self.variables.clear();
+        self.mutable_variables.clear();
+        self.function_depth = saved_function_depth + 1;
 
         // Determine which captured variables are cells (they were cell vars in the outer scope)
         // These need to remain as cell vars in this scope too
@@ -3642,6 +3675,13 @@ impl<'ctx> CodegenContext<'ctx> {
             .cloned()
             .collect();
         self.cell_variables = captured_cell_vars;
+
+        let captured_mutable_vars: HashSet<String> = captured_vars
+            .iter()
+            .filter(|name| saved_mutable_vars.contains(*name))
+            .cloned()
+            .collect();
+        self.mutable_variables = captured_mutable_vars;
 
         // Track parameter allocas for TCO
         let mut param_allocas = Vec::new();
@@ -3692,6 +3732,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let alloca = self.builder.build_alloca(i64_type, rest_name).unwrap();
                 self.builder.build_store(alloca, rest_val).unwrap();
                 self.variables.insert(rest_name.clone(), alloca);
+                self.mutable_variables.remove(rest_name);
                 // Rest param is always last, no need to continue
                 break;
             }
@@ -3716,10 +3757,12 @@ impl<'ctx> CodegenContext<'ctx> {
                 let alloca = self.builder.build_alloca(i64_type, param_name).unwrap();
                 self.builder.build_store(alloca, arg_val).unwrap();
                 self.variables.insert(param_name.to_string(), alloca);
+                self.mutable_variables.remove(param_name);
                 param_allocas.push(alloca);
             } else {
                 // Pattern parameter (e.g., [a, b]) - use pattern binding
                 self.bind_pattern_variables(&param.pattern, arg_val)?;
+                self.set_pattern_mutability(&param.pattern, false);
                 // No single alloca for TCO with pattern params
             }
         }
@@ -3835,6 +3878,8 @@ impl<'ctx> CodegenContext<'ctx> {
         // Now restore self.variables and cell_variables
         self.variables = saved_variables;
         self.cell_variables = saved_cell_vars;
+        self.mutable_variables = saved_mutable_vars;
+        self.function_depth = saved_function_depth;
 
         let captures_count_val = self
             .context
@@ -4140,9 +4185,12 @@ impl<'ctx> CodegenContext<'ctx> {
         // Compile then branch (with pattern binding, in tail position)
         self.builder.position_at_end(then_bb);
         let saved_variables = self.variables.clone();
+        let saved_mutable_vars = self.mutable_variables.clone();
+        self.set_pattern_mutability(pattern, false);
         self.bind_pattern_variables(pattern, value_val)?;
         let then_val = self.compile_expr_in_tail_position(then_branch)?;
         self.variables = saved_variables;
+        self.mutable_variables = saved_mutable_vars;
         let then_needs_branch = self
             .builder
             .get_insert_block()
@@ -4273,8 +4321,10 @@ impl<'ctx> CodegenContext<'ctx> {
 
             // Save current variables for scoping
             let saved_variables = self.variables.clone();
+            let saved_mutable_vars = self.mutable_variables.clone();
 
-            // Bind pattern variables
+            // Bind pattern variables (pattern bindings are immutable)
+            self.set_pattern_mutability(&arm.pattern, false);
             self.bind_pattern_variables(&arm.pattern, subject_val)?;
 
             // Compile the body IN TAIL POSITION
@@ -4282,6 +4332,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
             // Restore variables (pattern bindings go out of scope)
             self.variables = saved_variables;
+            self.mutable_variables = saved_mutable_vars;
 
             // Check if we need a branch to merge (tail calls don't need it)
             let needs_branch = self
@@ -4326,17 +4377,19 @@ impl<'ctx> CodegenContext<'ctx> {
         let saved_cell_vars = self.cell_variables.clone();
         // Save the current variables to restore after block (for proper shadowing)
         let saved_variables = self.variables.clone();
+        // Save mutable variables for scope restoration
+        let saved_mutable_vars = self.mutable_variables.clone();
 
         // Pre-analyze block to find mutable variables that will be captured by nested closures
         let mut mutable_vars: HashSet<String> = HashSet::new();
         for stmt in stmts {
             if let Stmt::Let {
                 mutable: true,
-                pattern: Pattern::Identifier(name),
+                pattern,
                 ..
             } = stmt
             {
-                mutable_vars.insert(name.clone());
+                Self::collect_pattern_variables(pattern, &mut mutable_vars);
             }
         }
 
@@ -4402,6 +4455,11 @@ impl<'ctx> CodegenContext<'ctx> {
                     }
                 }
                 Stmt::Return(expr) => {
+                    if self.function_depth == 0 {
+                        return Err(CompileError::UnsupportedStatement(
+                            "return outside function".to_string(),
+                        ));
+                    }
                     // Compile the return value expression
                     let return_ty = self.infer_expr_type(expr);
                     let return_typed = TypedExpr {
@@ -4470,6 +4528,8 @@ impl<'ctx> CodegenContext<'ctx> {
         self.cell_variables = saved_cell_vars;
         // Restore the variables to restore proper scoping (inner scope variables go out of scope)
         self.variables = saved_variables;
+        // Restore mutable variable bindings
+        self.mutable_variables = saved_mutable_vars;
 
         Ok(last_val.unwrap_or_else(|| self.compile_nil()))
     }
@@ -4489,6 +4549,19 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
             }
             Pattern::Wildcard | Pattern::Literal(_) | Pattern::Range { .. } => {}
+        }
+    }
+
+    /// Mark variables in a pattern as mutable or immutable in the current scope.
+    fn set_pattern_mutability(&mut self, pattern: &Pattern, is_mutable: bool) {
+        let mut names = HashSet::new();
+        Self::collect_pattern_variables(pattern, &mut names);
+        for name in names {
+            if is_mutable {
+                self.mutable_variables.insert(name);
+            } else {
+                self.mutable_variables.remove(&name);
+            }
         }
     }
 

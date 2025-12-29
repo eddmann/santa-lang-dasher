@@ -265,8 +265,15 @@ impl Compiler {
                         .compile_stmt(stmt)
                         .map_err(|e| CompileError::CodegenError(format!("{:?}", e)))?;
                 }
-                _ => {
-                    // Skip other statements for now
+                Stmt::Return(_) => {
+                    return Err(CompileError::CodegenError(
+                        "return outside function".to_string(),
+                    ));
+                }
+                Stmt::Break(_) => {
+                    return Err(CompileError::CodegenError(
+                        "break outside iteration".to_string(),
+                    ));
                 }
             }
         }
@@ -352,8 +359,15 @@ impl Compiler {
                         .compile_stmt(&program.statements[i])
                         .map_err(|e| CompileError::CodegenError(format!("{:?}", e)))?;
                 }
-                _ => {
-                    // Skip other statements for now
+                Stmt::Return(_) => {
+                    return Err(CompileError::CodegenError(
+                        "return outside function".to_string(),
+                    ));
+                }
+                Stmt::Break(_) => {
+                    return Err(CompileError::CodegenError(
+                        "break outside iteration".to_string(),
+                    ));
                 }
             }
         }
