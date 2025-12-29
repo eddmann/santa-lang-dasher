@@ -1,4 +1,4 @@
-# Santa Programming Language Specification
+# santa-lang Programming Language Specification
 
 Version: 1.0
 Authors: Edd Mann
@@ -479,23 +479,24 @@ Prefix operator that returns the logical negation based on truthiness.
 ```
 
 #### Logical OR (`||`)
-Returns the first truthy value, or the last value if all are falsy.
+Returns `true` if either operand is truthy, `false` otherwise. Short-circuit evaluation: if the left operand is truthy, the right operand is not evaluated.
 
 ```santa
 true || false          // true
-1 || 0                 // 1
-0 || 2                 // 2
-false || nil           // nil
+1 || 0                 // true (1 is truthy)
+0 || 2                 // true (2 is truthy)
+false || nil           // false (both are falsy)
+false || 0             // false (both are falsy)
 ```
 
 #### Logical AND (`&&`)
-Returns the first falsy value, or the last value if all are truthy.
+Returns `true` if both operands are truthy, `false` otherwise. Short-circuit evaluation: if the left operand is falsy, the right operand is not evaluated.
 
 ```santa
 true && true           // true
-1 && 2                 // 2
-0 && 2                 // 0
-1 && nil               // nil
+1 && 2                 // true (both are truthy)
+0 && 2                 // false (0 is falsy)
+1 && nil               // false (nil is falsy)
 ```
 
 ### 4.5 Bitwise Operators
@@ -1037,19 +1038,11 @@ When the last argument to a function is a lambda, it can be written after the ca
 }
 ```
 
-**Direct trailing lambda (without pipeline):**
+**Trailing lambda after function call:**
 ```santa
-[1, 2, 3] map |x| x * 2
-// Parses as: map([1, 2, 3], |x| x * 2)
-
-[1, 2, 3] filter |x| x > 1
-// Parses as: filter([1, 2, 3], |x| x > 1)
-
 fold(0) |acc, x| acc + x
-// Trailing lambda after partial application
+// Equivalent to: fold(0, |acc, x| acc + x)
 ```
-
-The parser auto-applies the collection as the first argument when a trailing lambda follows a function name.
 
 ### 8.9 Recursion and Tail-Call Optimization
 
@@ -1321,7 +1314,12 @@ let age = 30;
 #{name, age, "city": "NYC"}   // Can mix shorthand and explicit entries
 ```
 
-**Note:** Computed key syntax (e.g., `#{[expression]: value}`) is NOT supported. Use explicit string keys or variable shorthand only.
+**Keys:** Any expression can be used as a dictionary key, including integers, strings, lists, and other hashable types:
+```santa
+#{1: "one", "two": 2, [1, 2]: "list key"}
+```
+
+**Note:** The syntax `#{[1]: value}` uses the **list** `[1]` as the key—this is NOT JavaScript-style computed key syntax. In JavaScript, `{[expr]: value}` evaluates `expr` to get the key; in Santa Lang, `#{[expr]: value}` creates a list containing `expr` and uses that list as the key.
 
 **Access:**
 ```santa
@@ -2204,14 +2202,14 @@ take(2, iterate(_ + 1, 1))      // [1, 2]
 ```
 
 #### `sort(comparator, collection)` → List
-Sort by comparator function. Comparator can return boolean (false = a < b) or integer (negative = a < b, 0 = equal, positive = a > b).
+Sort by comparator function. Comparator can return boolean (true = a comes after b) or integer (negative = a < b, 0 = equal, positive = a > b).
 
 **Permitted types:** List
 
 ```santa
 // Using comparison operators
-sort(>, [3, 2, 1])              // [3, 2, 1] (descending)
-sort(<, [3, 2, 1])              // [1, 2, 3] (ascending)
+sort(<, [3, 2, 1])              // [3, 2, 1] (descending)
+sort(>, [3, 2, 1])              // [1, 2, 3] (ascending)
 
 // Using subtraction (integer comparator)
 sort(-, [3, 2, 1])              // [1, 2, 3]
@@ -2715,7 +2713,7 @@ Get the type name of a value as a String.
 
 **Permitted types:** Any value
 
-**Returns:** One of: "Nil", "Integer", "Decimal", "Boolean", "String", "List", "Set", "Dictionary", "LazySequence", "Function"
+**Returns:** One of: "Nil", "Integer", "Decimal", "Boolean", "String", "List", "Set", "Dictionary", "BoundedRange", "UnboundedRange", "LazySequence", "Function"
 
 ```santa
 type(nil)                       // "Nil"
@@ -2726,7 +2724,9 @@ type("hello")                   // "String"
 type([1, 2, 3])                 // "List"
 type({1, 2, 3})                 // "Set"
 type(#{a: 1})                   // "Dictionary"
-type(1..)                       // "LazySequence"
+type(1..10)                     // "BoundedRange"
+type(1..)                       // "UnboundedRange"
+type(1.. |> map(_ + 1))         // "LazySequence"
 type(|x| x)                     // "Function"
 ```
 
@@ -2748,42 +2748,6 @@ let fib = memoize |n| {
 
 fib(30)                         // 832040 (fast)
 fib(50)                         // 12586269025 (still fast)
-```
-
-#### `or(a, b)` → Value
-Logical OR as a standalone function. Returns first truthy value or last value.
-
-**Permitted types:** Any values (uses truthiness rules)
-
-**Use case:** Can be used as a first-class function in `reduce` and other higher-order operations.
-
-```santa
-or(true, false)                 // true
-or(false, false)                // false
-or(nil, 5)                      // 5 (returns first truthy or last)
-or(0, 10)                       // 10 (0 is falsy)
-
-// As first-class function
-reduce(or, [false, false, true])  // true
-reduce(or, [nil, nil, "found"])   // "found"
-```
-
-#### `and(a, b)` → Value
-Logical AND as a standalone function. Returns first falsy value or last value.
-
-**Permitted types:** Any values (uses truthiness rules)
-
-**Use case:** Can be used as a first-class function in `reduce` and other higher-order operations.
-
-```santa
-and(true, true)                 // true
-and(true, false)                // false
-and(5, 10)                      // 10 (both truthy, returns last)
-and(nil, 5)                     // nil (returns first falsy)
-
-// As first-class function
-reduce(and, [true, true, false])  // false
-reduce(and, [1, 2, 3])            // 3
 ```
 
 #### `evaluate(source)` → Value
@@ -3495,8 +3459,6 @@ keyword          ::= "let" | "mut" | "if" | "else" | "match"
 | `id` | `(value) -> Value` | Identity function |
 | `type` | `(value) -> String` | Get type |
 | `memoize` | `(fn) -> Function` | Memoize function |
-| `or` | `(a, b) -> Value` | Logical OR function |
-| `and` | `(a, b) -> Value` | Logical AND function |
 | `evaluate` | `(source) -> Value` | Evaluate code string |
 
 ---
