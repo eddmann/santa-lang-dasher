@@ -281,6 +281,45 @@ test: {
 }
 
 #[test]
+fn execute_test_logical_ops_return_bool() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let results = [
+    true && 5,
+    false && 5,
+    true || 0,
+    false || 0
+  ];
+  results[input]
+}
+
+test: {
+  input: 0
+  part_one: true
+}
+test: {
+  input: 1
+  part_one: false
+}
+test: {
+  input: 2
+  part_one: true
+}
+test: {
+  input: 3
+  part_one: false
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 4);
+    assert!(results.iter().all(|result| result.part_one_passed == Some(true)));
+}
+
+#[test]
 fn execute_test_mixed_int_decimal_ops() {
     let program = parse_program(
         r#"

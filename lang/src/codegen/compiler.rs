@@ -674,8 +674,8 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Compile short-circuit AND: a && b
-    /// If a is falsy, return a without evaluating b.
-    /// Otherwise, evaluate and return b.
+    /// If a is falsy, return false without evaluating b.
+    /// Otherwise, evaluate b and return its truthiness as a boolean.
     fn compile_short_circuit_and(
         &mut self,
         left: &Expr,
@@ -746,23 +746,43 @@ impl<'ctx> CodegenContext<'ctx> {
             ),
         };
         let right_val = self.compile_expr(&right_typed)?;
+
+        // Convert right value truthiness to boolean Value
+        let right_truthy = self
+            .builder
+            .build_call(rt_is_truthy, &[right_val.into()], "right_truthy")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap();
+        let right_bool = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                right_truthy.into_int_value(),
+                self.context.i64_type().const_zero(),
+                "right_truthy_bool",
+            )
+            .unwrap();
+        let right_boxed = self.box_bool(right_bool);
         let right_bb = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(merge_bb).unwrap();
 
-        // Merge block: phi node selects between left_val (if short-circuited) and right_val
+        // Merge block: phi node selects between false (if short-circuited) and right truthiness
         self.builder.position_at_end(merge_bb);
+        let false_val = self.compile_boolean(false);
         let phi = self
             .builder
             .build_phi(self.context.i64_type(), "and_result")
             .unwrap();
-        phi.add_incoming(&[(&left_val, left_bb), (&right_val, right_bb)]);
+        phi.add_incoming(&[(&false_val, left_bb), (&right_boxed, right_bb)]);
 
         Ok(phi.as_basic_value())
     }
 
     /// Compile short-circuit OR: a || b
-    /// If a is truthy, return a without evaluating b.
-    /// Otherwise, evaluate and return b.
+    /// If a is truthy, return true without evaluating b.
+    /// Otherwise, evaluate b and return its truthiness as a boolean.
     fn compile_short_circuit_or(
         &mut self,
         left: &Expr,
@@ -816,7 +836,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Save the block where we evaluated left
         let left_bb = self.builder.get_insert_block().unwrap();
 
-        // Branch: if truthy, skip to merge (return left); otherwise evaluate right
+        // Branch: if truthy, skip to merge; otherwise evaluate right
         self.builder
             .build_conditional_branch(i1_truthy, merge_bb, eval_right_bb)
             .unwrap();
@@ -833,16 +853,36 @@ impl<'ctx> CodegenContext<'ctx> {
             ),
         };
         let right_val = self.compile_expr(&right_typed)?;
+
+        // Convert right value truthiness to boolean Value
+        let right_truthy = self
+            .builder
+            .build_call(rt_is_truthy, &[right_val.into()], "right_truthy")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap();
+        let right_bool = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                right_truthy.into_int_value(),
+                self.context.i64_type().const_zero(),
+                "right_truthy_bool",
+            )
+            .unwrap();
+        let right_boxed = self.box_bool(right_bool);
         let right_bb = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(merge_bb).unwrap();
 
-        // Merge block: phi node selects between left_val (if truthy) and right_val
+        // Merge block: phi node selects between true (if truthy) and right truthiness
         self.builder.position_at_end(merge_bb);
+        let true_val = self.compile_boolean(true);
         let phi = self
             .builder
             .build_phi(self.context.i64_type(), "or_result")
             .unwrap();
-        phi.add_incoming(&[(&left_val, left_bb), (&right_val, right_bb)]);
+        phi.add_incoming(&[(&true_val, left_bb), (&right_boxed, right_bb)]);
 
         Ok(phi.as_basic_value())
     }
@@ -1005,8 +1045,8 @@ impl<'ctx> CodegenContext<'ctx> {
                 LessThan | LessThanOrEqual | GreaterThan | GreaterThanOrEqual | Equal | NotEqual,
                 _,
             ) => Type::Bool,
-            // Logical operations
-            (Type::Bool, And | Or, Type::Bool) => Type::Bool,
+            // Logical operations always return Bool (truthiness)
+            (_, And | Or, _) => Type::Bool,
             // String concatenation
             (Type::String, Add, _) => Type::String,
             // Ranges

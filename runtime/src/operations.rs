@@ -62,7 +62,7 @@ pub fn type_name(value: &Value) -> &'static str {
 /// - Set + Set → Set (union)
 /// - Dict + Dict → Dict (merge)
 #[no_mangle]
-pub extern "C" fn rt_add(left: Value, right: Value) -> Value {
+pub extern "C-unwind" fn rt_add(left: Value, right: Value) -> Value {
     // Handle integers
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
         return Value::from_integer(l + r);
@@ -156,13 +156,16 @@ pub extern "C" fn rt_add(left: Value, right: Value) -> Value {
         return Value::from_dict(result);
     }
 
-    // Unsupported operation - return nil
-    Value::nil()
+    runtime_error(&format!(
+        "Invalid operands for +: {} and {}",
+        type_name(&left),
+        type_name(&right)
+    ))
 }
 
 /// Subtract two values
 #[no_mangle]
-pub extern "C" fn rt_sub(left: Value, right: Value) -> Value {
+pub extern "C-unwind" fn rt_sub(left: Value, right: Value) -> Value {
     // Handle integers
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
         return Value::from_integer(l - r);
@@ -221,12 +224,16 @@ pub extern "C" fn rt_sub(left: Value, right: Value) -> Value {
         }
     }
 
-    Value::nil()
+    runtime_error(&format!(
+        "Invalid operands for -: {} and {}",
+        type_name(&left),
+        type_name(&right)
+    ))
 }
 
 /// Multiply two values
 #[no_mangle]
-pub extern "C" fn rt_mul(left: Value, right: Value) -> Value {
+pub extern "C-unwind" fn rt_mul(left: Value, right: Value) -> Value {
     // Handle integers
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
         return Value::from_integer(l * r);
@@ -277,7 +284,11 @@ pub extern "C" fn rt_mul(left: Value, right: Value) -> Value {
         }
     }
 
-    Value::nil()
+    runtime_error(&format!(
+        "Invalid operands for *: {} and {}",
+        type_name(&left),
+        type_name(&right)
+    ))
 }
 
 /// Divide two values using Python-style floored division
@@ -324,7 +335,11 @@ pub extern "C-unwind" fn rt_div(left: Value, right: Value) -> Value {
         }
     }
 
-    Value::nil()
+    runtime_error(&format!(
+        "Invalid operands for /: {} and {}",
+        type_name(&left),
+        type_name(&right)
+    ))
 }
 
 /// Modulo operation using Python-style floored modulo
@@ -345,7 +360,11 @@ pub extern "C-unwind" fn rt_mod(left: Value, right: Value) -> Value {
 
     // TODO: Handle decimals if needed (LANG.txt doesn't specify decimal modulo)
 
-    Value::nil()
+    runtime_error(&format!(
+        "Invalid operands for %: {} and {}",
+        type_name(&left),
+        type_name(&right)
+    ))
 }
 
 /// Python-style floored division
@@ -410,13 +429,16 @@ pub extern "C" fn rt_not(value: Value) -> Value {
 /// Per LANG.txt §4.1: `-x` returns the arithmetic negation of x.
 /// Works on integers and decimals.
 #[no_mangle]
-pub extern "C" fn rt_negate(value: Value) -> Value {
+pub extern "C-unwind" fn rt_negate(value: Value) -> Value {
     if let Some(n) = value.as_integer() {
         Value::from_integer(-n)
     } else if let Some(f) = value.as_decimal() {
         Value::from_decimal(-f)
     } else {
-        Value::nil()
+        runtime_error(&format!(
+            "Invalid operand for -: {}",
+            type_name(&value)
+        ))
     }
 }
 

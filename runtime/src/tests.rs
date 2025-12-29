@@ -320,6 +320,15 @@ fn runtime_add_decimal_int_left_wins() {
 }
 
 #[test]
+#[should_panic(expected = "Invalid operands for +")]
+fn runtime_add_invalid_types_panics() {
+    // 1 + "x" → RuntimeErr
+    let left = Value::from_integer(1);
+    let right = Value::from_string("x");
+    let _result = rt_add(left, right);
+}
+
+#[test]
 fn runtime_add_string_concatenation() {
     let left = Value::from_string("Hello, ");
     let right = Value::from_string("World!");

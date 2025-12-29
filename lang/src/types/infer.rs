@@ -837,8 +837,8 @@ impl TypeInference {
                 _,
             ) => Type::Bool,
 
-            // Logical operators: Bool && Bool → Bool, Bool || Bool → Bool
-            (And | Or, Type::Bool, Type::Bool) => Type::Bool,
+            // Logical operators: always return Bool (truthiness)
+            (And | Or, _, _) => Type::Bool,
 
             // Range operators: Int..Int → LazySequence<Int>
             (Range | RangeInclusive, Type::Int, Type::Int) => {

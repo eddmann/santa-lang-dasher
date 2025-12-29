@@ -5,6 +5,18 @@ mod tests;
 use crate::lexer::{Token, TokenKind};
 use ast::*;
 
+// Precedence levels (higher number = higher precedence)
+const PREC_ASSIGN: u8 = 1;
+const PREC_OR: u8 = 2;
+const PREC_AND: u8 = 3;
+const PREC_EQUALITY: u8 = 4;
+const PREC_COMPARISON: u8 = 5;
+const PREC_PIPELINE: u8 = 6;
+const PREC_ADDITIVE: u8 = 7;
+const PREC_MULTIPLICATIVE: u8 = 8;
+const PREC_PREFIX: u8 = 9;
+const PREC_POSTFIX: u8 = 10;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
     pub message: String,
@@ -253,16 +265,16 @@ impl Parser {
             // Check for postfix operators first (highest precedence)
             match &token.kind {
                 TokenKind::LeftParen => {
-                    // Function call - highest precedence (8)
-                    if 8 < min_precedence {
+                    // Function call - highest precedence
+                    if PREC_POSTFIX < min_precedence {
                         break;
                     }
                     left = self.parse_call(left)?;
                     continue;
                 }
                 TokenKind::LeftBracket => {
-                    // Index - highest precedence (8)
-                    if 8 < min_precedence {
+                    // Index - highest precedence
+                    if PREC_POSTFIX < min_precedence {
                         break;
                     }
                     left = self.parse_index(left)?;
@@ -279,7 +291,7 @@ impl Parser {
                 if let Some(next) = self.tokens.get(self.current + 1) {
                     let is_lambda_start = match &next.kind {
                         TokenKind::VerticalBar => true,
-                        TokenKind::OrOr => min_precedence > 1, // Only if || can't be OR operator
+                        TokenKind::OrOr => min_precedence > PREC_OR, // Only if || can't be OR operator
                         _ => false,
                     };
                     if is_lambda_start {
@@ -311,8 +323,8 @@ impl Parser {
                 TokenKind::VerticalBar => true,
                 TokenKind::OrOr => {
                     // Only treat || as trailing lambda if OR operator doesn't apply here
-                    // OR has precedence 1, so only treat as lambda if min_precedence > 1
-                    min_precedence > 1
+                    // OR has lower precedence than this context
+                    min_precedence > PREC_OR
                 }
                 _ => false,
             };
@@ -404,7 +416,7 @@ impl Parser {
             TokenKind::HashBrace => self.parse_set_or_dict(),
             TokenKind::Bang => {
                 self.advance();
-                let right = self.parse_pratt_expr(7)?; // Prefix has high precedence (7)
+                let right = self.parse_pratt_expr(PREC_PREFIX)?; // Prefix has high precedence
                 Ok(Expr::Prefix {
                     op: PrefixOp::Not,
                     right: Box::new(right),
@@ -415,7 +427,7 @@ impl Parser {
                 // Check if this is an operator reference (no following operand)
                 // or a prefix negation (followed by an expression)
                 if self.is_expression_start() {
-                    let right = self.parse_pratt_expr(7)?; // Prefix has high precedence (7)
+                    let right = self.parse_pratt_expr(PREC_PREFIX)?; // Prefix has high precedence
                     Ok(Expr::Prefix {
                         op: PrefixOp::Negate,
                         right: Box::new(right),
@@ -430,7 +442,7 @@ impl Parser {
                 // Used in list literals: [..a, ..b]
                 // Also used for infinite ranges when at start: ..n (same as 0..n)
                 self.advance(); // consume '..'
-                let expr = self.parse_pratt_expr(7)?; // High precedence
+                let expr = self.parse_pratt_expr(PREC_PREFIX)?; // High precedence
                 Ok(Expr::Spread(Box::new(expr)))
             }
             TokenKind::VerticalBar => self.parse_function(),
@@ -843,9 +855,9 @@ impl Parser {
                     }
                 }
 
-                // Parse body with precedence 5 (just above pipeline's 4)
+                // Parse body with precedence just above pipeline
                 // This stops the body before consuming |> operators
-                let body = self.parse_body_expr_with_min_prec(5)?;
+                let body = self.parse_body_expr_with_min_prec(PREC_PIPELINE + 1)?;
 
                 Ok(Expr::Function {
                     params,
@@ -855,7 +867,7 @@ impl Parser {
             TokenKind::OrOr => {
                 // Empty parameter list: || body
                 self.advance();
-                let body = self.parse_body_expr_with_min_prec(5)?;
+                let body = self.parse_body_expr_with_min_prec(PREC_PIPELINE + 1)?;
                 Ok(Expr::Function {
                     params: Vec::new(),
                     body: Box::new(body),
@@ -1355,32 +1367,40 @@ impl Parser {
 
         let token = &self.tokens[self.current];
 
-        // Precedence from PLAN.md Phase 2.2
+        // Precedence from LANG.txt §14.5
         // Lower number = lower precedence
         match &token.kind {
-            // 9. Logical AND/OR (lowest precedence, same level)
-            TokenKind::AndAnd | TokenKind::OrOr => 1,
+            // Assignment (lowest, right associative)
+            TokenKind::Equal => PREC_ASSIGN,
 
-            // 8. Equality/Assignment (same level)
-            TokenKind::EqualEqual | TokenKind::NotEqual | TokenKind::Equal => 2,
+            // Logical OR (||)
+            TokenKind::OrOr => PREC_OR,
 
-            // 7. Comparison
+            // Logical AND (&&)
+            TokenKind::AndAnd => PREC_AND,
+
+            // Equality
+            TokenKind::EqualEqual | TokenKind::NotEqual => PREC_EQUALITY,
+
+            // Comparison
             TokenKind::Less
             | TokenKind::LessEqual
             | TokenKind::Greater
-            | TokenKind::GreaterEqual => 3,
+            | TokenKind::GreaterEqual => PREC_COMPARISON,
 
-            // 6. Composition/Pipeline/Range
+            // Composition/Pipeline/Range
             TokenKind::RightRight
             | TokenKind::Pipe
             | TokenKind::DotDot
-            | TokenKind::DotDotEqual => 4,
+            | TokenKind::DotDotEqual => PREC_PIPELINE,
 
-            // 5. Additive
-            TokenKind::Plus | TokenKind::Minus => 5,
+            // Additive
+            TokenKind::Plus | TokenKind::Minus => PREC_ADDITIVE,
 
-            // 4. Multiplicative/Infix
-            TokenKind::Star | TokenKind::Slash | TokenKind::Percent | TokenKind::Backtick => 6,
+            // Multiplicative/Infix
+            TokenKind::Star | TokenKind::Slash | TokenKind::Percent | TokenKind::Backtick => {
+                PREC_MULTIPLICATIVE
+            }
 
             // Not an infix operator
             _ => 0,

@@ -139,6 +139,51 @@ fn parse_operator_precedence() {
 }
 
 #[test]
+fn parse_logical_operator_precedence() {
+    // && binds tighter than ||
+    let expr = parse_expr("a || b && c").unwrap();
+    expect![[r#"
+        Infix {
+            left: Identifier(
+                "a",
+            ),
+            op: Or,
+            right: Infix {
+                left: Identifier(
+                    "b",
+                ),
+                op: And,
+                right: Identifier(
+                    "c",
+                ),
+            },
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_assignment_lowest_precedence() {
+    // Assignment is lower precedence than equality
+    let expr = parse_expr("a = b == c").unwrap();
+    expect![[r#"
+        Assignment {
+            name: "a",
+            value: Infix {
+                left: Identifier(
+                    "b",
+                ),
+                op: Equal,
+                right: Identifier(
+                    "c",
+                ),
+            },
+        }
+    "#]]
+    .assert_debug_eq(&expr);
+}
+
+#[test]
 fn parse_comparison_operators() {
     let expr = parse_expr("1 < 2").unwrap();
     expect![[r#"
