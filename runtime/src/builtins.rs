@@ -5274,7 +5274,7 @@ fn format_value_inner(value: &Value, quote_strings: bool) -> String {
     }
 
     if let Some(d) = value.as_decimal() {
-        return d.to_string();
+        return format_decimal(d);
     }
 
     if let Some(s) = value.as_string() {
@@ -5324,6 +5324,15 @@ fn format_value_inner(value: &Value, quote_strings: bool) -> String {
     }
 
     "<unknown>".to_string()
+}
+
+fn format_decimal(value: f64) -> String {
+    let s = value.to_string();
+    if s.contains('.') || s.contains('e') || s.contains('E') {
+        s
+    } else {
+        format!("{s}.0")
+    }
 }
 
 /// `puts(..values)` → Nil

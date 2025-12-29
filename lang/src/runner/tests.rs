@@ -255,6 +255,131 @@ test: {
 }
 
 #[test]
+fn execute_test_decimal_value_flow() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let x = 2.5
+  let f = |y| y + x
+  let list = [1.0, x, f(1.0)]
+  puts("DEC", list)
+  list[2]
+}
+
+test: {
+  input: 0
+  part_one: 3.5
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_decimal(3.5)));
+}
+
+#[test]
+fn execute_test_mixed_int_decimal_ops() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let results = [
+    10 + 2.5,
+    2.5 + 10,
+    7 - 2.5,
+    7.5 - 2,
+    3 * 2.5,
+    2.5 * 3,
+    9 / 2.0,
+    9.0 / 2,
+    1.5 < 2,
+    2 < 1.5,
+    1.5 <= 1.5,
+    2.5 > 3,
+    3.0 >= 3,
+    2.0 == 2.0,
+    2.0 == 2,
+    2.0 != 2
+  ];
+  results[input]
+}
+
+test: {
+  input: 0
+  part_one: 12
+}
+test: {
+  input: 1
+  part_one: 12.5
+}
+test: {
+  input: 2
+  part_one: 5
+}
+test: {
+  input: 3
+  part_one: 5.5
+}
+test: {
+  input: 4
+  part_one: 6
+}
+test: {
+  input: 5
+  part_one: 7.5
+}
+test: {
+  input: 6
+  part_one: 4
+}
+test: {
+  input: 7
+  part_one: 4.5
+}
+test: {
+  input: 8
+  part_one: true
+}
+test: {
+  input: 9
+  part_one: false
+}
+test: {
+  input: 10
+  part_one: true
+}
+test: {
+  input: 11
+  part_one: false
+}
+test: {
+  input: 12
+  part_one: true
+}
+test: {
+  input: 13
+  part_one: true
+}
+test: {
+  input: 14
+  part_one: false
+}
+test: {
+  input: 15
+  part_one: true
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+
+    assert_eq!(results.len(), 16);
+    assert!(results.iter().all(|result| result.part_one_passed == Some(true)));
+}
+
+#[test]
 fn execute_test_simple_failing() {
     // A test section with wrong expected value
     let program = parse_program(

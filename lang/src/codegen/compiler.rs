@@ -178,10 +178,10 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Compile a decimal literal to a native f64 value
-    /// Decimals are stored as actual f64 (non-NaN range), not tagged
+    /// Decimals are stored as raw f64 bit patterns inside the Value (i64)
     fn compile_decimal(&self, value: f64) -> BasicValueEnum<'ctx> {
-        let f64_type = self.context.f64_type();
-        f64_type.const_float(value).into()
+        let i64_type = self.context.i64_type();
+        i64_type.const_int(value.to_bits(), false).into()
     }
 
     /// Compile a boolean literal to a NaN-boxed tagged value
@@ -285,9 +285,9 @@ impl<'ctx> CodegenContext<'ctx> {
 
             // Negate decimal (FAST PATH)
             (PrefixOp::Negate, Type::Decimal) => {
-                let val = right_val.into_float_value();
+                let val = self.unbox_decimal(right_val);
                 let result = self.builder.build_float_neg(val, "fneg").unwrap();
-                Ok(result.into())
+                Ok(self.box_decimal(result))
             }
 
             // Logical NOT on boolean (FAST PATH)
@@ -441,40 +441,40 @@ impl<'ctx> CodegenContext<'ctx> {
 
             // Decimal + Decimal → native fadd (FAST PATH)
             (Type::Decimal, InfixOp::Add, Type::Decimal) => {
-                let l = left_val.into_float_value();
-                let r = right_val.into_float_value();
+                let l = self.unbox_decimal(left_val);
+                let r = self.unbox_decimal(right_val);
                 let result = self.builder.build_float_add(l, r, "fadd").unwrap();
-                Ok(result.into())
+                Ok(self.box_decimal(result))
             }
 
             // Decimal - Decimal → native fsub (FAST PATH)
             (Type::Decimal, InfixOp::Subtract, Type::Decimal) => {
-                let l = left_val.into_float_value();
-                let r = right_val.into_float_value();
+                let l = self.unbox_decimal(left_val);
+                let r = self.unbox_decimal(right_val);
                 let result = self.builder.build_float_sub(l, r, "fsub").unwrap();
-                Ok(result.into())
+                Ok(self.box_decimal(result))
             }
 
             // Decimal * Decimal → native fmul (FAST PATH)
             (Type::Decimal, InfixOp::Multiply, Type::Decimal) => {
-                let l = left_val.into_float_value();
-                let r = right_val.into_float_value();
+                let l = self.unbox_decimal(left_val);
+                let r = self.unbox_decimal(right_val);
                 let result = self.builder.build_float_mul(l, r, "fmul").unwrap();
-                Ok(result.into())
+                Ok(self.box_decimal(result))
             }
 
             // Decimal / Decimal → native fdiv (FAST PATH)
             (Type::Decimal, InfixOp::Divide, Type::Decimal) => {
-                let l = left_val.into_float_value();
-                let r = right_val.into_float_value();
+                let l = self.unbox_decimal(left_val);
+                let r = self.unbox_decimal(right_val);
                 let result = self.builder.build_float_div(l, r, "fdiv").unwrap();
-                Ok(result.into())
+                Ok(self.box_decimal(result))
             }
 
             // Decimal < Decimal → native comparison (FAST PATH)
             (Type::Decimal, InfixOp::LessThan, Type::Decimal) => {
-                let l = left_val.into_float_value();
-                let r = right_val.into_float_value();
+                let l = self.unbox_decimal(left_val);
+                let r = self.unbox_decimal(right_val);
                 let cmp = self
                     .builder
                     .build_float_compare(inkwell::FloatPredicate::OLT, l, r, "flt")
@@ -1057,6 +1057,24 @@ impl<'ctx> CodegenContext<'ctx> {
             )
             .unwrap();
         tagged.into()
+    }
+
+    /// Extract raw f64 from a boxed decimal Value (bitcast i64 -> f64)
+    fn unbox_decimal(&self, value: BasicValueEnum<'ctx>) -> inkwell::values::FloatValue<'ctx> {
+        let casted = self
+            .builder
+            .build_bit_cast(value.into_int_value(), self.context.f64_type(), "unbox_dec")
+            .unwrap();
+        casted.into_float_value()
+    }
+
+    /// Box raw f64 into a decimal Value (bitcast f64 -> i64)
+    fn box_decimal(&self, value: inkwell::values::FloatValue<'ctx>) -> BasicValueEnum<'ctx> {
+        let casted = self
+            .builder
+            .build_bit_cast(value, self.context.i64_type(), "box_dec")
+            .unwrap();
+        casted.into()
     }
 
     /// Box boolean into NaN-boxed value

@@ -537,7 +537,7 @@ impl Runner {
     fn expr_to_source(&self, expr: &Expr) -> String {
         match expr {
             Expr::Integer(n) => n.to_string(),
-            Expr::Decimal(d) => d.to_string(),
+            Expr::Decimal(d) => self.decimal_to_source(*d),
             Expr::String(s) => {
                 // Escape special characters in string literals
                 let escaped = s
@@ -831,10 +831,19 @@ impl Runner {
         use crate::parser::ast::Literal;
         match lit {
             Literal::Integer(n) => n.to_string(),
-            Literal::Decimal(d) => d.to_string(),
+            Literal::Decimal(d) => self.decimal_to_source(*d),
             Literal::String(s) => format!("\"{}\"", s),
             Literal::Boolean(b) => b.to_string(),
             Literal::Nil => "nil".to_string(),
+        }
+    }
+
+    fn decimal_to_source(&self, value: f64) -> String {
+        let s = value.to_string();
+        if s.contains('.') || s.contains('e') || s.contains('E') {
+            s
+        } else {
+            format!("{s}.0")
         }
     }
 

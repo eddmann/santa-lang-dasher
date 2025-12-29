@@ -87,8 +87,11 @@ fn codegen_decimal_literal() {
     // Compile the expression
     let result = codegen.compile_expr(&expr).unwrap();
 
-    // Verify it's an f64 value (decimals are stored as native f64, not NaN-boxed)
-    assert!(result.is_float_value());
+    // Verify it's an i64 value containing the f64 bit pattern
+    assert!(result.is_int_value());
+    let int_val = result.into_int_value();
+    let bits = int_val.get_zero_extended_constant().expect("decimal literal is const");
+    assert_eq!(bits, 2.71f64.to_bits());
 }
 
 #[test]
@@ -189,7 +192,8 @@ fn codegen_decimal_add_decimal_specialized() {
     };
 
     let result = codegen.compile_expr(&expr).unwrap();
-    assert!(result.is_float_value());
+    // Decimal arithmetic should return boxed Value (i64)
+    assert!(result.is_int_value());
 }
 
 #[test]
