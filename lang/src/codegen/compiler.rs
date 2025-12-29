@@ -1941,6 +1941,10 @@ impl<'ctx> CodegenContext<'ctx> {
         let self_refs = Self::find_self_referencing_bindings(stmts, &bound_vars);
         self.cell_variables.extend(self_refs);
 
+        // Find forward references (mutual recursion between functions in this block)
+        let forward_refs = Self::find_forward_references(stmts, &bound_vars);
+        self.cell_variables.extend(forward_refs);
+
         let mut last_val = None;
 
         for (i, stmt) in stmts.iter().enumerate() {
@@ -3290,16 +3294,22 @@ impl<'ctx> CodegenContext<'ctx> {
                 // 2. It's a self-referencing binding (e.g., let fib = memoize |n| fib(...))
                 let needs_cell = self.cell_variables.contains(name);
 
-                // Pre-allocate space for the variable (enables self-reference for closures)
-                let alloca = self
-                    .builder
-                    .build_alloca(self.context.i64_type(), name)
-                    .unwrap();
+                // Check if the variable was already forward-declared (for mutual recursion support)
+                // If so, reuse the existing alloca; otherwise create a new one
+                let already_forward_declared = self.variables.contains_key(name);
+                let alloca = if let Some(existing) = self.variables.get(name) {
+                    *existing
+                } else {
+                    self.builder
+                        .build_alloca(self.context.i64_type(), name)
+                        .unwrap()
+                };
 
                 // For self-referencing bindings (both functions and non-functions),
                 // we need to create the cell BEFORE compiling so the value expression
-                // can capture a reference to the cell
-                if needs_cell {
+                // can capture a reference to the cell.
+                // But skip cell creation if already forward-declared (cell already exists).
+                if needs_cell && !already_forward_declared {
                     // Create a cell with nil initially
                     let rt_cell_new = self.get_or_declare_rt_cell_new();
                     let nil_val = self.compile_nil();
@@ -3317,7 +3327,7 @@ impl<'ctx> CodegenContext<'ctx> {
                         .unwrap();
                     // Register the variable so nested closures can capture the cell
                     self.variables.insert(name.clone(), alloca);
-                } else if is_function {
+                } else if is_function && !already_forward_declared {
                     // Non-cell function: Register the variable BEFORE compiling
                     // This allows the function body to capture a reference to itself
                     self.variables.insert(name.clone(), alloca);
@@ -4294,6 +4304,10 @@ impl<'ctx> CodegenContext<'ctx> {
         let self_refs = Self::find_self_referencing_bindings(stmts, &bound_vars);
         self.cell_variables.extend(self_refs);
 
+        // Find forward references (mutual recursion between functions in this block)
+        let forward_refs = Self::find_forward_references(stmts, &bound_vars);
+        self.cell_variables.extend(forward_refs);
+
         let mut last_val = None;
 
         for (i, stmt) in stmts.iter().enumerate() {
@@ -4759,6 +4773,55 @@ impl<'ctx> CodegenContext<'ctx> {
         }
 
         self_refs
+    }
+
+    /// Find bindings that have forward references (reference bindings defined later).
+    /// This handles mutual recursion between top-level functions.
+    /// Both the referencing binding AND the referenced binding need cell indirection.
+    pub fn find_forward_references(
+        stmts: &[Stmt],
+        bound: &HashSet<String>,
+    ) -> HashSet<String> {
+        // First, collect all top-level binding names
+        let mut all_names: HashSet<String> = HashSet::new();
+        for stmt in stmts {
+            if let Stmt::Let {
+                pattern: Pattern::Identifier(name),
+                ..
+            } = stmt
+            {
+                all_names.insert(name.clone());
+            }
+        }
+
+        let mut forward_refs = HashSet::new();
+        let mut defined_so_far = bound.clone();
+
+        for stmt in stmts {
+            if let Stmt::Let {
+                pattern: Pattern::Identifier(name),
+                value,
+                ..
+            } = stmt
+            {
+                // Find free variables in the value expression
+                let mut free_vars = HashSet::new();
+                Self::collect_free_variables(value, &defined_so_far, &mut free_vars);
+
+                // Check if any free variable is a top-level binding defined later
+                for var in &free_vars {
+                    if all_names.contains(var) && !defined_so_far.contains(var) {
+                        // This is a forward reference - both bindings need cells
+                        forward_refs.insert(name.clone());
+                        forward_refs.insert(var.clone());
+                    }
+                }
+
+                defined_so_far.insert(name.clone());
+            }
+        }
+
+        forward_refs
     }
 
     /// Find mutable variables that are captured by nested closures.
@@ -6815,6 +6878,31 @@ impl<'ctx> CodegenContext<'ctx> {
                     return Err(CompileError::UnsupportedExpression(
                         "zip expects at least 1 argument".to_string(),
                     ));
+                }
+
+                // If only 1 argument, create a partial application: |x| zip(arg, x)
+                // This enables patterns like: zip(1..) >> map(f) >> sum
+                if args.len() == 1 {
+                    // Create a lambda: |x| zip(first_arg, x)
+                    let param = crate::parser::ast::Param::simple("x".to_string());
+                    let body = Expr::Call {
+                        function: Box::new(Expr::Identifier("zip".to_string())),
+                        args: vec![args[0].clone(), Expr::Identifier("x".to_string())],
+                    };
+                    let lambda = Expr::Function {
+                        params: vec![param],
+                        body: Box::new(body),
+                    };
+                    let lambda_ty = self.infer_expr_type(&lambda);
+                    let lambda_typed = TypedExpr {
+                        expr: lambda,
+                        ty: lambda_ty,
+                        span: crate::lexer::token::Span::new(
+                            crate::lexer::token::Position::new(0, 0),
+                            crate::lexer::token::Position::new(0, 0),
+                        ),
+                    };
+                    return Ok(Some(self.compile_expr(&lambda_typed)?));
                 }
 
                 // Compile all arguments

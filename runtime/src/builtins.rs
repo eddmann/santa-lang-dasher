@@ -448,13 +448,14 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
                     return cur_val;
                 }
 
-                // For other LazySequence types (Map/Filter/Zip), collect and index
+                // For other LazySequence types (Map/Filter/Zip/Iterate), collect and index
                 _ => {
                     let needs_forcing = matches!(
                         &lazy_seq.kind,
                         LazySeqKind::Map { .. }
                             | LazySeqKind::Filter { .. }
                             | LazySeqKind::Zip { .. }
+                            | LazySeqKind::Iterate { .. }
                     );
 
                     if needs_forcing {
@@ -519,9 +520,11 @@ pub extern "C" fn rt_size(collection: Value) -> Value {
         return Value::from_integer(s.graphemes(true).count() as i64);
     }
 
-    // Range (bounded only) - calculate size directly without iterating
+    // LazySequence - need to handle different kinds
     if let Some(lazy_seq) = collection.as_lazy_sequence() {
         use crate::heap::LazySeqKind;
+
+        // Range (bounded only) - calculate size directly without iterating
         if let LazySeqKind::Range {
             current,
             end: Some(end_val),
@@ -556,7 +559,26 @@ pub extern "C" fn rt_size(collection: Value) -> Value {
 
             return Value::from_integer(count.max(0));
         }
-        // Unbounded ranges return 0 (undefined size)
+
+        // For Map, Filter, Zip - force to list and count
+        // (only works for bounded sequences; unbounded would hang)
+        let needs_forcing = matches!(
+            &lazy_seq.kind,
+            LazySeqKind::Map { .. }
+                | LazySeqKind::Filter { .. }
+                | LazySeqKind::Zip { .. }
+                | LazySeqKind::Skip { .. }
+                | LazySeqKind::Combinations { .. }
+        );
+
+        if needs_forcing {
+            let elements = collect_bounded_lazy(lazy_seq);
+            return Value::from_integer(elements.len() as i64);
+        }
+
+        // Unbounded/infinite sequences (Repeat, Cycle, Iterate, unbounded Range)
+        // Return 0 to indicate undefined/infinite size
+        return Value::from_integer(0);
     }
 
     Value::from_integer(0)
@@ -592,11 +614,25 @@ pub extern "C" fn rt_first(collection: Value) -> Value {
 
     // LazySequence (including Range)
     if let Some(lazy) = collection.as_lazy_sequence() {
+        use crate::heap::LazySeqKind;
+
         // Handle Iterate specially - get first value from RefCell
         if let LazySeqKind::Iterate { current, .. } = &lazy.kind {
             return *current.borrow();
         }
-        // For other lazy sequences, use next()
+
+        // For Map/Filter/Zip, force to list first and get first element
+        let needs_forcing = matches!(
+            &lazy.kind,
+            LazySeqKind::Map { .. } | LazySeqKind::Filter { .. } | LazySeqKind::Zip { .. }
+        );
+
+        if needs_forcing {
+            let elements = collect_bounded_lazy(lazy);
+            return elements.front().copied().unwrap_or_else(Value::nil);
+        }
+
+        // For other lazy sequences (Range, Skip, etc.), use next()
         if let Some((val, _)) = lazy.next() {
             return val;
         }
@@ -1757,8 +1793,30 @@ pub extern "C" fn rt_fold(initial: Value, folder: Value, collection: Value) -> V
 
     // LazySequence - iterate using appropriate method
     // Map/Filter/Zip require closure evaluation, so we force them to a list first
+    // Iterate is handled specially to evaluate lazily one element at a time
     if let Some(lazy) = collection.as_lazy_sequence() {
         use crate::heap::LazySeqKind;
+
+        // Handle Iterate specially - evaluate generator lazily one element at a time
+        if let LazySeqKind::Iterate {
+            generator,
+            current: current_cell,
+            ..
+        } = &lazy.kind
+        {
+            let mut cur = *current_cell.borrow();
+            loop {
+                acc = call_closure(closure, &[acc, cur]);
+                if break_occurred() {
+                    if let Some(break_val) = take_break_value() {
+                        return break_val;
+                    }
+                    return acc;
+                }
+                // Generate next value
+                cur = call_value(*generator, &[cur]);
+            }
+        }
 
         // Check if this is a Map/Filter/Zip that needs forcing
         let needs_forcing = matches!(
@@ -3059,16 +3117,19 @@ pub extern "C" fn rt_take(total: Value, collection: Value) -> Value {
 /// - sort(>, 1..5) → [4, 3, 2, 1]
 #[no_mangle]
 pub extern "C" fn rt_sort(comparator: Value, collection: Value) -> Value {
-    // Get the closure - if not a closure, return the collection unchanged
-    let closure = match comparator.as_closure() {
-        Some(c) => c,
-        None => return collection,
-    };
+    // Verify comparator is callable (closure, partial app, or memoized)
+    // If not callable, return the collection unchanged
+    if comparator.as_closure().is_none()
+        && comparator.as_partial_application().is_none()
+        && comparator.as_memoized_closure().is_none()
+    {
+        return collection;
+    }
 
-    // Helper to sort items
+    // Helper to sort items - uses call_value to handle all callable types
     let sort_items = |items: &mut Vec<Value>| {
         items.sort_by(|a, b| {
-            let result = call_closure(closure, &[*a, *b]);
+            let result = call_value(comparator, &[*a, *b]);
 
             // Check if result is boolean
             if let Some(bool_val) = result.as_bool() {
@@ -3598,14 +3659,17 @@ pub extern "C" fn rt_any(predicate: Value, collection: Value) -> Value {
         return Value::from_bool(false);
     }
 
-    // LazySequence (including Range, Map, Filter, Zip)
+    // LazySequence (including Range, Map, Filter, Zip, Iterate)
     if let Some(lazy) = collection.as_lazy_sequence() {
         use crate::heap::LazySeqKind;
 
-        // Check if this needs forcing (Map/Filter/Zip)
+        // Check if this needs forcing (Map/Filter/Zip/Iterate)
         let needs_forcing = matches!(
             &lazy.kind,
-            LazySeqKind::Map { .. } | LazySeqKind::Filter { .. } | LazySeqKind::Zip { .. }
+            LazySeqKind::Map { .. }
+                | LazySeqKind::Filter { .. }
+                | LazySeqKind::Zip { .. }
+                | LazySeqKind::Iterate { .. }
         );
 
         if needs_forcing {
@@ -3682,14 +3746,17 @@ pub extern "C" fn rt_all(predicate: Value, collection: Value) -> Value {
         return Value::from_bool(true);
     }
 
-    // LazySequence (Range, Map, Filter, Zip, etc.)
+    // LazySequence (Range, Map, Filter, Zip, Iterate, etc.)
     if let Some(lazy) = collection.as_lazy_sequence() {
         use crate::heap::LazySeqKind;
 
-        // Check if this needs forcing (Map/Filter/Zip)
+        // Check if this needs forcing (Map/Filter/Zip/Iterate)
         let needs_forcing = matches!(
             &lazy.kind,
-            LazySeqKind::Map { .. } | LazySeqKind::Filter { .. } | LazySeqKind::Zip { .. }
+            LazySeqKind::Map { .. }
+                | LazySeqKind::Filter { .. }
+                | LazySeqKind::Zip { .. }
+                | LazySeqKind::Iterate { .. }
         );
 
         if needs_forcing {

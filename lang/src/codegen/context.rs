@@ -117,6 +117,50 @@ impl<'ctx> CodegenContext<'ctx> {
         // Find self-referencing bindings (e.g., let fib = memoize |n| { fib(...) })
         let self_refs = Self::find_self_referencing_bindings(stmts, &bound_vars);
         self.cell_variables.extend(self_refs);
+
+        // Find forward references (mutual recursion between top-level functions)
+        let forward_refs = Self::find_forward_references(stmts, &bound_vars);
+        self.cell_variables.extend(forward_refs);
+    }
+
+    /// Forward-declare a top-level binding
+    ///
+    /// Creates an alloca for the variable and initializes it properly:
+    /// - For cell variables: creates a cell containing nil
+    /// - For regular variables: stores nil directly
+    pub fn forward_declare_binding(&mut self, name: &str) {
+        let i64_type = self.context.i64_type();
+        let nil_value = i64_type.const_int(0b010, false);
+
+        let alloca = self.builder.build_alloca(i64_type, name).unwrap();
+
+        if self.cell_variables.contains(name) {
+            // Create a cell containing nil
+            let rt_cell_new = self.get_or_declare_runtime_fn("rt_cell_new");
+            let cell = self
+                .builder
+                .build_call(rt_cell_new, &[nil_value.into()], &format!("{}_cell", name))
+                .unwrap();
+            self.builder
+                .build_store(alloca, cell.try_as_basic_value().left().unwrap())
+                .unwrap();
+        } else {
+            // Store nil directly
+            self.builder.build_store(alloca, nil_value).unwrap();
+        }
+
+        self.variables.insert(name.to_string(), alloca);
+    }
+
+    /// Get or declare a runtime function by name
+    fn get_or_declare_runtime_fn(&self, fn_name: &str) -> inkwell::values::FunctionValue<'ctx> {
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+        // All our runtime functions take i64 and return i64
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
     }
 
     /// Get the configured optimization level

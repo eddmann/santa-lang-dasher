@@ -17,7 +17,7 @@ use std::process::Command;
 use super::context::CodegenContext;
 use crate::lexer::lex;
 use crate::lexer::token::{Position, Span};
-use crate::parser::ast::{Expr, Program, Stmt};
+use crate::parser::ast::{Expr, Pattern, Program, Stmt};
 use crate::parser::Parser;
 use crate::types::{Type, TypeInference, TypedExpr, TypedProgram};
 
@@ -312,6 +312,21 @@ impl Compiler {
         // Pre-analyze statements for self-referencing bindings and mutable captures
         // This must happen before compiling so closures can properly capture cell variables
         codegen.pre_analyze_statements(&program.statements);
+
+        // Forward-declare all top-level let bindings
+        // This enables mutual recursion and forward references between functions
+        // We pre-declare ALL bindings (not just functions) because a function might
+        // reference a memoized function (e.g., `let f = memoize |...|`) which is
+        // a call expression, not a function expression.
+        for stmt in &program.statements {
+            if let Stmt::Let {
+                pattern: Pattern::Identifier(name),
+                ..
+            } = stmt
+            {
+                codegen.forward_declare_binding(name);
+            }
+        }
 
         // Compile each statement using the typed information
         let mut last_value = None;
