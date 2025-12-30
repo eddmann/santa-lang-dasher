@@ -334,6 +334,12 @@ pub enum LazySeqKind {
         predicate: super::value::Value, // Closure
     },
 
+    /// filter_map(fn, lazy_seq) - lazy map+filter sequence
+    FilterMap {
+        source: Box<LazySequenceObject>,
+        mapper: super::value::Value, // Closure
+    },
+
     /// skip(n, lazy_seq) - skip first n elements
     Skip {
         source: Box<LazySequenceObject>,
@@ -542,8 +548,11 @@ impl LazySequenceObject {
                 ))
             }
 
-            // Map and Filter need closures, handled by builtins
-            LazySeqKind::Map { .. } | LazySeqKind::Filter { .. } | LazySeqKind::Zip { .. } => {
+            // Map/Filter/FilterMap/Zip need closures, handled by builtins
+            LazySeqKind::Map { .. }
+            | LazySeqKind::Filter { .. }
+            | LazySeqKind::FilterMap { .. }
+            | LazySeqKind::Zip { .. } => {
                 // These require closure evaluation, handled elsewhere
                 None
             }

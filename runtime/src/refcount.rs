@@ -168,6 +168,10 @@ unsafe fn free_lazy_seq_values(kind: &super::heap::LazySeqKind) {
             free_lazy_seq_values(&source.kind);
             rt_decref(*predicate);
         }
+        LazySeqKind::FilterMap { source, mapper } => {
+            free_lazy_seq_values(&source.kind);
+            rt_decref(*mapper);
+        }
         LazySeqKind::Skip { source, .. } => {
             free_lazy_seq_values(&source.kind);
         }

@@ -32,11 +32,6 @@ pub extern "C" fn rt_int(value: Value) -> Value {
         return Value::from_integer(if b { 1 } else { 0 });
     }
 
-    // Nil - check before decimal
-    if value.is_nil() {
-        return Value::from_integer(0);
-    }
-
     // String - check before decimal since strings are heap objects
     if let Some(s) = value.as_string() {
         return match s.trim().parse::<i64>() {
@@ -50,7 +45,6 @@ pub extern "C" fn rt_int(value: Value) -> Value {
         return Value::from_integer(round_half_away_from_zero(d));
     }
 
-    // Other types return 0
     Value::from_integer(0)
 }
 
@@ -77,11 +71,11 @@ fn round_half_away_from_zero(d: f64) -> i64 {
 /// - ints("x: 10, y: -5") → [10, -5]
 /// - ints("no numbers") → []
 #[no_mangle]
-pub extern "C" fn rt_ints(value: Value) -> Value {
+pub extern "C-unwind" fn rt_ints(value: Value) -> Value {
     // Only works on strings
     let s = match value.as_string() {
         Some(s) => s,
-        None => return Value::from_list(im::Vector::new()),
+        None => runtime_error("ints(string) expects a String"),
     };
 
     // Use regex to extract all integers (including negative)
@@ -150,8 +144,7 @@ pub extern "C" fn rt_list(value: Value) -> Value {
         return Value::from_list(collect_bounded_lazy(lazy_seq));
     }
 
-    // Other types return empty list
-    Value::from_list(im::Vector::new())
+    runtime_error("list(value) expects List, Set, Dictionary, String, Range, or LazySequence")
 }
 
 /// `set(value)` → Set
@@ -220,8 +213,7 @@ pub extern "C" fn rt_set(value: Value) -> Value {
         return Value::from_set(set);
     }
 
-    // Other types return empty set
-    Value::from_set(im::HashSet::new())
+    runtime_error("set(value) expects List, Set, String, Range, or LazySequence")
 }
 
 /// `dict(value)` → Dictionary
@@ -242,16 +234,25 @@ pub extern "C" fn rt_dict(value: Value) -> Value {
         let mut dict = im::HashMap::new();
         for item in list.iter() {
             if let Some(tuple) = item.as_list() {
-                if tuple.len() >= 2 {
-                    dict.insert(tuple[0], tuple[1]);
+                if tuple.len() < 2 {
+                    runtime_error("dict(value) expects list of [key, value] tuples");
                 }
+                let key = tuple[0];
+                if !key.is_hashable() {
+                    runtime_error(&format!(
+                        "{} is not hashable and cannot be used as a Dictionary key",
+                        type_name(&key)
+                    ));
+                }
+                dict.insert(tuple[0], tuple[1]);
+            } else {
+                runtime_error("dict(value) expects list of [key, value] tuples");
             }
         }
         return Value::from_dict(dict);
     }
 
-    // Other types return empty dict
-    Value::from_dict(im::HashMap::new())
+    runtime_error("dict(value) expects List or Dictionary")
 }
 
 // ============================================================================
@@ -321,8 +322,9 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
             if idx >= 0 && idx < len {
                 return list[idx as usize];
             }
+            return Value::nil();
         }
-        return Value::nil();
+        runtime_error("get(index, collection) expects Integer or Range index for List");
     }
 
     // Set - membership check
@@ -395,8 +397,9 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
             if idx >= 0 && idx < len {
                 return Value::from_string(graphemes[idx as usize].to_string());
             }
+            return Value::nil();
         }
-        return Value::nil();
+        runtime_error("get(index, collection) expects Integer or Range index for String");
     }
 
     // LazySequence (including Range) - index by integer
@@ -408,10 +411,10 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
             let idx = i as usize;
             return lazy_nth(lazy_seq, idx).unwrap_or_else(Value::nil);
         }
-        return Value::nil();
+        runtime_error("get(index, collection) expects Integer index for LazySequence");
     }
 
-    Value::nil()
+    runtime_error("get(index, collection) expects List, Set, Dictionary, String, Range, or LazySequence")
 }
 
 /// Get the nth element of a lazy sequence without materializing it.
@@ -586,6 +589,23 @@ fn lazy_next_with_closures(
                 current = next_source;
             }
         }
+        LazySeqKind::FilterMap { source, mapper } => {
+            let mut current = source.clone();
+            loop {
+                let (val, next_source) = lazy_next_with_closures(&current)?;
+                let mapped = call_value(*mapper, &[val]);
+                if mapped.is_truthy() {
+                    return Some((
+                        mapped,
+                        LazySequenceObject::new(LazySeqKind::FilterMap {
+                            source: next_source,
+                            mapper: *mapper,
+                        }),
+                    ));
+                }
+                current = next_source;
+            }
+        }
         LazySeqKind::Zip { sources } => {
             let mut values = im::Vector::new();
             let mut next_sources = Vec::with_capacity(sources.len());
@@ -721,6 +741,7 @@ pub extern "C" fn rt_size(collection: Value) -> Value {
             &lazy_seq.kind,
             LazySeqKind::Map { .. }
                 | LazySeqKind::Filter { .. }
+                | LazySeqKind::FilterMap { .. }
                 | LazySeqKind::Zip { .. }
                 | LazySeqKind::Skip { .. }
                 | LazySeqKind::Combinations { .. }
@@ -732,11 +753,10 @@ pub extern "C" fn rt_size(collection: Value) -> Value {
         }
 
         // Unbounded/infinite sequences (Repeat, Cycle, Iterate, unbounded Range)
-        // Return 0 to indicate undefined/infinite size
-        return Value::from_integer(0);
+        runtime_error("size on unbounded lazy sequence");
     }
 
-    Value::from_integer(0)
+    runtime_error("size(collection) expects List, Set, Dictionary, String, Range, or LazySequence")
 }
 
 /// `first(collection)` → Value | Nil
@@ -769,32 +789,14 @@ pub extern "C" fn rt_first(collection: Value) -> Value {
 
     // LazySequence (including Range)
     if let Some(lazy) = collection.as_lazy_sequence() {
-        use crate::heap::LazySeqKind;
-
-        // Handle Iterate specially - get first value from RefCell
-        if let LazySeqKind::Iterate { current, .. } = &lazy.kind {
-            return *current.borrow();
-        }
-
-        // For Map/Filter/Zip, force to list first and get first element
-        let needs_forcing = matches!(
-            &lazy.kind,
-            LazySeqKind::Map { .. } | LazySeqKind::Filter { .. } | LazySeqKind::Zip { .. }
-        );
-
-        if needs_forcing {
-            let elements = collect_bounded_lazy(lazy);
-            return elements.front().copied().unwrap_or_else(Value::nil);
-        }
-
-        // For other lazy sequences (Range, Skip, etc.), use next()
-        if let Some((val, _)) = lazy.next() {
+        let current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        if let Some((val, _)) = lazy_next_with_closures(&current) {
             return val;
         }
         return Value::nil();
     }
 
-    Value::nil()
+    runtime_error("first(collection) expects List, Set, String, Range, or LazySequence")
 }
 
 /// `second(collection)` → Value | Nil
@@ -828,16 +830,16 @@ pub extern "C" fn rt_second(collection: Value) -> Value {
 
     // LazySequence (including Range)
     if let Some(lazy) = collection.as_lazy_sequence() {
-        // Get first, then second
-        if let Some((_, next_seq)) = lazy.next() {
-            if let Some((second_val, _)) = next_seq.next() {
+        let current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        if let Some((_, next_seq)) = lazy_next_with_closures(&current) {
+            if let Some((second_val, _)) = lazy_next_with_closures(&next_seq) {
                 return second_val;
             }
         }
         return Value::nil();
     }
 
-    Value::nil()
+    runtime_error("second(collection) expects List, Set, String, Range, or LazySequence")
 }
 
 /// `last(collection)` → Value | Nil
@@ -918,7 +920,7 @@ pub extern "C" fn rt_last(collection: Value) -> Value {
         return elements.last().copied().unwrap_or_else(Value::nil);
     }
 
-    Value::nil()
+    runtime_error("last(collection) expects List, Set, String, or bounded Range/LazySequence")
 }
 
 /// `rest(collection)` → Collection
@@ -957,14 +959,14 @@ pub extern "C" fn rt_rest(collection: Value) -> Value {
     // LazySequence (including Range) - return rest as a new LazySequence
     if let Some(lazy) = collection.as_lazy_sequence() {
         // Get first element, return the "next" sequence
-        if let Some((_, next_seq)) = lazy.next() {
+        if let Some((_, next_seq)) = lazy_next_with_closures(&Box::new(lazy.clone())) {
             return Value::from_lazy_sequence(next_seq);
         }
         // Empty sequence - return empty list
         return Value::from_list(im::Vector::new());
     }
 
-    Value::from_list(im::Vector::new())
+    runtime_error("rest(collection) expects List, Set, String, Range, or LazySequence")
 }
 
 /// `keys(dictionary)` → List
@@ -979,7 +981,7 @@ pub extern "C" fn rt_keys(collection: Value) -> Value {
         return Value::from_list(keys);
     }
 
-    Value::from_list(im::Vector::new())
+    runtime_error("keys(dictionary) expects Dictionary")
 }
 
 /// `values(dictionary)` → List
@@ -994,7 +996,7 @@ pub extern "C" fn rt_values(collection: Value) -> Value {
         return Value::from_list(values);
     }
 
-    Value::from_list(im::Vector::new())
+    runtime_error("values(dictionary) expects Dictionary")
 }
 
 // ============================================================================
@@ -1031,8 +1033,7 @@ pub extern "C-unwind" fn rt_push(value: Value, collection: Value) -> Value {
         return Value::from_set(new_set);
     }
 
-    // Unsupported type - return original collection
-    collection
+    runtime_error("push(value, collection) expects List or Set")
 }
 
 /// `assoc(key, value, collection)` → Collection
@@ -1061,8 +1062,9 @@ pub extern "C-unwind" fn rt_assoc(key: Value, value: Value, collection: Value) -
                 new_list.set(idx, value);
                 return Value::from_list(new_list);
             }
+            return Value::from_list(list.clone());
         }
-        return Value::from_list(list.clone());
+        runtime_error("assoc(key, value, collection) expects Integer index for List");
     }
 
     // Dictionary - insert or update
@@ -1078,8 +1080,7 @@ pub extern "C-unwind" fn rt_assoc(key: Value, value: Value, collection: Value) -
         return Value::from_dict(new_dict);
     }
 
-    // Unsupported type - return original collection
-    collection
+    runtime_error("assoc(key, value, collection) expects List or Dictionary")
 }
 
 // ============================================================================
@@ -1116,11 +1117,7 @@ pub fn get_callable_arity(callee: &Value) -> Option<u32> {
     } else if let Some(partial) = callee.as_partial_application() {
         Some(partial.remaining_arity)
     } else if let Some(memoized) = callee.as_memoized_closure() {
-        if let Some(inner) = memoized.inner_closure.as_closure() {
-            Some(inner.arity)
-        } else {
-            None
-        }
+        get_callable_arity(&memoized.inner_closure)
     } else {
         None
     }
@@ -1133,6 +1130,11 @@ pub fn is_callable(callee: &Value) -> bool {
         || callee.as_memoized_closure().is_some()
 }
 
+fn expect_callable_arity(name: &str, callee: &Value) -> u32 {
+    get_callable_arity(callee)
+        .unwrap_or_else(|| runtime_error(&format!("{name} expects a function")))
+}
+
 /// `update(key, updater, collection)` → Collection
 ///
 /// Update the given index/key using a pure updater function. The updater
@@ -1143,10 +1145,15 @@ pub fn is_callable(callee: &Value) -> bool {
 /// - Dictionary: update(0, || 1, #{}) → #{0: 1}; update(1, _ + 1, #{1: 2}) → #{1: 3}
 #[no_mangle]
 pub extern "C-unwind" fn rt_update(key: Value, updater: Value, collection: Value) -> Value {
-    // Get the closure - if not a closure, return original collection
-    let closure = match updater.as_closure() {
-        Some(c) => c,
-        None => return collection,
+    if !is_callable(&updater) {
+        runtime_error("update(key, updater, collection) expects a function");
+    }
+    let arity = expect_callable_arity("update(key, updater, collection)", &updater);
+
+    let call_updater = |current: Value| match arity {
+        0 => call_value(updater, &[]),
+        1 => call_value(updater, &[current]),
+        _ => runtime_error("update(key, updater, collection) expects arity 0 or 1"),
     };
 
     // List - update at index, filling with nil if needed
@@ -1165,14 +1172,15 @@ pub extern "C-unwind" fn rt_update(key: Value, updater: Value, collection: Value
                 let current = new_list.get(idx).cloned().unwrap_or_else(Value::nil);
 
                 // Call updater with current value
-                let new_value = call_closure(closure, &[current]);
+                let new_value = call_updater(current);
 
                 // Set the new value at index
                 new_list.set(idx, new_value);
                 return Value::from_list(new_list);
             }
+            return Value::from_list(list.clone());
         }
-        return Value::from_list(list.clone());
+        runtime_error("update(key, updater, collection) expects Integer index for List");
     }
 
     // Dictionary - update key
@@ -1189,15 +1197,14 @@ pub extern "C-unwind" fn rt_update(key: Value, updater: Value, collection: Value
         let current = dict.get(&key).cloned().unwrap_or_else(Value::nil);
 
         // Call updater with current value
-        let new_value = call_closure(closure, &[current]);
+        let new_value = call_updater(current);
 
         // Update the dictionary
         let new_dict = dict.update(key, new_value);
         return Value::from_dict(new_dict);
     }
 
-    // Unsupported type - return original collection
-    collection
+    runtime_error("update(key, updater, collection) expects List or Dictionary")
 }
 
 /// `update_d(key, default, updater, collection)` → Collection
@@ -1214,10 +1221,14 @@ pub extern "C-unwind" fn rt_update_d(
     updater: Value,
     collection: Value,
 ) -> Value {
-    // Get the closure - if not a closure, return original collection
-    let closure = match updater.as_closure() {
-        Some(c) => c,
-        None => return collection,
+    if !is_callable(&updater) {
+        runtime_error("update_d(key, default, updater, collection) expects a function");
+    }
+    let arity = expect_callable_arity("update_d(key, default, updater, collection)", &updater);
+    let call_updater = |current: Value| match arity {
+        0 => call_value(updater, &[]),
+        1 => call_value(updater, &[current]),
+        _ => runtime_error("update_d(key, default, updater, collection) expects arity 0 or 1"),
     };
 
     // List - update at index, filling with nil if needed
@@ -1241,14 +1252,15 @@ pub extern "C-unwind" fn rt_update_d(
                 };
 
                 // Call updater with current value (or default)
-                let new_value = call_closure(closure, &[current]);
+                let new_value = call_updater(current);
 
                 // Set the new value at index
                 new_list.set(idx, new_value);
                 return Value::from_list(new_list);
             }
+            return Value::from_list(list.clone());
         }
-        return Value::from_list(list.clone());
+        runtime_error("update_d(key, default, updater, collection) expects Integer index for List");
     }
 
     // Dictionary - update key with default
@@ -1265,15 +1277,14 @@ pub extern "C-unwind" fn rt_update_d(
         let current = dict.get(&key).cloned().unwrap_or(default);
 
         // Call updater with current value (or default)
-        let new_value = call_closure(closure, &[current]);
+        let new_value = call_updater(current);
 
         // Update the dictionary
         let new_dict = dict.update(key, new_value);
         return Value::from_dict(new_dict);
     }
 
-    // Unsupported type - return original collection
-    collection
+    runtime_error("update_d(key, default, updater, collection) expects List or Dictionary")
 }
 
 // ============================================================================
@@ -1294,11 +1305,8 @@ pub extern "C-unwind" fn rt_update_d(
 /// - String: map(_ * 2, "ab") → ["aa", "bb"] (returns List)
 #[no_mangle]
 pub extern "C" fn rt_map(mapper: Value, collection: Value) -> Value {
-    // Check if mapper is callable, return empty collection if not
-    let arity = match get_callable_arity(&mapper) {
-        Some(a) => a,
-        None => return Value::from_list(im::Vector::new()),
-    };
+    // Check if mapper is callable
+    let arity = expect_callable_arity("map(mapper, collection)", &mapper);
 
     // List → List
     if let Some(list) = collection.as_list() {
@@ -1308,7 +1316,17 @@ pub extern "C" fn rt_map(mapper: Value, collection: Value) -> Value {
 
     // Set → Set
     if let Some(set) = collection.as_set() {
-        let mapped: im::HashSet<Value> = set.iter().map(|v| call_value(mapper, &[*v])).collect();
+        let mut mapped: im::HashSet<Value> = im::HashSet::new();
+        for v in set.iter() {
+            let new_val = call_value(mapper, &[*v]);
+            if !new_val.is_hashable() {
+                runtime_error(&format!(
+                    "{} is not hashable and cannot be added to a Set",
+                    type_name(&new_val)
+                ));
+            }
+            mapped.insert(new_val);
+        }
         return Value::from_set(mapped);
     }
 
@@ -1351,8 +1369,7 @@ pub extern "C" fn rt_map(mapper: Value, collection: Value) -> Value {
         return Value::from_lazy_sequence(lazy_map);
     }
 
-    // Unsupported type - return empty list
-    Value::from_list(im::Vector::new())
+    runtime_error("map(mapper, collection) expects List, Set, Dictionary, String, Range, or LazySequence")
 }
 
 /// `filter(predicate, collection)` → Collection
@@ -1370,10 +1387,7 @@ pub extern "C" fn rt_map(mapper: Value, collection: Value) -> Value {
 #[no_mangle]
 pub extern "C" fn rt_filter(predicate: Value, collection: Value) -> Value {
     // Check if predicate is callable
-    let arity = match get_callable_arity(&predicate) {
-        Some(a) => a,
-        None => return Value::from_list(im::Vector::new()),
-    };
+    let arity = expect_callable_arity("filter(predicate, collection)", &predicate);
 
     // List → List
     if let Some(list) = collection.as_list() {
@@ -1439,8 +1453,7 @@ pub extern "C" fn rt_filter(predicate: Value, collection: Value) -> Value {
         return Value::from_lazy_sequence(lazy_filter);
     }
 
-    // Unsupported type - return empty list
-    Value::from_list(im::Vector::new())
+    runtime_error("filter(predicate, collection) expects List, Set, Dictionary, String, Range, or LazySequence")
 }
 
 /// `flat_map(mapper, collection)` → List
@@ -1453,11 +1466,10 @@ pub extern "C" fn rt_filter(predicate: Value, collection: Value) -> Value {
 /// - flat_map(|x| [x, x * 2], 1..4) → [1, 2, 2, 4, 3, 6]  (Range support)
 #[no_mangle]
 pub extern "C" fn rt_flat_map(mapper: Value, collection: Value) -> Value {
-    // Get the closure - if not a closure, return empty list
-    let closure = match mapper.as_closure() {
-        Some(c) => c,
-        None => return Value::from_list(im::Vector::new()),
-    };
+    if !is_callable(&mapper) {
+        runtime_error("flat_map(mapper, collection) expects a function");
+    }
+    let arity = expect_callable_arity("flat_map(mapper, collection)", &mapper);
 
     let mut result: im::Vector<Value> = im::Vector::new();
 
@@ -1475,7 +1487,7 @@ pub extern "C" fn rt_flat_map(mapper: Value, collection: Value) -> Value {
     // List
     if let Some(list) = collection.as_list() {
         for v in list.iter() {
-            let mapped = call_closure(closure, &[*v]);
+            let mapped = call_value(mapper, &[*v]);
             extend_result(mapped);
         }
         return Value::from_list(result);
@@ -1484,7 +1496,7 @@ pub extern "C" fn rt_flat_map(mapper: Value, collection: Value) -> Value {
     // Set
     if let Some(set) = collection.as_set() {
         for v in set.iter() {
-            let mapped = call_closure(closure, &[*v]);
+            let mapped = call_value(mapper, &[*v]);
             extend_result(mapped);
         }
         return Value::from_list(result);
@@ -1492,12 +1504,12 @@ pub extern "C" fn rt_flat_map(mapper: Value, collection: Value) -> Value {
 
     // Dict (mapper receives value, or (value, key) for 2-arg)
     if let Some(dict) = collection.as_dict() {
-        let is_two_arg = closure.arity >= 2;
+        let is_two_arg = arity >= 2;
         for (k, v) in dict.iter() {
             let mapped = if is_two_arg {
-                call_closure(closure, &[*v, *k])
+                call_value(mapper, &[*v, *k])
             } else {
-                call_closure(closure, &[*v])
+                call_value(mapper, &[*v])
             };
             extend_result(mapped);
         }
@@ -1509,49 +1521,47 @@ pub extern "C" fn rt_flat_map(mapper: Value, collection: Value) -> Value {
         use unicode_segmentation::UnicodeSegmentation;
         for g in s.graphemes(true) {
             let char_val = Value::from_string(g.to_string());
-            let mapped = call_closure(closure, &[char_val]);
+            let mapped = call_value(mapper, &[char_val]);
             extend_result(mapped);
         }
         return Value::from_list(result);
     }
 
-    // LazySequence (including Range)
+    // LazySequence (including Range, Map, Filter, Iterate, etc.)
     if let Some(lazy) = collection.as_lazy_sequence() {
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
-            let mapped = call_closure(closure, &[val]);
+        let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        while let Some((val, next_seq)) = lazy_next_with_closures(&current) {
+            let mapped = call_value(mapper, &[val]);
             extend_result(mapped);
-            current = *next_seq;
+            current = next_seq;
         }
         return Value::from_list(result);
     }
 
-    // Unsupported type - return empty list
-    Value::from_list(im::Vector::new())
+    runtime_error("flat_map(mapper, collection) expects List, Set, Dictionary, String, Range, or LazySequence")
 }
 
 /// `filter_map(mapper, collection)` → Collection
 ///
 /// Map and filter in one pass - keeps only truthy mapped results.
-/// Returns same collection type (except String → List, Range → List).
+/// Returns same collection type (except String → List, Range/LazySequence → LazySequence).
 ///
 /// Per LANG.txt §11.4:
 /// - [1, 2, 3, 4] |> filter_map(|v| if v % 2 { v * 2 }) → [2, 6]
 /// - 1..5 |> filter_map(|v| if v % 2 { v * 2 }) → [2, 6]  (Range support)
 #[no_mangle]
 pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
-    // Get the closure - if not a closure, return empty collection
-    let closure = match mapper.as_closure() {
-        Some(c) => c,
-        None => return Value::from_list(im::Vector::new()),
-    };
+    if !is_callable(&mapper) {
+        runtime_error("filter_map(mapper, collection) expects a function");
+    }
+    let arity = expect_callable_arity("filter_map(mapper, collection)", &mapper);
 
     // List → List
     if let Some(list) = collection.as_list() {
         let filtered: im::Vector<Value> = list
             .iter()
             .filter_map(|v| {
-                let mapped = call_closure(closure, &[*v]);
+                let mapped = call_value(mapper, &[*v]);
                 if mapped.is_truthy() {
                     Some(mapped)
                 } else {
@@ -1564,30 +1574,32 @@ pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
 
     // Set → Set
     if let Some(set) = collection.as_set() {
-        let filtered: im::HashSet<Value> = set
-            .iter()
-            .filter_map(|v| {
-                let mapped = call_closure(closure, &[*v]);
-                if mapped.is_truthy() {
-                    Some(mapped)
-                } else {
-                    None
+        let mut filtered: im::HashSet<Value> = im::HashSet::new();
+        for v in set.iter() {
+            let mapped = call_value(mapper, &[*v]);
+            if mapped.is_truthy() {
+                if !mapped.is_hashable() {
+                    runtime_error(&format!(
+                        "{} is not hashable and cannot be added to a Set",
+                        type_name(&mapped)
+                    ));
                 }
-            })
-            .collect();
+                filtered.insert(mapped);
+            }
+        }
         return Value::from_set(filtered);
     }
 
     // Dict → Dict (mapper receives value, or (value, key) for 2-arg)
     if let Some(dict) = collection.as_dict() {
-        let is_two_arg = closure.arity >= 2;
+        let is_two_arg = arity >= 2;
         let filtered: im::HashMap<Value, Value> = dict
             .iter()
             .filter_map(|(k, v)| {
                 let mapped = if is_two_arg {
-                    call_closure(closure, &[*v, *k])
+                    call_value(mapper, &[*v, *k])
                 } else {
-                    call_closure(closure, &[*v])
+                    call_value(mapper, &[*v])
                 };
                 if mapped.is_truthy() {
                     Some((*k, mapped))
@@ -1606,7 +1618,7 @@ pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
             .graphemes(true)
             .filter_map(|g| {
                 let char_val = Value::from_string(g.to_string());
-                let mapped = call_closure(closure, &[char_val]);
+                let mapped = call_value(mapper, &[char_val]);
                 if mapped.is_truthy() {
                     Some(mapped)
                 } else {
@@ -1617,62 +1629,18 @@ pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
         return Value::from_list(filtered);
     }
 
-    // LazySequence (including Range) → List
+    // LazySequence (including Range) → LazySequence
     if let Some(lazy) = collection.as_lazy_sequence() {
-        use crate::heap::LazySeqKind;
-
-        // Handle Iterate specially - iterate until finding matches
-        // For infinite sequences, we iterate until we find results
-        // This is commonly used as `iterate(...) |> filter_map(f) |> first`
-        if let LazySeqKind::Iterate {
-            generator,
-            current,
-            index: cached_index,
-        } = &lazy.kind
-        {
-            let mut result: im::Vector<Value> = im::Vector::new();
-            let mut cur_val = *current.borrow();
-            let mut cur_idx = *cached_index.borrow();
-
-            // Iterate until we find a truthy result (with a safety limit)
-            // Use call_value instead of call_closure to support closures with mutable cells
-            const MAX_ITERATIONS: usize = 10_000_000;
-            for _ in 0..MAX_ITERATIONS {
-                let mapped = call_value(mapper, &[cur_val]);
-                if mapped.is_truthy() {
-                    result.push_back(mapped);
-                    // For typical use with `first`, we only need one result
-                    // Continue to next value for state update
-                    cur_val = call_value(*generator, &[cur_val]);
-                    cur_idx += 1;
-                    break;
-                }
-                cur_val = call_value(*generator, &[cur_val]);
-                cur_idx += 1;
-            }
-
-            // Update cached state
-            *current.borrow_mut() = cur_val;
-            *cached_index.borrow_mut() = cur_idx;
-
-            return Value::from_list(result);
-        }
-
-        // For other lazy sequences, use next() and collect eagerly
-        let mut result: im::Vector<Value> = im::Vector::new();
-        let mut current_seq = lazy.clone();
-        while let Some((val, next_seq)) = current_seq.next() {
-            let mapped = call_closure(closure, &[val]);
-            if mapped.is_truthy() {
-                result.push_back(mapped);
-            }
-            current_seq = *next_seq;
-        }
-        return Value::from_list(result);
+        let lazy_filter_map = LazySequenceObject::new(LazySeqKind::FilterMap {
+            source: Box::new(lazy.clone()),
+            mapper,
+        });
+        return Value::from_lazy_sequence(lazy_filter_map);
     }
 
-    // Unsupported type - return empty list
-    Value::from_list(im::Vector::new())
+    runtime_error(
+        "filter_map(mapper, collection) expects List, Set, Dictionary, String, Range, or LazySequence",
+    )
 }
 
 /// `find_map(mapper, collection)` → Value | Nil
@@ -1684,16 +1652,15 @@ pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
 /// - 1..5 |> find_map(|v| if v % 2 { v * 2 }) → 2  (Range support)
 #[no_mangle]
 pub extern "C" fn rt_find_map(mapper: Value, collection: Value) -> Value {
-    // Get the closure - if not a closure, return nil
-    let closure = match mapper.as_closure() {
-        Some(c) => c,
-        None => return Value::nil(),
-    };
+    if !is_callable(&mapper) {
+        runtime_error("find_map(mapper, collection) expects a function");
+    }
+    let arity = expect_callable_arity("find_map(mapper, collection)", &mapper);
 
     // List
     if let Some(list) = collection.as_list() {
         for v in list.iter() {
-            let mapped = call_closure(closure, &[*v]);
+            let mapped = call_value(mapper, &[*v]);
             if mapped.is_truthy() {
                 return mapped;
             }
@@ -1704,7 +1671,7 @@ pub extern "C" fn rt_find_map(mapper: Value, collection: Value) -> Value {
     // Set
     if let Some(set) = collection.as_set() {
         for v in set.iter() {
-            let mapped = call_closure(closure, &[*v]);
+            let mapped = call_value(mapper, &[*v]);
             if mapped.is_truthy() {
                 return mapped;
             }
@@ -1714,12 +1681,12 @@ pub extern "C" fn rt_find_map(mapper: Value, collection: Value) -> Value {
 
     // Dict (mapper receives value, or (value, key) for 2-arg)
     if let Some(dict) = collection.as_dict() {
-        let is_two_arg = closure.arity >= 2;
+        let is_two_arg = arity >= 2;
         for (k, v) in dict.iter() {
             let mapped = if is_two_arg {
-                call_closure(closure, &[*v, *k])
+                call_value(mapper, &[*v, *k])
             } else {
-                call_closure(closure, &[*v])
+                call_value(mapper, &[*v])
             };
             if mapped.is_truthy() {
                 return mapped;
@@ -1733,7 +1700,7 @@ pub extern "C" fn rt_find_map(mapper: Value, collection: Value) -> Value {
         use unicode_segmentation::UnicodeSegmentation;
         for g in s.graphemes(true) {
             let char_val = Value::from_string(g.to_string());
-            let mapped = call_closure(closure, &[char_val]);
+            let mapped = call_value(mapper, &[char_val]);
             if mapped.is_truthy() {
                 return mapped;
             }
@@ -1741,21 +1708,20 @@ pub extern "C" fn rt_find_map(mapper: Value, collection: Value) -> Value {
         return Value::nil();
     }
 
-    // LazySequence (including Range)
+    // LazySequence (including Range, Map, Filter, Iterate, etc.)
     if let Some(lazy) = collection.as_lazy_sequence() {
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
-            let mapped = call_closure(closure, &[val]);
+        let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        while let Some((val, next_seq)) = lazy_next_with_closures(&current) {
+            let mapped = call_value(mapper, &[val]);
             if mapped.is_truthy() {
                 return mapped;
             }
-            current = *next_seq;
+            current = next_seq;
         }
         return Value::nil();
     }
 
-    // Unsupported type - return nil
-    Value::nil()
+    runtime_error("find_map(mapper, collection) expects List, Set, Dictionary, String, Range, or LazySequence")
 }
 
 // ============================================================================
@@ -1785,10 +1751,10 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
     let _guard = IterationGuard;
 
     // Check if reducer is callable
-    let arity = match get_callable_arity(&reducer) {
-        Some(a) => a,
-        None => return Value::nil(),
-    };
+    if !is_callable(&reducer) {
+        runtime_error("reduce(reducer, collection) expects a function");
+    }
+    let arity = expect_callable_arity("reduce(reducer, collection)", &reducer);
 
     // Helper for the common reduction logic
     // Returns None if the collection is empty
@@ -1882,17 +1848,31 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
         return acc;
     }
 
-    // LazySequence - collect and reduce
-    // For Map, Filter, Zip etc. we need to collect first since they require closure evaluation
+    // LazySequence - reduce lazily to support unbounded sequences with break
     if let Some(lazy) = collection.as_lazy_sequence() {
-        let elements = collect_bounded_lazy(lazy);
-        return match do_reduce(reducer, elements.into_iter()) {
+        let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        let (first_val, next_seq) = match lazy_next_with_closures(&current) {
             Some(v) => v,
             None => runtime_error("reduce on empty collection"),
         };
+        let mut acc = first_val;
+        current = next_seq;
+
+        while let Some((val, next_lazy)) = lazy_next_with_closures(&current) {
+            acc = call_value(reducer, &[acc, val]);
+            if break_occurred() {
+                if let Some(break_val) = take_break_value() {
+                    return break_val;
+                }
+                return acc;
+            }
+            current = next_lazy;
+        }
+
+        return acc;
     }
 
-    Value::nil()
+    runtime_error("reduce(reducer, collection) expects List, Set, Dictionary, String, Range, or LazySequence")
 }
 
 /// `fold(initial, folder, collection)` → Value
@@ -1917,18 +1897,17 @@ pub extern "C" fn rt_fold(initial: Value, folder: Value, collection: Value) -> V
     }
     let _guard = IterationGuard;
 
-    // Get the closure - if not a closure, return initial
-    let closure = match folder.as_closure() {
-        Some(c) => c,
-        None => return initial,
-    };
+    if !is_callable(&folder) {
+        runtime_error("fold(initial, folder, collection) expects a function");
+    }
+    let arity = expect_callable_arity("fold(initial, folder, collection)", &folder);
 
     let mut acc = initial;
 
     // List
     if let Some(list) = collection.as_list() {
         for v in list.iter() {
-            acc = call_closure(closure, &[acc, *v]);
+            acc = call_value(folder, &[acc, *v]);
             if break_occurred() {
                 if let Some(break_val) = take_break_value() {
                     return break_val;
@@ -1942,7 +1921,7 @@ pub extern "C" fn rt_fold(initial: Value, folder: Value, collection: Value) -> V
     // Set
     if let Some(set) = collection.as_set() {
         for v in set.iter() {
-            acc = call_closure(closure, &[acc, *v]);
+            acc = call_value(folder, &[acc, *v]);
             if break_occurred() {
                 if let Some(break_val) = take_break_value() {
                     return break_val;
@@ -1955,12 +1934,12 @@ pub extern "C" fn rt_fold(initial: Value, folder: Value, collection: Value) -> V
 
     // Dict (folder receives acc, value, or acc, value, key for 3-arg)
     if let Some(dict) = collection.as_dict() {
-        let is_three_arg = closure.arity >= 3;
+        let is_three_arg = arity >= 3;
         for (k, v) in dict.iter() {
             acc = if is_three_arg {
-                call_closure(closure, &[acc, *v, *k])
+                call_value(folder, &[acc, *v, *k])
             } else {
-                call_closure(closure, &[acc, *v])
+                call_value(folder, &[acc, *v])
             };
             if break_occurred() {
                 if let Some(break_val) = take_break_value() {
@@ -1977,7 +1956,7 @@ pub extern "C" fn rt_fold(initial: Value, folder: Value, collection: Value) -> V
         use unicode_segmentation::UnicodeSegmentation;
         for g in s.graphemes(true) {
             let char_val = Value::from_string(g.to_string());
-            acc = call_closure(closure, &[acc, char_val]);
+            acc = call_value(folder, &[acc, char_val]);
             if break_occurred() {
                 if let Some(break_val) = take_break_value() {
                     return break_val;
@@ -1988,70 +1967,23 @@ pub extern "C" fn rt_fold(initial: Value, folder: Value, collection: Value) -> V
         return acc;
     }
 
-    // LazySequence - iterate using appropriate method
-    // Map/Filter/Zip require closure evaluation, so we force them to a list first
-    // Iterate is handled specially to evaluate lazily one element at a time
+    // LazySequence - iterate lazily for all variants
     if let Some(lazy) = collection.as_lazy_sequence() {
-        use crate::heap::LazySeqKind;
-
-        // Handle Iterate specially - evaluate generator lazily one element at a time
-        if let LazySeqKind::Iterate {
-            generator,
-            current: current_cell,
-            ..
-        } = &lazy.kind
-        {
-            let mut cur = *current_cell.borrow();
-            loop {
-                acc = call_closure(closure, &[acc, cur]);
-                if break_occurred() {
-                    if let Some(break_val) = take_break_value() {
-                        return break_val;
-                    }
-                    return acc;
+        let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        while let Some((val, next_lazy)) = lazy_next_with_closures(&current) {
+            acc = call_value(folder, &[acc, val]);
+            if break_occurred() {
+                if let Some(break_val) = take_break_value() {
+                    return break_val;
                 }
-                // Generate next value
-                cur = call_value(*generator, &[cur]);
+                return acc;
             }
+            current = next_lazy;
         }
-
-        // Check if this is a Map/Filter/Zip that needs forcing
-        let needs_forcing = matches!(
-            &lazy.kind,
-            LazySeqKind::Map { .. } | LazySeqKind::Filter { .. } | LazySeqKind::Zip { .. }
-        );
-
-        if needs_forcing {
-            // Force to list first, then iterate
-            let elements = collect_bounded_lazy(lazy);
-            for v in elements.iter() {
-                acc = call_closure(closure, &[acc, *v]);
-                if break_occurred() {
-                    if let Some(break_val) = take_break_value() {
-                        return break_val;
-                    }
-                    return acc;
-                }
-            }
-            return acc;
-        } else {
-            // Use next() for Range, Repeat, Cycle, etc.
-            let mut current = lazy.clone();
-            while let Some((val, next_lazy)) = current.next() {
-                acc = call_closure(closure, &[acc, val]);
-                if break_occurred() {
-                    if let Some(break_val) = take_break_value() {
-                        return break_val;
-                    }
-                    return acc;
-                }
-                current = *next_lazy;
-            }
-            return acc;
-        }
+        return acc;
     }
 
-    acc
+    runtime_error("fold(initial, folder, collection) expects List, Set, Dictionary, String, Range, or LazySequence")
 }
 
 /// `scan(initial, folder, collection)` → List
@@ -2062,11 +1994,10 @@ pub extern "C" fn rt_fold(initial: Value, folder: Value, collection: Value) -> V
 /// - scan(0, +, [1, 2]) → [0, 1, 3]
 #[no_mangle]
 pub extern "C" fn rt_scan(initial: Value, folder: Value, collection: Value) -> Value {
-    // Get the closure - if not a closure, return empty list
-    let closure = match folder.as_closure() {
-        Some(c) => c,
-        None => return Value::from_list(im::Vector::new()),
-    };
+    if !is_callable(&folder) {
+        runtime_error("scan(initial, folder, collection) expects a function");
+    }
+    let arity = expect_callable_arity("scan(initial, folder, collection)", &folder);
 
     let mut acc = initial;
     let mut results: im::Vector<Value> = im::Vector::new();
@@ -2077,7 +2008,7 @@ pub extern "C" fn rt_scan(initial: Value, folder: Value, collection: Value) -> V
     // List
     if let Some(list) = collection.as_list() {
         for v in list.iter() {
-            acc = call_closure(closure, &[acc, *v]);
+            acc = call_value(folder, &[acc, *v]);
             results.push_back(acc);
         }
         return Value::from_list(results);
@@ -2086,7 +2017,7 @@ pub extern "C" fn rt_scan(initial: Value, folder: Value, collection: Value) -> V
     // Set
     if let Some(set) = collection.as_set() {
         for v in set.iter() {
-            acc = call_closure(closure, &[acc, *v]);
+            acc = call_value(folder, &[acc, *v]);
             results.push_back(acc);
         }
         return Value::from_list(results);
@@ -2094,12 +2025,12 @@ pub extern "C" fn rt_scan(initial: Value, folder: Value, collection: Value) -> V
 
     // Dict (folder receives acc, value, or acc, value, key for 3-arg)
     if let Some(dict) = collection.as_dict() {
-        let is_three_arg = closure.arity >= 3;
+        let is_three_arg = arity >= 3;
         for (k, v) in dict.iter() {
             acc = if is_three_arg {
-                call_closure(closure, &[acc, *v, *k])
+                call_value(folder, &[acc, *v, *k])
             } else {
-                call_closure(closure, &[acc, *v])
+                call_value(folder, &[acc, *v])
             };
             results.push_back(acc);
         }
@@ -2111,25 +2042,35 @@ pub extern "C" fn rt_scan(initial: Value, folder: Value, collection: Value) -> V
         use unicode_segmentation::UnicodeSegmentation;
         for g in s.graphemes(true) {
             let char_val = Value::from_string(g.to_string());
-            acc = call_closure(closure, &[acc, char_val]);
+            acc = call_value(folder, &[acc, char_val]);
             results.push_back(acc);
         }
         return Value::from_list(results);
     }
 
-    // LazySequence - collect intermediate results
-    // WARNING: Unbounded sequences will loop forever unless break is used
+    // LazySequence - only bounded ranges are supported per LANG.txt
     if let Some(lazy) = collection.as_lazy_sequence() {
-        let mut current = lazy.clone();
-        while let Some((val, next_lazy)) = current.next() {
-            acc = call_closure(closure, &[acc, val]);
-            results.push_back(acc);
-            current = *next_lazy;
+        use crate::heap::LazySeqKind;
+        match &lazy.kind {
+            LazySeqKind::Range { end: Some(_), .. } => {
+                let mut current = lazy.clone();
+                while let Some((val, next_lazy)) = current.next() {
+                    acc = call_value(folder, &[acc, val]);
+                    results.push_back(acc);
+                    current = *next_lazy;
+                }
+                return Value::from_list(results);
+            }
+            LazySeqKind::Range { end: None, .. } => {
+                runtime_error("scan does not support unbounded ranges");
+            }
+            _ => {
+                runtime_error("scan does not support lazy sequences");
+            }
         }
-        return Value::from_list(results);
     }
 
-    Value::from_list(results)
+    runtime_error("scan(initial, folder, collection) expects List, Set, Dictionary, String, or Range")
 }
 
 /// `fold_s(initial, folder, collection)` → Value
@@ -2142,24 +2083,17 @@ pub extern "C" fn rt_scan(initial: Value, folder: Value, collection: Value) -> V
 /// - fold_s([0, 1], |[a, b], _| [b, a + b], 1..10) → 55 (Fibonacci)
 #[no_mangle]
 pub extern "C" fn rt_fold_s(initial: Value, folder: Value, collection: Value) -> Value {
-    // Get the closure - if not a closure, return first element of initial
-    let closure = match folder.as_closure() {
-        Some(c) => c,
-        None => {
-            // Return first element of initial if it's a list
-            if let Some(list) = initial.as_list() {
-                return list.front().copied().unwrap_or_else(Value::nil);
-            }
-            return initial;
-        }
-    };
+    if !is_callable(&folder) {
+        runtime_error("fold_s(initial, folder, collection) expects a function");
+    }
+    let arity = expect_callable_arity("fold_s(initial, folder, collection)", &folder);
 
     let mut acc = initial;
 
     // List
     if let Some(list) = collection.as_list() {
         for v in list.iter() {
-            acc = call_closure(closure, &[acc, *v]);
+            acc = call_value(folder, &[acc, *v]);
         }
         // Return first element of final state
         if let Some(state_list) = acc.as_list() {
@@ -2171,7 +2105,7 @@ pub extern "C" fn rt_fold_s(initial: Value, folder: Value, collection: Value) ->
     // Set
     if let Some(set) = collection.as_set() {
         for v in set.iter() {
-            acc = call_closure(closure, &[acc, *v]);
+            acc = call_value(folder, &[acc, *v]);
         }
         if let Some(state_list) = acc.as_list() {
             return state_list.front().copied().unwrap_or_else(Value::nil);
@@ -2181,12 +2115,12 @@ pub extern "C" fn rt_fold_s(initial: Value, folder: Value, collection: Value) ->
 
     // Dict
     if let Some(dict) = collection.as_dict() {
-        let is_three_arg = closure.arity >= 3;
+        let is_three_arg = arity >= 3;
         for (k, v) in dict.iter() {
             acc = if is_three_arg {
-                call_closure(closure, &[acc, *v, *k])
+                call_value(folder, &[acc, *v, *k])
             } else {
-                call_closure(closure, &[acc, *v])
+                call_value(folder, &[acc, *v])
             };
         }
         if let Some(state_list) = acc.as_list() {
@@ -2200,7 +2134,7 @@ pub extern "C" fn rt_fold_s(initial: Value, folder: Value, collection: Value) ->
         use unicode_segmentation::UnicodeSegmentation;
         for g in s.graphemes(true) {
             let char_val = Value::from_string(g.to_string());
-            acc = call_closure(closure, &[acc, char_val]);
+            acc = call_value(folder, &[acc, char_val]);
         }
         if let Some(state_list) = acc.as_list() {
             return state_list.front().copied().unwrap_or_else(Value::nil);
@@ -2211,10 +2145,10 @@ pub extern "C" fn rt_fold_s(initial: Value, folder: Value, collection: Value) ->
     // LazySequence (including Ranges) - iterate through the sequence
     // WARNING: Unbounded sequences will loop forever unless break is used
     if let Some(lazy) = collection.as_lazy_sequence() {
-        let mut current = lazy.clone();
-        while let Some((val, next_lazy)) = current.next() {
-            acc = call_closure(closure, &[acc, val]);
-            current = *next_lazy;
+        let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        while let Some((val, next_lazy)) = lazy_next_with_closures(&current) {
+            acc = call_value(folder, &[acc, val]);
+            current = next_lazy;
         }
         if let Some(state_list) = acc.as_list() {
             return state_list.front().copied().unwrap_or_else(Value::nil);
@@ -2222,11 +2156,7 @@ pub extern "C" fn rt_fold_s(initial: Value, folder: Value, collection: Value) ->
         return acc;
     }
 
-    // For empty collection, return first element of initial
-    if let Some(state_list) = acc.as_list() {
-        return state_list.front().copied().unwrap_or_else(Value::nil);
-    }
-    acc
+    runtime_error("fold_s(initial, folder, collection) expects List, Set, Dictionary, String, Range, or LazySequence")
 }
 
 // ============================================================================
@@ -2248,16 +2178,15 @@ pub extern "C" fn rt_fold_s(initial: Value, folder: Value, collection: Value) ->
 /// - find(_ > 5, 1..10) → 6  (Range support)
 #[no_mangle]
 pub extern "C" fn rt_find(predicate: Value, collection: Value) -> Value {
-    // Get the closure - if not a closure, return nil
-    let closure = match predicate.as_closure() {
-        Some(c) => c,
-        None => return Value::nil(),
-    };
+    if !is_callable(&predicate) {
+        runtime_error("find(predicate, collection) expects a function");
+    }
+    let arity = expect_callable_arity("find(predicate, collection)", &predicate);
 
     // List
     if let Some(list) = collection.as_list() {
         for v in list.iter() {
-            if call_closure(closure, &[*v]).is_truthy() {
+            if call_value(predicate, &[*v]).is_truthy() {
                 return *v;
             }
         }
@@ -2267,7 +2196,7 @@ pub extern "C" fn rt_find(predicate: Value, collection: Value) -> Value {
     // Set
     if let Some(set) = collection.as_set() {
         for v in set.iter() {
-            if call_closure(closure, &[*v]).is_truthy() {
+            if call_value(predicate, &[*v]).is_truthy() {
                 return *v;
             }
         }
@@ -2276,12 +2205,12 @@ pub extern "C" fn rt_find(predicate: Value, collection: Value) -> Value {
 
     // Dict (predicate receives value, or (value, key) for 2-arg)
     if let Some(dict) = collection.as_dict() {
-        let is_two_arg = closure.arity >= 2;
+        let is_two_arg = arity >= 2;
         for (k, v) in dict.iter() {
             let matches = if is_two_arg {
-                call_closure(closure, &[*v, *k])
+                call_value(predicate, &[*v, *k])
             } else {
-                call_closure(closure, &[*v])
+                call_value(predicate, &[*v])
             };
             if matches.is_truthy() {
                 return *v;
@@ -2295,7 +2224,7 @@ pub extern "C" fn rt_find(predicate: Value, collection: Value) -> Value {
         use unicode_segmentation::UnicodeSegmentation;
         for g in s.graphemes(true) {
             let char_val = Value::from_string(g.to_string());
-            if call_closure(closure, &[char_val]).is_truthy() {
+            if call_value(predicate, &[char_val]).is_truthy() {
                 return Value::from_string(g.to_string());
             }
         }
@@ -2304,288 +2233,23 @@ pub extern "C" fn rt_find(predicate: Value, collection: Value) -> Value {
 
     // LazySequence (including Range, Map, Filter, etc.)
     if let Some(lazy) = collection.as_lazy_sequence() {
-        return find_in_lazy(lazy, closure);
+        return find_in_lazy(lazy, predicate);
     }
 
-    Value::nil()
+    runtime_error("find(predicate, collection) expects List, Set, Dictionary, String, Range, or LazySequence")
 }
 
 /// Helper to find first matching element in any lazy sequence
 /// Handles all lazy sequence variants including Map, Filter, and Iterate
-fn find_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> Value {
-    // Safety limit to prevent infinite loops
-    const MAX_ITERATIONS: usize = 10_000_000;
-
-    match &lazy.kind {
-        LazySeqKind::Repeat { value } => {
-            // Repeat is infinite - check the repeated value once
-            if call_closure(predicate, &[*value]).is_truthy() {
-                return *value;
-            }
-            // If not found in first iteration, will never be found - return nil
-            Value::nil()
+fn find_in_lazy(lazy: &LazySequenceObject, predicate: Value) -> Value {
+    let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+    while let Some((val, next_seq)) = lazy_next_with_closures(&current) {
+        if call_value(predicate, &[val]).is_truthy() {
+            return val;
         }
-
-        LazySeqKind::Cycle { source, index } => {
-            if source.is_empty() {
-                return Value::nil();
-            }
-            // Check each element in the source once
-            for (i, _val) in source.iter().enumerate() {
-                let check_idx = (*index + i) % source.len();
-                if call_closure(predicate, &[source[check_idx]]).is_truthy() {
-                    return source[check_idx];
-                }
-            }
-            Value::nil()
-        }
-
-        LazySeqKind::Range {
-            current,
-            end,
-            inclusive,
-            step,
-        } => {
-            let mut cur = *current;
-            for _ in 0..MAX_ITERATIONS {
-                // Check if exhausted
-                if let Some(end_val) = end {
-                    let at_end = if *inclusive {
-                        if *step > 0 {
-                            cur > *end_val
-                        } else {
-                            cur < *end_val
-                        }
-                    } else if *step > 0 {
-                        cur >= *end_val
-                    } else {
-                        cur <= *end_val
-                    };
-                    if at_end {
-                        return Value::nil();
-                    }
-                }
-                let val = Value::from_integer(cur);
-                if call_closure(predicate, &[val]).is_truthy() {
-                    return val;
-                }
-                cur += step;
-            }
-            Value::nil()
-        }
-
-        LazySeqKind::Iterate {
-            generator,
-            current,
-            index: _,
-        } => {
-            // Generator can be a closure, partial application, or memoized closure
-            let mut cur = *current.borrow();
-            for _ in 0..MAX_ITERATIONS {
-                if call_closure(predicate, &[cur]).is_truthy() {
-                    return cur;
-                }
-                cur = call_value(*generator, &[cur]);
-            }
-            Value::nil()
-        }
-
-        LazySeqKind::Map { source, mapper } => {
-            if let Some(map_closure) = mapper.as_closure() {
-                // Iterate through source elements, map each, check predicate
-                let source_elements = collect_bounded_lazy(source);
-                for val in source_elements {
-                    let mapped = call_closure(map_closure, &[val]);
-                    if call_closure(predicate, &[mapped]).is_truthy() {
-                        return mapped;
-                    }
-                }
-            }
-            Value::nil()
-        }
-
-        LazySeqKind::Filter {
-            source,
-            predicate: filter_pred,
-        } => {
-            if let Some(filter_closure) = filter_pred.as_closure() {
-                // Iterate through source elements, filter, then check predicate
-                let source_elements = collect_bounded_lazy(source);
-                for val in source_elements {
-                    if call_closure(filter_closure, &[val]).is_truthy()
-                        && call_closure(predicate, &[val]).is_truthy()
-                    {
-                        return val;
-                    }
-                }
-            }
-            Value::nil()
-        }
-
-        LazySeqKind::Skip { source, remaining } => {
-            let source_elements = collect_bounded_lazy(source);
-            for (i, val) in source_elements.into_iter().enumerate() {
-                if i >= *remaining && call_closure(predicate, &[val]).is_truthy() {
-                    return val;
-                }
-            }
-            Value::nil()
-        }
-
-        LazySeqKind::Combinations {
-            source,
-            size,
-            indices,
-            done,
-        } => {
-            if *done || source.is_empty() || *size == 0 || *size > source.len() {
-                return Value::nil();
-            }
-
-            let mut current_indices = indices.clone();
-            let n = source.len();
-
-            for _ in 0..MAX_ITERATIONS {
-                let combination: im::Vector<Value> =
-                    current_indices.iter().map(|&i| source[i]).collect();
-                let val = Value::from_list(combination);
-
-                if call_closure(predicate, &[val]).is_truthy() {
-                    return val;
-                }
-
-                // Advance to next combination
-                let mut i = *size - 1;
-                while current_indices[i] == n - size + i {
-                    if i == 0 {
-                        return Value::nil(); // All combinations exhausted
-                    }
-                    i -= 1;
-                }
-                current_indices[i] += 1;
-                for j in (i + 1)..*size {
-                    current_indices[j] = current_indices[j - 1] + 1;
-                }
-            }
-            Value::nil()
-        }
-
-        LazySeqKind::Zip { sources } => {
-            if sources.is_empty() {
-                return Value::nil();
-            }
-
-            // Check if any source contains an Iterate (directly or via Skip)
-            let has_iterate = sources.iter().any(|s| {
-                matches!(&s.kind, LazySeqKind::Iterate { .. })
-                    || matches!(&s.kind, LazySeqKind::Skip { source, .. }
-                        if matches!(&source.kind, LazySeqKind::Iterate { .. }))
-            });
-
-            if has_iterate {
-                // Extract (generator, current_value, skip_remaining) for each Iterate source
-                // For non-Iterate sources, collect them eagerly
-                let mut generators: Vec<Option<Value>> = Vec::with_capacity(sources.len());
-                let mut currents: Vec<Value> = Vec::with_capacity(sources.len());
-                let mut other_vecs: Vec<Option<(im::Vector<Value>, usize)>> =
-                    Vec::with_capacity(sources.len());
-
-                for s in sources.iter() {
-                    match &s.kind {
-                        LazySeqKind::Iterate {
-                            generator,
-                            current,
-                            ..
-                        } => {
-                            generators.push(Some(*generator));
-                            currents.push(*current.borrow());
-                            other_vecs.push(None);
-                        }
-                        LazySeqKind::Skip { source, remaining } => {
-                            if let LazySeqKind::Iterate {
-                                generator,
-                                current,
-                                ..
-                            } = &source.kind
-                            {
-                                // Advance past skip count
-                                let mut cur = *current.borrow();
-                                for _ in 0..*remaining {
-                                    cur = call_value(*generator, &[cur]);
-                                }
-                                generators.push(Some(*generator));
-                                currents.push(cur);
-                                other_vecs.push(None);
-                            } else {
-                                generators.push(None);
-                                currents.push(Value::nil());
-                                other_vecs.push(Some((collect_bounded_lazy(s), 0)));
-                            }
-                        }
-                        _ => {
-                            generators.push(None);
-                            currents.push(Value::nil());
-                            other_vecs.push(Some((collect_bounded_lazy(s), 0)));
-                        }
-                    }
-                }
-
-                // Iterate in lockstep
-                for _ in 0..MAX_ITERATIONS {
-                    // Build tuple from current values
-                    let mut tuple: im::Vector<Value> = im::Vector::new();
-                    let mut all_valid = true;
-
-                    for i in 0..sources.len() {
-                        if generators[i].is_some() {
-                            tuple.push_back(currents[i]);
-                        } else if let Some((ref vec, idx)) = other_vecs[i] {
-                            if idx < vec.len() {
-                                tuple.push_back(vec[idx]);
-                            } else {
-                                all_valid = false;
-                                break;
-                            }
-                        }
-                    }
-
-                    if !all_valid {
-                        return Value::nil();
-                    }
-
-                    let val = Value::from_list(tuple);
-                    if call_closure(predicate, &[val]).is_truthy() {
-                        return val;
-                    }
-
-                    // Advance all sources
-                    for i in 0..sources.len() {
-                        if let Some(gen) = generators[i] {
-                            currents[i] = call_value(gen, &[currents[i]]);
-                        } else if let Some((_, ref mut idx)) = other_vecs[i] {
-                            *idx += 1;
-                        }
-                    }
-                }
-                return Value::nil();
-            }
-
-            // For non-iterate sources, collect and iterate (original behavior)
-            let source_vecs: Vec<im::Vector<Value>> =
-                sources.iter().map(collect_bounded_lazy).collect();
-
-            let min_len = source_vecs.iter().map(|v| v.len()).min().unwrap_or(0);
-
-            for i in 0..min_len {
-                let tuple: im::Vector<Value> = source_vecs.iter().map(|v| v[i]).collect();
-                let val = Value::from_list(tuple);
-                if call_closure(predicate, &[val]).is_truthy() {
-                    return val;
-                }
-            }
-            Value::nil()
-        }
+        current = next_seq;
     }
+    Value::nil()
 }
 
 /// `count(predicate, collection)` → Integer
@@ -2599,11 +2263,10 @@ fn find_in_lazy(lazy: &LazySequenceObject, predicate: &ClosureObject) -> Value {
 /// - count(_ % 2, 1..10) → 5  (Range support)
 #[no_mangle]
 pub extern "C" fn rt_count(predicate: Value, collection: Value) -> Value {
-    // Check if predicate is callable
-    let arity = match get_callable_arity(&predicate) {
-        Some(a) => a,
-        None => return Value::from_integer(0),
-    };
+    if !is_callable(&predicate) {
+        runtime_error("count(predicate, collection) expects a function");
+    }
+    let arity = expect_callable_arity("count(predicate, collection)", &predicate);
 
     let mut count: i64 = 0;
 
@@ -2655,70 +2318,44 @@ pub extern "C" fn rt_count(predicate: Value, collection: Value) -> Value {
         return Value::from_integer(count);
     }
 
-    // LazySequence (including Range, Map, Filter, etc.)
+    // LazySequence (Range only)
     if let Some(lazy) = collection.as_lazy_sequence() {
         return Value::from_integer(count_in_lazy(lazy, predicate));
     }
 
-    Value::from_integer(count)
+    runtime_error("count(predicate, collection) expects List, Set, Dictionary, String, or Range")
 }
 
 /// Helper to count matching elements in any lazy sequence
 /// Handles all lazy sequence variants including Map, Filter, and Iterate
 fn count_in_lazy(lazy: &LazySequenceObject, predicate: Value) -> i64 {
-    // Safety limit to prevent infinite loops
-    const MAX_ITERATIONS: usize = 10_000_000;
     let mut count: i64 = 0;
 
     match &lazy.kind {
-        LazySeqKind::Repeat { value } => {
-            // Repeat is infinite - count would be infinite if match
-            // Just return 0 since we can't reasonably count infinite elements
-            if call_value(predicate, &[*value]).is_truthy() {
-                // Would be infinite, return 0 as placeholder
-            }
-            0
-        }
-
-        LazySeqKind::Cycle { source, .. } => {
-            if source.is_empty() {
-                return 0;
-            }
-            // Count matches in one full cycle
-            for val in source.iter() {
-                if call_value(predicate, &[*val]).is_truthy() {
-                    count += 1;
-                }
-            }
-            count
-        }
-
         LazySeqKind::Range {
             current,
             end,
             inclusive,
             step,
         } => {
+            let end_val = match end {
+                Some(v) => *v,
+                None => runtime_error("count does not support unbounded ranges"),
+            };
             let mut cur = *current;
-            for _ in 0..MAX_ITERATIONS {
-                // Check if exhausted
-                if let Some(end_val) = end {
-                    let at_end = if *inclusive {
-                        if *step > 0 {
-                            cur > *end_val
-                        } else {
-                            cur < *end_val
-                        }
-                    } else if *step > 0 {
-                        cur >= *end_val
+            loop {
+                let at_end = if *inclusive {
+                    if *step > 0 {
+                        cur > end_val
                     } else {
-                        cur <= *end_val
-                    };
-                    if at_end {
-                        return count;
+                        cur < end_val
                     }
+                } else if *step > 0 {
+                    cur >= end_val
                 } else {
-                    // Unbounded range - can't count all elements
+                    cur <= end_val
+                };
+                if at_end {
                     return count;
                 }
                 let val = Value::from_integer(cur);
@@ -2727,107 +2364,8 @@ fn count_in_lazy(lazy: &LazySequenceObject, predicate: Value) -> i64 {
                 }
                 cur += step;
             }
-            count
         }
-
-        LazySeqKind::Iterate { .. } => {
-            // Iterate is potentially infinite, return 0
-            0
-        }
-
-        LazySeqKind::Map { source, mapper } => {
-            let source_elements = collect_bounded_lazy(source);
-            for val in source_elements {
-                let mapped = call_value(*mapper, &[val]);
-                if call_value(predicate, &[mapped]).is_truthy() {
-                    count += 1;
-                }
-            }
-            count
-        }
-
-        LazySeqKind::Filter {
-            source,
-            predicate: filter_pred,
-        } => {
-            let source_elements = collect_bounded_lazy(source);
-            for val in source_elements {
-                if call_value(*filter_pred, &[val]).is_truthy()
-                    && call_value(predicate, &[val]).is_truthy()
-                {
-                    count += 1;
-                }
-            }
-            count
-        }
-
-        LazySeqKind::Skip { source, remaining } => {
-            let source_elements = collect_bounded_lazy(source);
-            for (i, val) in source_elements.into_iter().enumerate() {
-                if i >= *remaining && call_value(predicate, &[val]).is_truthy() {
-                    count += 1;
-                }
-            }
-            count
-        }
-
-        LazySeqKind::Combinations {
-            source,
-            size,
-            indices,
-            done,
-        } => {
-            if *done || source.is_empty() || *size == 0 || *size > source.len() {
-                return 0;
-            }
-
-            let mut current_indices = indices.clone();
-            let n = source.len();
-
-            for _ in 0..MAX_ITERATIONS {
-                let combination: im::Vector<Value> =
-                    current_indices.iter().map(|&i| source[i]).collect();
-                let val = Value::from_list(combination);
-
-                if call_value(predicate, &[val]).is_truthy() {
-                    count += 1;
-                }
-
-                // Advance to next combination
-                let mut i = *size - 1;
-                while current_indices[i] == n - size + i {
-                    if i == 0 {
-                        return count; // All combinations exhausted
-                    }
-                    i -= 1;
-                }
-                current_indices[i] += 1;
-                for j in (i + 1)..*size {
-                    current_indices[j] = current_indices[j - 1] + 1;
-                }
-            }
-            count
-        }
-
-        LazySeqKind::Zip { sources } => {
-            if sources.is_empty() {
-                return 0;
-            }
-
-            let source_vecs: Vec<im::Vector<Value>> =
-                sources.iter().map(collect_bounded_lazy).collect();
-
-            let min_len = source_vecs.iter().map(|v| v.len()).min().unwrap_or(0);
-
-            for i in 0..min_len {
-                let tuple: im::Vector<Value> = source_vecs.iter().map(|v| v[i]).collect();
-                let val = Value::from_list(tuple);
-                if call_value(predicate, &[val]).is_truthy() {
-                    count += 1;
-                }
-            }
-            count
-        }
+        _ => runtime_error("count does not support lazy sequences"),
     }
 }
 
@@ -2858,6 +2396,11 @@ pub extern "C" fn rt_sum(collection: Value) -> Value {
         } else if let Some(d) = v.as_decimal() {
             dec_sum += d;
             has_decimal = true;
+        } else {
+            runtime_error(&format!(
+                "sum expects numeric elements, got {}",
+                type_name(&v)
+            ));
         }
     };
 
@@ -2957,7 +2500,7 @@ pub extern "C" fn rt_sum(collection: Value) -> Value {
         };
     }
 
-    Value::from_integer(0)
+    runtime_error("sum(collection) expects List, Set, Dictionary, or Range")
 }
 
 /// Helper: compare two values for ordering
@@ -3323,13 +2866,8 @@ pub extern "C" fn rt_take(total: Value, collection: Value) -> Value {
 /// - sort(>, 1..5) → [4, 3, 2, 1]
 #[no_mangle]
 pub extern "C" fn rt_sort(comparator: Value, collection: Value) -> Value {
-    // Verify comparator is callable (closure, partial app, or memoized)
-    // If not callable, return the collection unchanged
-    if comparator.as_closure().is_none()
-        && comparator.as_partial_application().is_none()
-        && comparator.as_memoized_closure().is_none()
-    {
-        return collection;
+    if !is_callable(&comparator) {
+        runtime_error("sort(comparator, collection) expects a function");
     }
 
     // Helper to sort items - uses call_value to handle all callable types
@@ -3368,17 +2906,20 @@ pub extern "C" fn rt_sort(comparator: Value, collection: Value) -> Value {
 
     // LazySequence (including Range) - collect and sort
     if let Some(lazy) = collection.as_lazy_sequence() {
+        if is_infinite_lazy_sequence(lazy) {
+            runtime_error("sort on unbounded lazy sequence");
+        }
         let mut items: Vec<Value> = Vec::new();
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
+        let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        while let Some((val, next_seq)) = lazy_next_with_closures(&current) {
             items.push(val);
-            current = *next_seq;
+            current = next_seq;
         }
         sort_items(&mut items);
         return Value::from_list(items.into_iter().collect());
     }
 
-    collection
+    runtime_error("sort(comparator, collection) expects List, Set, String, Range, or LazySequence")
 }
 
 /// `reverse(collection)` → Collection
@@ -3406,17 +2947,20 @@ pub extern "C" fn rt_reverse(collection: Value) -> Value {
 
     // LazySequence (including Range) - collect and reverse for bounded sequences
     if let Some(lazy) = collection.as_lazy_sequence() {
+        if is_infinite_lazy_sequence(lazy) {
+            runtime_error("reverse on unbounded lazy sequence");
+        }
         let mut elements: Vec<Value> = Vec::new();
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
+        let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        while let Some((val, next_seq)) = lazy_next_with_closures(&current) {
             elements.push(val);
-            current = *next_seq;
+            current = next_seq;
         }
         elements.reverse();
         return Value::from_list(elements.into_iter().collect());
     }
 
-    collection
+    runtime_error("reverse(collection) expects List, String, Range, or LazySequence")
 }
 
 /// `rotate(steps, collection)` → List
@@ -3521,35 +3065,48 @@ pub extern "C" fn rt_chunk(size: Value, collection: Value) -> Value {
 /// Helper: extract elements from a collection as an iterator
 /// Per LANG.txt §11.10, supports List, Set, Range, String
 fn collect_elements(v: Value) -> Vec<Value> {
-    if let Some(list) = v.as_list() {
-        return list.iter().copied().collect();
-    }
-    if let Some(set) = v.as_set() {
-        return set.iter().copied().collect();
-    }
-    // Range (LazySequence) - iterate to collect bounded range elements
-    if let Some(lazy) = v.as_lazy_sequence() {
+    let elements: Vec<Value> = if let Some(list) = v.as_list() {
+        list.iter().copied().collect()
+    } else if let Some(set) = v.as_set() {
+        set.iter().copied().collect()
+    } else if let Some(lazy) = v.as_lazy_sequence() {
         use crate::heap::LazySeqKind;
-        // Only collect bounded ranges (unbounded would be infinite)
-        if let LazySeqKind::Range { end: Some(_), .. } = &lazy.kind {
-            let mut result = Vec::new();
-            let mut current = lazy.clone();
-            while let Some((val, next_seq)) = current.next() {
-                result.push(val);
-                current = *next_seq;
+        match &lazy.kind {
+            LazySeqKind::Range { end: Some(_), .. } => {
+                let mut result = Vec::new();
+                let mut current = lazy.clone();
+                while let Some((val, next_seq)) = current.next() {
+                    result.push(val);
+                    current = *next_seq;
+                }
+                result
             }
-            return result;
+            LazySeqKind::Range { end: None, .. } => {
+                runtime_error("set operations do not support unbounded ranges");
+            }
+            _ => {
+                runtime_error("set operations expect List, Set, String, or Range");
+            }
+        }
+    } else if let Some(s) = v.as_string() {
+        use unicode_segmentation::UnicodeSegmentation;
+        s.graphemes(true)
+            .map(|g| Value::from_string(g.to_string()))
+            .collect()
+    } else {
+        runtime_error("set operations expect List, Set, String, or Range");
+    };
+
+    for elem in &elements {
+        if !elem.is_hashable() {
+            runtime_error(&format!(
+                "{} is not hashable and cannot be used in set operations",
+                type_name(elem)
+            ));
         }
     }
-    // String - split into grapheme clusters
-    if let Some(s) = v.as_string() {
-        use unicode_segmentation::UnicodeSegmentation;
-        return s
-            .graphemes(true)
-            .map(|g| Value::from_string(g.to_string()))
-            .collect();
-    }
-    vec![]
+
+    elements
 }
 
 /// `union(collection1, collection2)` → Set
@@ -3778,22 +3335,13 @@ pub extern "C" fn rt_includes(collection: Value, value: Value) -> Value {
                 return Value::from_bool(in_bounds && aligned);
             }
         }
-        // Map/Filter/Zip require closure evaluation - force to list first
-        if matches!(
-            &lazy.kind,
-            LazySeqKind::Map { .. } | LazySeqKind::Filter { .. } | LazySeqKind::Zip { .. }
-        ) {
-            let items = collect_bounded_lazy(lazy);
-            let found = items.iter().any(|v| *v == value);
-            return Value::from_bool(found);
-        }
-        // For other lazy sequences, iterate using next()
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
+        // Fall back to lazy iteration for all lazy sequence kinds
+        let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        while let Some((val, next_seq)) = lazy_next_with_closures(&current) {
             if val == value {
                 return Value::from_bool(true);
             }
-            current = *next_seq;
+            current = next_seq;
         }
         return Value::from_bool(false);
     }
@@ -3827,16 +3375,15 @@ pub extern "C" fn rt_excludes(collection: Value, value: Value) -> Value {
 /// - any?(_ % 2 == 0, 1..5) → true  (Range support)
 #[no_mangle]
 pub extern "C" fn rt_any(predicate: Value, collection: Value) -> Value {
-    // Get the closure - if not a closure, return false
-    let closure = match predicate.as_closure() {
-        Some(c) => c,
-        None => return Value::from_bool(false),
-    };
+    if !is_callable(&predicate) {
+        runtime_error("any?(predicate, collection) expects a function");
+    }
+    let _arity = expect_callable_arity("any?(predicate, collection)", &predicate);
 
     // List
     if let Some(list) = collection.as_list() {
         for v in list.iter() {
-            if call_closure(closure, &[*v]).is_truthy() {
+            if call_value(predicate, &[*v]).is_truthy() {
                 return Value::from_bool(true);
             }
         }
@@ -3846,7 +3393,7 @@ pub extern "C" fn rt_any(predicate: Value, collection: Value) -> Value {
     // Set
     if let Some(set) = collection.as_set() {
         for v in set.iter() {
-            if call_closure(closure, &[*v]).is_truthy() {
+            if call_value(predicate, &[*v]).is_truthy() {
                 return Value::from_bool(true);
             }
         }
@@ -3858,7 +3405,7 @@ pub extern "C" fn rt_any(predicate: Value, collection: Value) -> Value {
         use unicode_segmentation::UnicodeSegmentation;
         for g in s.graphemes(true) {
             let char_val = Value::from_string(g.to_string());
-            if call_closure(closure, &[char_val]).is_truthy() {
+            if call_value(predicate, &[char_val]).is_truthy() {
                 return Value::from_bool(true);
             }
         }
@@ -3867,40 +3414,17 @@ pub extern "C" fn rt_any(predicate: Value, collection: Value) -> Value {
 
     // LazySequence (including Range, Map, Filter, Zip, Iterate)
     if let Some(lazy) = collection.as_lazy_sequence() {
-        use crate::heap::LazySeqKind;
-
-        // Check if this needs forcing (Map/Filter/Zip/Iterate)
-        let needs_forcing = matches!(
-            &lazy.kind,
-            LazySeqKind::Map { .. }
-                | LazySeqKind::Filter { .. }
-                | LazySeqKind::Zip { .. }
-                | LazySeqKind::Iterate { .. }
-        );
-
-        if needs_forcing {
-            // Force to list first, then iterate
-            let elements = collect_bounded_lazy(lazy);
-            for v in elements.iter() {
-                if call_closure(closure, &[*v]).is_truthy() {
-                    return Value::from_bool(true);
-                }
+        let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        while let Some((val, next_seq)) = lazy_next_with_closures(&current) {
+            if call_value(predicate, &[val]).is_truthy() {
+                return Value::from_bool(true);
             }
-            return Value::from_bool(false);
-        } else {
-            // Use next() for Range, Repeat, Cycle, etc.
-            let mut current = lazy.clone();
-            while let Some((val, next_seq)) = current.next() {
-                if call_closure(closure, &[val]).is_truthy() {
-                    return Value::from_bool(true);
-                }
-                current = *next_seq;
-            }
-            return Value::from_bool(false);
+            current = next_seq;
         }
+        return Value::from_bool(false);
     }
 
-    Value::from_bool(false)
+    runtime_error("any?(predicate, collection) expects List, Set, String, Range, or LazySequence")
 }
 
 /// `all?(predicate, collection)` → Boolean
@@ -3914,16 +3438,15 @@ pub extern "C" fn rt_any(predicate: Value, collection: Value) -> Value {
 /// - all?(_ > 0, 1..5) → true  (bounded Range support)
 #[no_mangle]
 pub extern "C" fn rt_all(predicate: Value, collection: Value) -> Value {
-    // Get the closure - if not a closure, return true (vacuous)
-    let closure = match predicate.as_closure() {
-        Some(c) => c,
-        None => return Value::from_bool(true),
-    };
+    if !is_callable(&predicate) {
+        runtime_error("all?(predicate, collection) expects a function");
+    }
+    let _arity = expect_callable_arity("all?(predicate, collection)", &predicate);
 
     // List
     if let Some(list) = collection.as_list() {
         for v in list.iter() {
-            if !call_closure(closure, &[*v]).is_truthy() {
+            if !call_value(predicate, &[*v]).is_truthy() {
                 return Value::from_bool(false);
             }
         }
@@ -3933,7 +3456,7 @@ pub extern "C" fn rt_all(predicate: Value, collection: Value) -> Value {
     // Set
     if let Some(set) = collection.as_set() {
         for v in set.iter() {
-            if !call_closure(closure, &[*v]).is_truthy() {
+            if !call_value(predicate, &[*v]).is_truthy() {
                 return Value::from_bool(false);
             }
         }
@@ -3945,7 +3468,7 @@ pub extern "C" fn rt_all(predicate: Value, collection: Value) -> Value {
         use unicode_segmentation::UnicodeSegmentation;
         for g in s.graphemes(true) {
             let char_val = Value::from_string(g.to_string());
-            if !call_closure(closure, &[char_val]).is_truthy() {
+            if !call_value(predicate, &[char_val]).is_truthy() {
                 return Value::from_bool(false);
             }
         }
@@ -3956,39 +3479,24 @@ pub extern "C" fn rt_all(predicate: Value, collection: Value) -> Value {
     if let Some(lazy) = collection.as_lazy_sequence() {
         use crate::heap::LazySeqKind;
 
-        // Check if this needs forcing (Map/Filter/Zip/Iterate)
-        let needs_forcing = matches!(
-            &lazy.kind,
-            LazySeqKind::Map { .. }
-                | LazySeqKind::Filter { .. }
-                | LazySeqKind::Zip { .. }
-                | LazySeqKind::Iterate { .. }
-        );
-
-        if needs_forcing {
-            // Force to list first, then iterate
-            let elements = collect_bounded_lazy(lazy);
-            for v in elements.iter() {
-                if !call_closure(closure, &[*v]).is_truthy() {
-                    return Value::from_bool(false);
-                }
-            }
-            return Value::from_bool(true);
-        } else if let LazySeqKind::Range { end: Some(_), .. } = &lazy.kind {
+        if let LazySeqKind::Range { end: Some(_), .. } = &lazy.kind {
             // Bounded range - iterate using next()
             let mut current = lazy.clone();
             while let Some((val, next_seq)) = current.next() {
-                if !call_closure(closure, &[val]).is_truthy() {
+                if !call_value(predicate, &[val]).is_truthy() {
                     return Value::from_bool(false);
                 }
                 current = *next_seq;
             }
             return Value::from_bool(true);
+        } else if let LazySeqKind::Range { end: None, .. } = &lazy.kind {
+            runtime_error("all? does not support unbounded ranges");
+        } else {
+            runtime_error("all? does not support lazy sequences");
         }
-        // Unbounded lazy sequences not supported per spec - return true (vacuously)
     }
 
-    Value::from_bool(true)
+    runtime_error("all?(predicate, collection) expects List, Set, String, or Range")
 }
 
 // ============================================================================
@@ -4014,16 +3522,15 @@ pub extern "C" fn rt_each(side_effect: Value, collection: Value) -> Value {
     }
     let _guard = IterationGuard;
 
-    // Get the closure - if not a closure, return nil
-    let closure = match side_effect.as_closure() {
-        Some(c) => c,
-        None => return Value::nil(),
-    };
+    if !is_callable(&side_effect) {
+        runtime_error("each(side_effect, collection) expects a function");
+    }
+    let arity = expect_callable_arity("each(side_effect, collection)", &side_effect);
 
     // List
     if let Some(list) = collection.as_list() {
         for v in list.iter() {
-            call_closure(closure, &[*v]);
+            call_value(side_effect, &[*v]);
             if break_occurred() {
                 if let Some(break_val) = take_break_value() {
                     return break_val;
@@ -4037,7 +3544,7 @@ pub extern "C" fn rt_each(side_effect: Value, collection: Value) -> Value {
     // Set
     if let Some(set) = collection.as_set() {
         for v in set.iter() {
-            call_closure(closure, &[*v]);
+            call_value(side_effect, &[*v]);
             if break_occurred() {
                 if let Some(break_val) = take_break_value() {
                     return break_val;
@@ -4050,12 +3557,12 @@ pub extern "C" fn rt_each(side_effect: Value, collection: Value) -> Value {
 
     // Dict (callback receives value, or (value, key) for 2-arg)
     if let Some(dict) = collection.as_dict() {
-        let is_two_arg = closure.arity >= 2;
+        let is_two_arg = arity >= 2;
         for (k, v) in dict.iter() {
             if is_two_arg {
-                call_closure(closure, &[*v, *k]);
+                call_value(side_effect, &[*v, *k]);
             } else {
-                call_closure(closure, &[*v]);
+                call_value(side_effect, &[*v]);
             }
             if break_occurred() {
                 if let Some(break_val) = take_break_value() {
@@ -4072,7 +3579,7 @@ pub extern "C" fn rt_each(side_effect: Value, collection: Value) -> Value {
         use unicode_segmentation::UnicodeSegmentation;
         for g in s.graphemes(true) {
             let char_val = Value::from_string(g.to_string());
-            call_closure(closure, &[char_val]);
+            call_value(side_effect, &[char_val]);
             if break_occurred() {
                 if let Some(break_val) = take_break_value() {
                     return break_val;
@@ -4086,21 +3593,21 @@ pub extern "C" fn rt_each(side_effect: Value, collection: Value) -> Value {
     // LazySequence (including Ranges) - iterate through the sequence
     // WARNING: Unbounded sequences will loop forever
     if let Some(lazy) = collection.as_lazy_sequence() {
-        let mut current = lazy.clone();
-        while let Some((val, next_lazy)) = current.next() {
-            call_closure(closure, &[val]);
+        let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        while let Some((val, next_lazy)) = lazy_next_with_closures(&current) {
+            call_value(side_effect, &[val]);
             if break_occurred() {
                 if let Some(break_val) = take_break_value() {
                     return break_val;
                 }
                 return Value::nil();
             }
-            current = *next_lazy;
+            current = next_lazy;
         }
         return Value::nil();
     }
 
-    Value::nil()
+    runtime_error("each(side_effect, collection) expects List, Set, Dictionary, String, Range, or LazySequence")
 }
 
 // ============================================================================
@@ -4213,11 +3720,28 @@ pub extern "C" fn rt_combinations(size: Value, collection: Value) -> Value {
 /// - range(0, 10, 2) |> list → [0, 2, 4, 6, 8, 10] (inclusive)
 #[no_mangle]
 pub extern "C" fn rt_range_fn(from: Value, to: Value, step: Value) -> Value {
-    let start = from.as_integer().unwrap_or(0);
-    let end = to.as_integer();
-    let step_val = step.as_integer().unwrap_or(1);
+    let start = from.as_integer().unwrap_or_else(|| {
+        runtime_error("range(from, to, step) expects Integer for 'from'")
+    });
+    let end = to
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("range(from, to, step) expects Integer for 'to'"));
+    let step_val = step
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("range(from, to, step) expects Integer for 'step'"));
 
-    let lazy = LazySequenceObject::range(start, end, true, step_val);
+    if step_val == 0 {
+        runtime_error("range(from, to, step) requires non-zero step");
+    }
+
+    // Validate step direction unless start == end
+    if start != end {
+        if (end > start && step_val < 0) || (end < start && step_val > 0) {
+            runtime_error("range(from, to, step) step direction does not match range");
+        }
+    }
+
+    let lazy = LazySequenceObject::range(start, Some(end), false, step_val);
     Value::from_lazy_sequence(lazy)
 }
 
@@ -4227,21 +3751,21 @@ pub extern "C" fn rt_range_fn(from: Value, to: Value, step: Value) -> Value {
 /// Called by codegen for range syntax.
 #[no_mangle]
 pub extern "C" fn rt_range_exclusive(start: Value, end: Value) -> Value {
-    let start_val = start.as_integer().unwrap_or(0);
-    let end_val = end.as_integer();
+    let start_val = start
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("range start expects Integer"));
+    let end_val = end
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("range end expects Integer"));
 
     // Determine step based on direction
-    let step = if let Some(e) = end_val {
-        if e < start_val {
+    let step = if end_val < start_val {
             -1
         } else {
             1
-        }
-    } else {
-        1
-    };
+        };
 
-    let lazy = LazySequenceObject::range(start_val, end_val, false, step);
+    let lazy = LazySequenceObject::range(start_val, Some(end_val), false, step);
     Value::from_lazy_sequence(lazy)
 }
 
@@ -4251,21 +3775,21 @@ pub extern "C" fn rt_range_exclusive(start: Value, end: Value) -> Value {
 /// Called by codegen for inclusive range syntax.
 #[no_mangle]
 pub extern "C" fn rt_range_inclusive(start: Value, end: Value) -> Value {
-    let start_val = start.as_integer().unwrap_or(0);
-    let end_val = end.as_integer();
+    let start_val = start
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("range start expects Integer"));
+    let end_val = end
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("range end expects Integer"));
 
     // Determine step based on direction
-    let step = if let Some(e) = end_val {
-        if e < start_val {
+    let step = if end_val < start_val {
             -1
         } else {
             1
-        }
-    } else {
-        1
-    };
+        };
 
-    let lazy = LazySequenceObject::range(start_val, end_val, true, step);
+    let lazy = LazySequenceObject::range(start_val, Some(end_val), true, step);
     Value::from_lazy_sequence(lazy)
 }
 
@@ -4275,7 +3799,9 @@ pub extern "C" fn rt_range_inclusive(start: Value, end: Value) -> Value {
 /// Called by codegen for infinite range syntax.
 #[no_mangle]
 pub extern "C" fn rt_range_unbounded(start: Value) -> Value {
-    let start_val = start.as_integer().unwrap_or(0);
+    let start_val = start
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("range start expects Integer"));
     let lazy = LazySequenceObject::range(start_val, None, false, 1);
     Value::from_lazy_sequence(lazy)
 }
@@ -4356,10 +3882,10 @@ pub extern "C" fn rt_zip_spread(collection: Value) -> Value {
         }
         // Materialize lazy sequence
         let mut result = Vec::new();
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
+        let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        while let Some((val, next_seq)) = lazy_next_with_closures(&current) {
             result.push(val);
-            current = *next_seq;
+            current = next_seq;
         }
         result
     } else {
@@ -4415,7 +3941,9 @@ fn get_lazy_finite_length(lazy: &LazySequenceObject) -> Option<usize> {
         LazySeqKind::Repeat { .. } => None,
         LazySeqKind::Cycle { .. } => None,
         LazySeqKind::Iterate { .. } => None,
-        LazySeqKind::Map { source, .. } | LazySeqKind::Filter { source, .. } => {
+        LazySeqKind::Map { source, .. }
+        | LazySeqKind::Filter { source, .. }
+        | LazySeqKind::FilterMap { source, .. } => {
             get_lazy_finite_length(source)
         }
         LazySeqKind::Skip { source, remaining } => {
@@ -4474,161 +4002,17 @@ fn collection_to_vector(v: Value, max_len: usize) -> im::Vector<Value> {
 /// For unbounded sequences, this will loop forever - caller must ensure sequence is bounded.
 /// Handles all lazy sequence variants including Map, Filter, and Iterate.
 pub fn collect_bounded_lazy(lazy: &LazySequenceObject) -> im::Vector<Value> {
-    let mut result: im::Vector<Value> = im::Vector::new();
-    collect_bounded_lazy_recursive(&mut result, lazy);
-    result
-}
-
-/// Recursively collect all elements from a bounded lazy sequence
-fn collect_bounded_lazy_recursive(result: &mut im::Vector<Value>, lazy: &LazySequenceObject) {
-    // Safety limit to prevent infinite loops (for unbounded sequences called incorrectly)
-    const MAX_ELEMENTS: usize = 10_000_000;
-
-    match &lazy.kind {
-        LazySeqKind::Repeat { .. } | LazySeqKind::Cycle { .. } => {
-            // These are infinite - cannot collect all elements
-            // Return empty (caller should use take instead)
-        }
-
-        LazySeqKind::Iterate {
-            generator,
-            current,
-            index: _,
-        } => {
-            // Iterate is potentially infinite, but we'll try to collect with a limit
-            // In practice, users should use take() for iterate sequences
-            // Generator can be a closure, partial application, or memoized closure
-            let mut cur = *current.borrow();
-            for _ in 0..MAX_ELEMENTS {
-                result.push_back(cur);
-                cur = call_value(*generator, &[cur]);
-            }
-        }
-
-        LazySeqKind::Range {
-            current,
-            end,
-            inclusive,
-            step,
-        } => {
-            if end.is_none() {
-                // Unbounded range - cannot collect all elements
-                return;
-            }
-            let mut cur = *current;
-            for _ in 0..MAX_ELEMENTS {
-                // Check if exhausted
-                if let Some(end_val) = end {
-                    let at_end = if *inclusive {
-                        if *step > 0 {
-                            cur > *end_val
-                        } else {
-                            cur < *end_val
-                        }
-                    } else if *step > 0 {
-                        cur >= *end_val
-                    } else {
-                        cur <= *end_val
-                    };
-                    if at_end {
-                        return;
-                    }
-                }
-                result.push_back(Value::from_integer(cur));
-                cur += step;
-            }
-        }
-
-        LazySeqKind::Map { source, mapper } => {
-            if let Some(map_closure) = mapper.as_closure() {
-                // First collect all source elements
-                let source_elements = collect_bounded_lazy(source);
-                for val in source_elements {
-                    let mapped = call_closure(map_closure, &[val]);
-                    result.push_back(mapped);
-                }
-            }
-        }
-
-        LazySeqKind::Filter { source, predicate } => {
-            if let Some(pred_closure) = predicate.as_closure() {
-                // First collect all source elements
-                let source_elements = collect_bounded_lazy(source);
-                for val in source_elements {
-                    if call_closure(pred_closure, &[val]).is_truthy() {
-                        result.push_back(val);
-                    }
-                }
-            }
-        }
-
-        LazySeqKind::Skip { source, remaining } => {
-            let source_elements = collect_bounded_lazy(source);
-            for (i, val) in source_elements.into_iter().enumerate() {
-                if i >= *remaining {
-                    result.push_back(val);
-                }
-            }
-        }
-
-        LazySeqKind::Combinations {
-            source,
-            size,
-            indices,
-            done,
-        } => {
-            if *done || source.is_empty() || *size == 0 || *size > source.len() {
-                return;
-            }
-
-            let mut current_indices = indices.clone();
-            let n = source.len();
-
-            for _ in 0..MAX_ELEMENTS {
-                // Get current combination
-                let combination: im::Vector<Value> =
-                    current_indices.iter().map(|&i| source[i]).collect();
-                result.push_back(Value::from_list(combination));
-
-                // Advance to next combination
-                let mut i = *size - 1;
-
-                // Find the rightmost index that can be incremented
-                while current_indices[i] == n - size + i {
-                    if i == 0 {
-                        return; // All combinations exhausted
-                    }
-                    i -= 1;
-                }
-
-                // Increment this index and reset all subsequent indices
-                current_indices[i] += 1;
-                for j in (i + 1)..*size {
-                    current_indices[j] = current_indices[j - 1] + 1;
-                }
-            }
-        }
-
-        LazySeqKind::Zip { sources } => {
-            // For zip, we need to collect from all sources and zip them
-            // This is complex - for now, collect what we can
-            if sources.is_empty() {
-                return;
-            }
-
-            // Collect all sources
-            let source_vecs: Vec<im::Vector<Value>> =
-                sources.iter().map(collect_bounded_lazy).collect();
-
-            // Find minimum length
-            let min_len = source_vecs.iter().map(|v| v.len()).min().unwrap_or(0);
-
-            for i in 0..min_len {
-                let tuple: im::Vector<Value> = source_vecs.iter().map(|v| v[i]).collect();
-                result.push_back(Value::from_list(tuple));
-            }
-        }
+    if is_infinite_lazy_sequence(lazy) {
+        runtime_error("Cannot materialize unbounded lazy sequence");
     }
+
+    let mut result: im::Vector<Value> = im::Vector::new();
+    let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+    while let Some((val, next_seq)) = lazy_next_with_closures(&current) {
+        result.push_back(val);
+        current = next_seq;
+    }
+    result
 }
 
 /// Fully featured helper function to take n elements from any lazy sequence
@@ -4719,55 +4103,64 @@ fn take_from_lazy_recursive(
         }
 
         LazySeqKind::Map { source, mapper } => {
-            if let Some(map_closure) = mapper.as_closure() {
-                // Collect source elements and map them
-                let source_elements = take_from_lazy_full(*remaining, source);
-                for val in source_elements {
-                    if *remaining == 0 {
-                        break;
-                    }
-                    let mapped = call_closure(map_closure, &[val]);
-                    result.push_back(mapped);
-                    *remaining -= 1;
+            // Collect source elements and map them
+            let source_elements = take_from_lazy_full(*remaining, source);
+            for val in source_elements {
+                if *remaining == 0 {
+                    break;
                 }
+                let mapped = call_value(*mapper, &[val]);
+                result.push_back(mapped);
+                *remaining -= 1;
             }
         }
 
         LazySeqKind::Filter { source, predicate } => {
-            if let Some(pred_closure) = predicate.as_closure() {
-                // We need to potentially fetch more elements than remaining
-                // because some might be filtered out
-                // Use a reasonable batch size
-                let batch_size = (*remaining).max(100);
-                let mut offset = 0;
+            // We need to potentially fetch more elements than remaining
+            // because some might be filtered out
+            // Use a reasonable batch size
+            let batch_size = (*remaining).max(100);
+            let mut offset = 0;
 
-                while *remaining > 0 {
-                    // Create a Skip sequence to offset into the source
-                    let source_with_skip = if offset > 0 {
-                        LazySequenceObject::new(LazySeqKind::Skip {
-                            source: source.clone(),
-                            remaining: offset,
-                        })
-                    } else {
-                        source.clone()
-                    };
+            while *remaining > 0 {
+                // Create a Skip sequence to offset into the source
+                let source_with_skip = if offset > 0 {
+                    LazySequenceObject::new(LazySeqKind::Skip {
+                        source: source.clone(),
+                        remaining: offset,
+                    })
+                } else {
+                    source.clone()
+                };
 
-                    let source_elements = take_from_lazy_full(batch_size, &source_with_skip);
-                    if source_elements.is_empty() {
-                        break; // Source exhausted
+                let source_elements = take_from_lazy_full(batch_size, &source_with_skip);
+                if source_elements.is_empty() {
+                    break; // Source exhausted
+                }
+
+                for val in source_elements {
+                    if *remaining == 0 {
+                        break;
                     }
-
-                    for val in source_elements {
-                        if *remaining == 0 {
-                            break;
-                        }
-                        offset += 1;
-                        if call_closure(pred_closure, &[val]).is_truthy() {
-                            result.push_back(val);
-                            *remaining -= 1;
-                        }
+                    offset += 1;
+                    if call_value(*predicate, &[val]).is_truthy() {
+                        result.push_back(val);
+                        *remaining -= 1;
                     }
                 }
+            }
+        }
+
+        LazySeqKind::FilterMap { .. } => {
+            let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+            while *remaining > 0 {
+                let (val, next_seq) = match lazy_next_with_closures(&current) {
+                    Some(v) => v,
+                    None => return,
+                };
+                result.push_back(val);
+                *remaining -= 1;
+                current = next_seq;
             }
         }
 
@@ -4959,11 +4352,11 @@ pub extern "C-unwind" fn rt_regex_match(pattern: Value, string: Value) -> Value 
     // Both must be strings
     let pat = match pattern.as_string() {
         Some(s) => s,
-        None => return Value::from_list(im::Vector::new()),
+        None => runtime_error("regex_match(pattern, string) expects String arguments"),
     };
     let s = match string.as_string() {
         Some(s) => s,
-        None => return Value::from_list(im::Vector::new()),
+        None => runtime_error("regex_match(pattern, string) expects String arguments"),
     };
 
     // Compile regex - RuntimeErr on invalid pattern per LANG.txt
@@ -4999,11 +4392,11 @@ pub extern "C-unwind" fn rt_regex_match_all(pattern: Value, string: Value) -> Va
     // Both must be strings
     let pat = match pattern.as_string() {
         Some(s) => s,
-        None => return Value::from_list(im::Vector::new()),
+        None => runtime_error("regex_match_all(pattern, string) expects String arguments"),
     };
     let s = match string.as_string() {
         Some(s) => s,
-        None => return Value::from_list(im::Vector::new()),
+        None => runtime_error("regex_match_all(pattern, string) expects String arguments"),
     };
 
     // Compile regex - RuntimeErr on invalid pattern per LANG.txt
@@ -5035,7 +4428,7 @@ pub extern "C" fn rt_md5(value: Value) -> Value {
     // Only works on strings
     let s = match value.as_string() {
         Some(s) => s,
-        None => return Value::from_string("".to_string()),
+        None => runtime_error("md5(value) expects a String"),
     };
 
     // Compute MD5 hash
@@ -5379,7 +4772,9 @@ pub extern "C" fn rt_id(value: Value) -> Value {
 /// - type([1, 2, 3]) → "List"
 /// - type({1, 2, 3}) → "Set"
 /// - type(#{a: 1}) → "Dictionary"
-/// - type(1..) → "LazySequence"
+/// - type(1..10) → "BoundedRange"
+/// - type(1..) → "UnboundedRange"
+/// - type(1.. |> map(_ + 1)) → "LazySequence"
 /// - type(|x| x) → "Function"
 #[no_mangle]
 pub extern "C" fn rt_type(value: Value) -> Value {
@@ -5408,10 +4803,21 @@ pub extern "C" fn rt_type(value: Value) -> Value {
     if value.as_dict().is_some() {
         return Value::from_string("Dictionary".to_string());
     }
-    if value.as_lazy_sequence().is_some() {
-        return Value::from_string("LazySequence".to_string());
+    if let Some(lazy) = value.as_lazy_sequence() {
+        match &lazy.kind {
+            LazySeqKind::Range { end: Some(_), .. } => {
+                return Value::from_string("BoundedRange".to_string());
+            }
+            LazySeqKind::Range { end: None, .. } => {
+                return Value::from_string("UnboundedRange".to_string());
+            }
+            _ => return Value::from_string("LazySequence".to_string()),
+        }
     }
-    if value.as_closure().is_some() {
+    if value.as_closure().is_some()
+        || value.as_partial_application().is_some()
+        || value.as_memoized_closure().is_some()
+    {
         return Value::from_string("Function".to_string());
     }
 
@@ -5536,7 +4942,10 @@ fn format_value_inner(value: &Value, quote_strings: bool) -> String {
         return format!("#{{{}}}", items.join(", "));
     }
 
-    if value.as_closure().is_some() {
+    if value.as_closure().is_some()
+        || value.as_partial_application().is_some()
+        || value.as_memoized_closure().is_some()
+    {
         return "<function>".to_string();
     }
 
@@ -5870,7 +5279,7 @@ fn read_aoc_input(url: &str) -> Value {
 pub extern "C" fn rt_read(path: Value) -> Value {
     let path_str = match path.as_string() {
         Some(s) => s,
-        None => return Value::nil(), // Invalid argument type
+        None => runtime_error("read(path) expects a String"),
     };
 
     // Check for URL schemes
@@ -5921,14 +5330,15 @@ use super::heap::MemoizedClosureObject;
 /// ```
 #[no_mangle]
 pub extern "C" fn rt_memoize(func: Value) -> Value {
-    // Verify the input is a closure
-    let closure = match func.as_closure() {
-        Some(c) => c,
-        None => return Value::nil(), // Not a closure - return nil
-    };
+    if !is_callable(&func) {
+        runtime_error("memoize(function) expects a function");
+    }
+    if func.as_memoized_closure().is_some() {
+        return func;
+    }
 
     // Create a memoized wrapper around the closure
-    let arity = closure.arity;
+    let arity = expect_callable_arity("memoize(function)", &func);
     let memoized = MemoizedClosureObject::new(func, arity);
     Value::from_memoized_closure(memoized)
 }
@@ -5946,46 +5356,5 @@ pub extern "C" fn rt_memoize(func: Value) -> Value {
 /// - The caller must ensure the Values in argv are valid for the duration of the call
 #[no_mangle]
 pub unsafe extern "C" fn rt_call_memoized(callee: Value, argc: u32, argv: *const Value) -> Value {
-    // Try as memoized closure first
-    if let Some(memoized) = callee.as_memoized_closure() {
-        // Collect arguments into a vector for cache lookup
-        let args: Vec<Value> = if argc == 0 || argv.is_null() {
-            Vec::new()
-        } else {
-            unsafe { std::slice::from_raw_parts(argv, argc as usize).to_vec() }
-        };
-
-        // Check cache first
-        if let Some(cached) = memoized.get_cached(&args) {
-            return cached;
-        }
-
-        // Not in cache - call the inner closure
-        let inner_closure = memoized.inner_closure;
-        if let Some(closure) = inner_closure.as_closure() {
-            // Call the inner closure
-            let result = call_closure(closure, &args);
-
-            // Cache the result
-            memoized.cache_result(args, result);
-
-            return result;
-        }
-
-        // Inner value is not a closure - shouldn't happen with rt_memoize
-        return Value::nil();
-    }
-
-    // Also handle regular closures for compatibility
-    if let Some(closure) = callee.as_closure() {
-        let args: Vec<Value> = if argc == 0 || argv.is_null() {
-            Vec::new()
-        } else {
-            unsafe { std::slice::from_raw_parts(argv, argc as usize).to_vec() }
-        };
-        return call_closure(closure, &args);
-    }
-
-    // Not callable
-    Value::nil()
+    crate::operations::rt_call(callee, argc, argv)
 }

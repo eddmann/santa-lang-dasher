@@ -42,10 +42,17 @@ pub fn type_name(value: &Value) -> &'static str {
         "Set"
     } else if value.as_dict().is_some() {
         "Dictionary"
-    } else if value.as_closure().is_some() {
+    } else if value.as_closure().is_some()
+        || value.as_partial_application().is_some()
+        || value.as_memoized_closure().is_some()
+    {
         "Function"
-    } else if value.as_lazy_sequence().is_some() {
-        "LazySequence"
+    } else if let Some(lazy) = value.as_lazy_sequence() {
+        match &lazy.kind {
+            LazySeqKind::Range { end: Some(_), .. } => "BoundedRange",
+            LazySeqKind::Range { end: None, .. } => "UnboundedRange",
+            _ => "LazySequence",
+        }
     } else {
         "Unknown"
     }
@@ -57,7 +64,9 @@ pub(crate) fn is_infinite_lazy_sequence(lazy: &LazySequenceObject) -> bool {
         LazySeqKind::Repeat { .. } => true,
         LazySeqKind::Cycle { .. } => true,
         LazySeqKind::Iterate { .. } => true,
-        LazySeqKind::Map { source, .. } | LazySeqKind::Filter { source, .. } => {
+        LazySeqKind::Map { source, .. }
+        | LazySeqKind::Filter { source, .. }
+        | LazySeqKind::FilterMap { source, .. } => {
             is_infinite_lazy_sequence(source)
         }
         LazySeqKind::Zip { sources } => sources.iter().all(is_infinite_lazy_sequence),
@@ -443,6 +452,17 @@ pub extern "C" fn rt_is_list(value: Value) -> i64 {
     }
 }
 
+/// Check if a value is an integer.
+/// Returns 1 if integer, 0 otherwise.
+#[no_mangle]
+pub extern "C" fn rt_is_integer(value: Value) -> i64 {
+    if value.as_integer().is_some() {
+        1
+    } else {
+        0
+    }
+}
+
 /// Ensure a value is an integer or raise a RuntimeErr.
 #[no_mangle]
 pub extern "C-unwind" fn rt_expect_integer(value: Value) -> Value {
@@ -697,7 +717,7 @@ pub unsafe extern "C" fn rt_make_closure(
 /// The closure's function expects the signature:
 ///   fn(env: *const ClosureObject, argc: u32, argv: *const Value) -> Value
 ///
-/// This function also handles memoized closures by delegating to rt_call_memoized.
+/// This function also handles memoized closures directly.
 ///
 /// # Safety
 /// The caller must ensure `argv` points to a valid array of `argc` Values.
@@ -773,18 +793,21 @@ pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -
 
         // Not in cache - call the inner closure
         let inner_closure = memoized.inner_closure;
-        if let Some(closure) = inner_closure.as_closure() {
-            // Call the inner closure
-            let result = crate::builtins::call_closure(closure, &new_args);
-
-            // Cache the result
-            memoized.cache_result(new_args, result);
-
-            return result;
+        if !crate::builtins::is_callable(&inner_closure) {
+            runtime_error("memoized function is not callable");
         }
 
-        // Inner value is not a closure - shouldn't happen with rt_memoize
-        return Value::nil();
+        // Call the inner function (supports partial and memoized callables)
+        let result = rt_call(
+            inner_closure,
+            new_args.len() as u32,
+            new_args.as_ptr(),
+        );
+
+        // Cache the result
+        memoized.cache_result(new_args, result);
+
+        return result;
     }
 
     // Non-callable value - produce RuntimeErr

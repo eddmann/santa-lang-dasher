@@ -834,12 +834,11 @@ fn builtin_ints_no_numbers() {
 }
 
 #[test]
-fn builtin_ints_non_string_returns_empty() {
-    // ints on non-string returns empty list
+#[should_panic(expected = "ints(string) expects a String")]
+fn builtin_ints_non_string_errors() {
+    // ints on non-string should RuntimeErr
     let v = Value::from_integer(42);
-    let result = rt_ints(v);
-    let list = result.as_list().expect("should be a list");
-    assert_eq!(list.len(), 0);
+    let _ = rt_ints(v);
 }
 
 // list() function tests per LANG.txt §11.1
@@ -2114,7 +2113,8 @@ fn builtin_filter_map_range() {
     let v = Value::from_lazy_sequence(range);
     let mapper = make_test_closure(double_if_odd_closure, 1);
     let result = rt_filter_map(mapper, v);
-    let filtered = result.as_list().expect("should be a list");
+    let lazy = result.as_lazy_sequence().expect("should be a lazy sequence");
+    let filtered = crate::builtins::collect_bounded_lazy(lazy);
     assert_eq!(filtered.len(), 2);
     assert_eq!(filtered[0].as_integer(), Some(2)); // 1 * 2
     assert_eq!(filtered[1].as_integer(), Some(6)); // 3 * 2
@@ -2768,9 +2768,10 @@ fn builtin_count_filtered_range() {
     // Filter to odd numbers only
     let is_odd_pred = make_test_closure(is_odd_closure, 1);
     let filtered = rt_filter(is_odd_pred, range);
+    let filtered_list = rt_list(filtered);
     // Count even numbers (should be 0 since all filtered values are odd)
     let is_even_pred = make_test_closure(is_even, 1);
-    let result = rt_count(is_even_pred, filtered);
+    let result = rt_count(is_even_pred, filtered_list);
     assert_eq!(
         result.as_integer(),
         Some(0),
@@ -2806,9 +2807,10 @@ fn builtin_count_filtered_range_with_matches() {
     // Filter to odd numbers only
     let is_odd_pred = make_test_closure(is_odd_closure, 1);
     let filtered = rt_filter(is_odd_pred, range);
+    let filtered_list = rt_list(filtered);
     // Count numbers > 5
     let gt5_pred = make_test_closure(greater_than_5, 1);
-    let result = rt_count(gt5_pred, filtered);
+    let result = rt_count(gt5_pred, filtered_list);
     assert_eq!(result.as_integer(), Some(2), "7 and 9 are > 5");
 }
 
