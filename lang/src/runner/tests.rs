@@ -720,6 +720,47 @@ test: {
 }
 
 #[test]
+fn execute_test_spread_lazy_map_in_list_literal() {
+    let program = parse_program(
+        r#"
+part_one: [1, ..map(_ + 1, 1..3)] |> sum
+
+test: {
+  input: 0
+  part_one: 6
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(6)));
+}
+
+#[test]
+fn execute_test_apply_spread_lazy_map() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let f = |a, b| a + b
+  f(..map(_ + 1, 1..3))
+}
+
+test: {
+  input: 0
+  part_one: 5
+}
+"#,
+    );
+    let runner = Runner::new();
+    let results = runner.execute_tests(&program).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::from_integer(5)));
+}
+
+#[test]
 fn execute_test_set_literal_unbounded_range_errors() {
     let program = parse_program(
         r#"

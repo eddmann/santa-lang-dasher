@@ -1,4 +1,5 @@
 use super::heap::{DictObject, ListObject, SetObject};
+use super::builtins::collect_bounded_lazy;
 use super::operations::{is_infinite_lazy_sequence, runtime_error, type_name};
 use super::value::Value;
 use im;
@@ -55,12 +56,8 @@ pub extern "C" fn rt_list_concat(list1: Value, list2: Value) -> Value {
         if is_infinite_lazy_sequence(lazy) {
             runtime_error("Cannot spread unbounded lazy sequence");
         }
-        // Materialize lazy sequence
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
-            result.push_back(val);
-            current = *next_seq;
-        }
+        let items = collect_bounded_lazy(lazy);
+        result.append(items);
     }
 
     Value::from_list(result)

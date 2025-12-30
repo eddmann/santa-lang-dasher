@@ -855,13 +855,8 @@ pub extern "C-unwind" fn rt_apply(callee: Value, collection: Value) -> Value {
         if is_infinite_lazy_sequence(lazy) {
             runtime_error("Cannot spread unbounded lazy sequence");
         }
-        let mut items = Vec::new();
-        let mut current = lazy.clone();
-        while let Some((val, next_seq)) = current.next() {
-            items.push(val);
-            current = *next_seq;
-        }
-        items
+        let items = crate::builtins::collect_bounded_lazy(lazy);
+        items.iter().copied().collect()
     } else {
         // Not a spreadable collection - call with collection as single arg
         return rt_call(callee, 1, &collection);
