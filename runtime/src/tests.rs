@@ -2904,6 +2904,23 @@ fn builtin_sum_large_range() {
     assert_eq!(result.as_integer(), Some(5050));
 }
 
+#[test]
+#[should_panic(expected = "sum expects numeric elements")]
+fn builtin_sum_non_numeric_panics() {
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_string("nope")]
+            .into_iter()
+            .collect(),
+    );
+    let _result = rt_sum(list);
+}
+
+#[test]
+#[should_panic(expected = "sum(collection) expects List, Set, Dictionary, Range, or LazySequence")]
+fn builtin_sum_invalid_collection_panics() {
+    let _result = rt_sum(Value::from_integer(1));
+}
+
 // max() tests per LANG.txt §11.8
 #[test]
 fn builtin_max_list() {
@@ -2968,6 +2985,23 @@ fn builtin_max_descending_range() {
     assert_eq!(result.as_integer(), Some(5));
 }
 
+#[test]
+#[should_panic(expected = "max expects comparable elements")]
+fn builtin_max_incomparable_panics() {
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_string("nope")]
+            .into_iter()
+            .collect(),
+    );
+    let _result = rt_max(list);
+}
+
+#[test]
+#[should_panic(expected = "max(collection) expects List, Set, Dictionary, Range, or LazySequence")]
+fn builtin_max_invalid_collection_panics() {
+    let _result = rt_max(Value::from_integer(1));
+}
+
 // min() tests per LANG.txt §11.8
 #[test]
 fn builtin_min_list() {
@@ -3030,6 +3064,37 @@ fn builtin_min_descending_range() {
     let v = Value::from_lazy_sequence(range);
     let result = rt_min(v);
     assert_eq!(result.as_integer(), Some(2));
+}
+
+#[test]
+#[should_panic(expected = "min expects comparable elements")]
+fn builtin_min_incomparable_panics() {
+    let list = Value::from_list(
+        vec![Value::from_integer(1), Value::from_string("nope")]
+            .into_iter()
+            .collect(),
+    );
+    let _result = rt_min(list);
+}
+
+#[test]
+#[should_panic(expected = "min(collection) expects List, Set, Dictionary, Range, or LazySequence")]
+fn builtin_min_invalid_collection_panics() {
+    let _result = rt_min(Value::from_integer(1));
+}
+
+#[test]
+#[should_panic(expected = "max expects comparable elements")]
+fn builtin_max2_incomparable_panics() {
+    use crate::builtins::rt_max2;
+    let _result = rt_max2(Value::from_integer(1), Value::from_string("nope"));
+}
+
+#[test]
+#[should_panic(expected = "min expects comparable elements")]
+fn builtin_min2_incomparable_panics() {
+    use crate::builtins::rt_min2;
+    let _result = rt_min2(Value::from_integer(1), Value::from_string("nope"));
 }
 
 // ===== Sequence Manipulation Functions (§11.9) =====

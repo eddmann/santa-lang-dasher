@@ -2384,7 +2384,7 @@ fn count_in_lazy(lazy: &LazySequenceObject, predicate: Value) -> i64 {
 /// - sum(#{1: 2, 3: 4}) → 6 (sums values)
 /// - sum(1..=100) → 5050 (O(1) using arithmetic sequence formula)
 #[no_mangle]
-pub extern "C" fn rt_sum(collection: Value) -> Value {
+pub extern "C-unwind" fn rt_sum(collection: Value) -> Value {
     let mut int_sum: i64 = 0;
     let mut dec_sum: f64 = 0.0;
     let mut has_decimal = false;
@@ -2500,7 +2500,7 @@ pub extern "C" fn rt_sum(collection: Value) -> Value {
         };
     }
 
-    runtime_error("sum(collection) expects List, Set, Dictionary, or Range")
+    runtime_error("sum(collection) expects List, Set, Dictionary, Range, or LazySequence")
 }
 
 /// Helper: compare two values for ordering
@@ -2532,6 +2532,17 @@ fn compare_values(a: Value, b: Value) -> Option<std::cmp::Ordering> {
     None
 }
 
+fn compare_or_error(op: &str, a: Value, b: Value) -> std::cmp::Ordering {
+    match compare_values(a, b) {
+        Some(order) => order,
+        None => runtime_error(&format!(
+            "{op} expects comparable elements, got {} and {}",
+            type_name(&a),
+            type_name(&b)
+        )),
+    }
+}
+
 /// `max(collection)` → Value | Nil
 ///
 /// Find the largest element. Returns nil for empty collections.
@@ -2542,15 +2553,18 @@ fn compare_values(a: Value, b: Value) -> Option<std::cmp::Ordering> {
 /// - max(#{1: 2, 3: 4}) → 4 (max of values)
 /// - max(1..5) → 4 (O(1) for bounded ranges)
 #[no_mangle]
-pub extern "C" fn rt_max(collection: Value) -> Value {
+pub extern "C-unwind" fn rt_max(collection: Value) -> Value {
     use std::cmp::Ordering;
 
     let mut max_val: Option<Value> = None;
 
     let mut update_max = |v: Value| match max_val {
-        None => max_val = Some(v),
+        None => {
+            compare_or_error("max", v, v);
+            max_val = Some(v)
+        }
         Some(current) => {
-            if let Some(Ordering::Greater) = compare_values(v, current) {
+            if let Ordering::Greater = compare_or_error("max", v, current) {
                 max_val = Some(v);
             }
         }
@@ -2633,7 +2647,7 @@ pub extern "C" fn rt_max(collection: Value) -> Value {
         return max_val.unwrap_or_else(Value::nil);
     }
 
-    Value::nil()
+    runtime_error("max(collection) expects List, Set, Dictionary, Range, or LazySequence")
 }
 
 /// `min(collection)` → Value | Nil
@@ -2646,15 +2660,18 @@ pub extern "C" fn rt_max(collection: Value) -> Value {
 /// - min(#{1: 2, 3: 4}) → 2 (min of values)
 /// - min(1..5) → 1 (O(1) for bounded ranges)
 #[no_mangle]
-pub extern "C" fn rt_min(collection: Value) -> Value {
+pub extern "C-unwind" fn rt_min(collection: Value) -> Value {
     use std::cmp::Ordering;
 
     let mut min_val: Option<Value> = None;
 
     let mut update_min = |v: Value| match min_val {
-        None => min_val = Some(v),
+        None => {
+            compare_or_error("min", v, v);
+            min_val = Some(v)
+        }
         Some(current) => {
-            if let Some(Ordering::Less) = compare_values(v, current) {
+            if let Ordering::Less = compare_or_error("min", v, current) {
                 min_val = Some(v);
             }
         }
@@ -2737,19 +2754,23 @@ pub extern "C" fn rt_min(collection: Value) -> Value {
         return min_val.unwrap_or_else(Value::nil);
     }
 
-    Value::nil()
+    runtime_error("min(collection) expects List, Set, Dictionary, Range, or LazySequence")
 }
 
 /// `max(a, b)` → Maximum of two values
 ///
 /// Returns the larger of two values.
 #[no_mangle]
-pub extern "C" fn rt_max2(a: Value, b: Value) -> Value {
+pub extern "C-unwind" fn rt_max2(a: Value, b: Value) -> Value {
     use std::cmp::Ordering;
     match compare_values(a, b) {
         Some(Ordering::Greater) | Some(Ordering::Equal) => a,
         Some(Ordering::Less) => b,
-        None => Value::nil(),
+        None => runtime_error(&format!(
+            "max expects comparable elements, got {} and {}",
+            type_name(&a),
+            type_name(&b)
+        )),
     }
 }
 
@@ -2757,12 +2778,16 @@ pub extern "C" fn rt_max2(a: Value, b: Value) -> Value {
 ///
 /// Returns the smaller of two values.
 #[no_mangle]
-pub extern "C" fn rt_min2(a: Value, b: Value) -> Value {
+pub extern "C-unwind" fn rt_min2(a: Value, b: Value) -> Value {
     use std::cmp::Ordering;
     match compare_values(a, b) {
         Some(Ordering::Less) | Some(Ordering::Equal) => a,
         Some(Ordering::Greater) => b,
-        None => Value::nil(),
+        None => runtime_error(&format!(
+            "min expects comparable elements, got {} and {}",
+            type_name(&a),
+            type_name(&b)
+        )),
     }
 }
 
