@@ -452,6 +452,35 @@ pub extern "C" fn rt_is_list(value: Value) -> i64 {
     }
 }
 
+/// Ensure a value is a list and meets list pattern length constraints.
+///
+/// `has_rest` is treated as a boolean (non-zero means allow extra elements).
+#[no_mangle]
+pub extern "C-unwind" fn rt_expect_list_len(
+    value: Value,
+    expected_len: Value,
+    has_rest: Value,
+) -> Value {
+    let list = value
+        .as_list()
+        .unwrap_or_else(|| runtime_error("List destructuring requires a List"));
+    let expected = expected_len
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("List destructuring expects Integer length"));
+    let allow_extra = has_rest.as_integer().unwrap_or(0) != 0;
+    let actual = list.len() as i64;
+
+    if allow_extra {
+        if actual < expected {
+            runtime_error("List destructuring length mismatch");
+        }
+    } else if actual != expected {
+        runtime_error("List destructuring length mismatch");
+    }
+
+    value
+}
+
 /// Check if a value is an integer.
 /// Returns 1 if integer, 0 otherwise.
 #[no_mangle]

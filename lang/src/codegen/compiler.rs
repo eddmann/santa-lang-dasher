@@ -779,6 +779,20 @@ impl<'ctx> CodegenContext<'ctx> {
         self.module.add_function(fn_name, fn_type, None)
     }
 
+    /// Get or declare the rt_expect_list_len runtime function
+    fn get_or_declare_rt_expect_list_len(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_expect_list_len";
+
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Declare: extern "C-unwind" fn(Value, Value, Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
     /// Get or declare the rt_is_integer runtime function
     fn get_or_declare_rt_is_integer(&self) -> inkwell::values::FunctionValue<'ctx> {
         let fn_name = "rt_is_integer";
@@ -2500,6 +2514,40 @@ impl<'ctx> CodegenContext<'ctx> {
         }
     }
 
+    fn list_pattern_len_requirements(patterns: &[Pattern]) -> (usize, bool) {
+        let mut expected = 0usize;
+        let mut has_rest = false;
+        for pat in patterns {
+            if matches!(pat, Pattern::RestIdentifier(_)) {
+                has_rest = true;
+            } else {
+                expected += 1;
+            }
+        }
+        (expected, has_rest)
+    }
+
+    fn emit_list_pattern_check(
+        &mut self,
+        list_val: BasicValueEnum<'ctx>,
+        patterns: &[Pattern],
+        name: &str,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        let (expected, has_rest) = Self::list_pattern_len_requirements(patterns);
+        let rt_expect_list_len = self.get_or_declare_rt_expect_list_len();
+        let expected_val = self.compile_integer(expected as i64);
+        let has_rest_val = self.compile_integer(if has_rest { 1 } else { 0 });
+        let checked = self
+            .builder
+            .build_call(
+                rt_expect_list_len,
+                &[list_val.into(), expected_val.into(), has_rest_val.into()],
+                name,
+            )
+            .unwrap();
+        Ok(checked.try_as_basic_value().left().unwrap())
+    }
+
     /// Bind pattern variables to the subject value
     fn bind_pattern_variables(
         &mut self,
@@ -2527,6 +2575,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 Ok(())
             }
             Pattern::List(patterns) => {
+                let list_val = self.emit_list_pattern_check(subject, patterns, "list_bind_check")?;
                 // Bind variables in list patterns
                 // First find the rest pattern position (if any)
                 let mut rest_position = None;
@@ -2548,7 +2597,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_size = self.get_or_declare_rt_size();
                 let size_result = self
                     .builder
-                    .build_call(rt_size, &[subject.into()], "subject_size")
+                    .build_call(rt_size, &[list_val.into()], "subject_size")
                     .unwrap();
                 let size_val = size_result.try_as_basic_value().left().unwrap();
                 let size_int = size_val.into_int_value();
@@ -2605,7 +2654,7 @@ impl<'ctx> CodegenContext<'ctx> {
                                     .builder
                                     .build_call(
                                         rt_get,
-                                        &[tagged_idx.into(), subject.into()],
+                                        &[tagged_idx.into(), list_val.into()],
                                         &format!("elem_from_end_{}", after_rest_offset),
                                     )
                                     .unwrap();
@@ -2619,7 +2668,7 @@ impl<'ctx> CodegenContext<'ctx> {
                                     .builder
                                     .build_call(
                                         rt_get,
-                                        &[idx_val.into(), subject.into()],
+                                        &[idx_val.into(), list_val.into()],
                                         &format!("elem_{}", i),
                                     )
                                     .unwrap();
@@ -2647,7 +2696,7 @@ impl<'ctx> CodegenContext<'ctx> {
                                 .builder
                                 .build_call(
                                     rt_skip,
-                                    &[skip_count.into(), subject.into()],
+                                    &[skip_count.into(), list_val.into()],
                                     "after_skip",
                                 )
                                 .unwrap();
@@ -2744,7 +2793,7 @@ impl<'ctx> CodegenContext<'ctx> {
                                     .builder
                                     .build_call(
                                         rt_get,
-                                        &[tagged_idx.into(), subject.into()],
+                                        &[tagged_idx.into(), list_val.into()],
                                         &format!("nested_elem_from_end_{}", after_rest_offset),
                                     )
                                     .unwrap();
@@ -2757,7 +2806,7 @@ impl<'ctx> CodegenContext<'ctx> {
                                     .builder
                                     .build_call(
                                         rt_get,
-                                        &[idx_val.into(), subject.into()],
+                                        &[idx_val.into(), list_val.into()],
                                         &format!("nested_elem_{}", i),
                                     )
                                     .unwrap();
@@ -2979,6 +3028,7 @@ impl<'ctx> CodegenContext<'ctx> {
         for pat in patterns {
             self.validate_pattern_bindings(pat)?;
         }
+        let list_val = self.emit_list_pattern_check(list_val, patterns, "list_destructure_check")?;
         let rt_get = self.get_or_declare_rt_get();
         let rt_skip = self.get_or_declare_rt_skip();
         let rt_take = self.get_or_declare_rt_take();

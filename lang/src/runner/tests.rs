@@ -462,6 +462,46 @@ test: {
 }
 
 #[test]
+fn execute_test_let_destructuring_non_list_errors() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let [a, b] = 1
+  a + b
+}
+
+test: {
+  input: 0
+  part_one: 0
+}
+"#,
+    );
+    let runner = Runner::new();
+    let result = runner.execute_tests(&program);
+    assert!(matches!(result, Err(RunnerError::RuntimeError(_))));
+}
+
+#[test]
+fn execute_test_let_destructuring_length_mismatch_errors() {
+    let program = parse_program(
+        r#"
+part_one: {
+  let [a, b] = [1]
+  a + b
+}
+
+test: {
+  input: 0
+  part_one: 0
+}
+"#,
+    );
+    let runner = Runner::new();
+    let result = runner.execute_tests(&program);
+    assert!(matches!(result, Err(RunnerError::RuntimeError(_))));
+}
+
+#[test]
 fn execute_test_let_destructuring_rest_middle() {
     let program = parse_program(
         r#"
