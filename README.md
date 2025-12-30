@@ -40,7 +40,7 @@ Single-pass character-by-character lexer that produces tokens with source positi
 - Literals: integers, decimals, strings, booleans, nil
 - Operators: arithmetic, comparison, logical, pipeline (`|>`), composition (`>>`)
 - Keywords: `let`, `mut`, `if`, `else`, `match`, `return`, `break`
-- Delimiters: `()`, `[]`, `{}`, `#{` (set literal)
+- Delimiters: `()`, `[]`, `{}` (set literal), `#{` (dict literal)
 
 ### 2. Parser (`lang/src/parser/`)
 

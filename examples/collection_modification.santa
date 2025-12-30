@@ -6,7 +6,7 @@ let list1 = [1, 2, 3];
 let list2 = push(4, list1);
 
 // Test push on set
-let set1 = #{1, 2, 3};
+let set1 = {1, 2, 3};
 let set2 = push(4, set1);
 
 // Test assoc on list (replace)

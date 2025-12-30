@@ -1082,45 +1082,27 @@ impl Parser {
 
                     return Ok(Expr::Dict(entries));
                 }
+
+                return Err(ParseError {
+                    message: format!(
+                        "Expected ':' after key in dict literal, got {:?}",
+                        token.kind
+                    ),
+                    line: token.span.start.line as usize,
+                    column: token.span.start.column as usize,
+                });
             }
         }
 
-        // It's a set
-        let mut elements = vec![first_elem];
-
-        loop {
-            let token = self.current_token()?;
-            match &token.kind {
-                TokenKind::Comma => {
-                    self.advance();
-                    // Check for trailing comma
-                    if let Ok(next) = self.current_token() {
-                        if matches!(next.kind, TokenKind::RightBrace) {
-                            self.advance();
-                            break;
-                        }
-                    }
-                    let elem = self.parse_pratt_expr(0)?;
-                    elements.push(elem);
-                }
-                TokenKind::RightBrace => {
-                    self.advance();
-                    break;
-                }
-                _ => {
-                    return Err(ParseError {
-                        message: format!(
-                            "Expected ',' or '}}' in set literal, got {:?}",
-                            token.kind
-                        ),
-                        line: token.span.start.line as usize,
-                        column: token.span.start.column as usize,
-                    })
-                }
-            }
-        }
-
-        Ok(Expr::Set(elements))
+        let token = self.current_token()?;
+        Err(ParseError {
+            message: format!(
+                "Expected ':' or '}}' after dict key, got {:?}",
+                token.kind
+            ),
+            line: token.span.start.line as usize,
+            column: token.span.start.column as usize,
+        })
     }
 
     /// Parse a dict entry - either key:value or shorthand identifier

@@ -260,7 +260,7 @@ fn codegen_set_literal_with_integers() {
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
     codegen.create_test_function();
 
-    // Create typed expression for: #{1, 2, 3}
+    // Create typed expression for: {1, 2, 3}
     let expr = TypedExpr {
         expr: Expr::Set(vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)]),
         ty: Type::Set(Box::new(Type::Int)),

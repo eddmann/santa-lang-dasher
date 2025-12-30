@@ -178,8 +178,8 @@ fn infer_empty_list() {
 
 #[test]
 fn infer_set_of_integers() {
-    // #{1, 2, 3} → Set<Int>
-    let ty = infer_type("#{1, 2, 3}");
+    // {1, 2, 3} → Set<Int>
+    let ty = infer_type("{1, 2, 3}");
     assert_eq!(ty, Type::Set(Box::new(Type::Int)));
 }
 

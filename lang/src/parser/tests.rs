@@ -616,8 +616,8 @@ fn parse_index_expression() {
 
 #[test]
 fn parse_set_literal() {
-    // Test set #{1, 2, 3}
-    let expr = parse_expr("#{1, 2, 3}").unwrap();
+    // Test set {1, 2, 3}
+    let expr = parse_expr("{1, 2, 3}").unwrap();
     expect![[r#"
         Set(
             [
@@ -634,6 +634,12 @@ fn parse_set_literal() {
         )
     "#]]
     .assert_debug_eq(&expr);
+}
+
+#[test]
+fn parse_hash_brace_non_dict_errors() {
+    let err = parse_expr("#{1, 2}").unwrap_err();
+    assert!(err.message.contains("Expected ':'"));
 }
 
 #[test]
