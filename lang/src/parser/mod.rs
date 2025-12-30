@@ -2042,16 +2042,10 @@ impl Parser {
                     return Ok(Expr::Set(elements));
                 }
                 // Closing brace with single expression and no semicolon
-                // Determine if it's a Set or Block based on the expression type:
-                // - Simple values (identifiers, lists, dicts, tuples, literals) → Set
-                // - Computed expressions (infix, calls, etc.) → Block
+                // Per decision: in expression position, {expr} is always a Set literal.
                 TokenKind::RightBrace => {
                     self.advance();
-                    if Self::is_set_element_expr(&first_expr) {
-                        return Ok(Expr::Set(vec![first_expr]));
-                    } else {
-                        return Ok(Expr::Block(vec![Stmt::Expr(first_expr)]));
-                    }
+                    return Ok(Expr::Set(vec![first_expr]));
                 }
                 // Semicolon means it's a block
                 TokenKind::Semicolon => {

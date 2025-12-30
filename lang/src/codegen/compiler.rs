@@ -779,6 +779,20 @@ impl<'ctx> CodegenContext<'ctx> {
         self.module.add_function(fn_name, fn_type, None)
     }
 
+    /// Get or declare the rt_is_integer runtime function
+    fn get_or_declare_rt_is_integer(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_is_integer";
+
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Declare: extern "C" fn(Value) -> i64 (returns 1 for integer, 0 otherwise)
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
     /// Get or declare the rt_expect_integer runtime function
     fn get_or_declare_rt_expect_integer(&self) -> inkwell::values::FunctionValue<'ctx> {
         let fn_name = "rt_expect_integer";
@@ -898,8 +912,15 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::String(_) => Type::String,
             Expr::Boolean(_) => Type::Bool,
             Expr::Nil => Type::Nil,
-            // Look up variable types from the type environment
-            Expr::Identifier(name) => self.type_env.get(name).cloned().unwrap_or(Type::Unknown),
+            // Look up variable types from the type environment.
+            // Avoid specializing mutable bindings because their type can change at runtime.
+            Expr::Identifier(name) => {
+                if self.mutable_variables.contains(name) {
+                    Type::Unknown
+                } else {
+                    self.type_env.get(name).cloned().unwrap_or(Type::Unknown)
+                }
+            }
             // For binary operations, infer from operands
             Expr::Infix { left, op, right } => {
                 let left_ty = self.infer_expr_type(left);
@@ -2324,17 +2345,42 @@ impl<'ctx> CodegenContext<'ctx> {
                 end,
                 inclusive,
             } => {
-                // Check if subject is >= start and (< end or <= end depending on inclusive)
-                let rt_expect_integer = self.get_or_declare_rt_expect_integer();
-                let subject_checked = self
+                // Only match integer subjects; non-integers fail to match (no error)
+                let rt_is_integer = self.get_or_declare_rt_is_integer();
+                let is_int = self
                     .builder
-                    .build_call(rt_expect_integer, &[subject.into()], "range_subject")
+                    .build_call(rt_is_integer, &[subject.into()], "range_is_int")
                     .unwrap()
                     .try_as_basic_value()
                     .left()
                     .unwrap();
+                let is_int_bool = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::NE,
+                        is_int.into_int_value(),
+                        self.context.i64_type().const_zero(),
+                        "range_is_int_bool",
+                    )
+                    .unwrap();
+
+                // Branch to range check only if integer
+                let current_fn = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap();
+                let range_check_bb =
+                    self.context.append_basic_block(current_fn, "range_check");
+                self.builder
+                    .build_conditional_branch(is_int_bool, range_check_bb, no_match_bb)
+                    .unwrap();
+                self.builder.position_at_end(range_check_bb);
+
+                // Check if subject is >= start and (< end or <= end depending on inclusive)
                 let start_val = self.compile_integer(*start);
-                let subject_int = subject_checked.into_int_value();
+                let subject_int = subject.into_int_value();
                 let start_int = start_val.into_int_value();
 
                 // subject >= start
@@ -3362,16 +3408,36 @@ impl<'ctx> CodegenContext<'ctx> {
                     end,
                     inclusive,
                 } => {
-                    let rt_expect_integer = self.get_or_declare_rt_expect_integer();
-                    let elem_checked = self
+                    // Only match integer elements; non-integers fail to match (no error)
+                    let rt_is_integer = self.get_or_declare_rt_is_integer();
+                    let is_int = self
                         .builder
-                        .build_call(rt_expect_integer, &[elem_val.into()], "elem_int")
+                        .build_call(rt_is_integer, &[elem_val.into()], "elem_is_int")
                         .unwrap()
                         .try_as_basic_value()
                         .left()
                         .unwrap();
+                    let is_int_bool = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            is_int.into_int_value(),
+                            self.context.i64_type().const_zero(),
+                            "elem_is_int_bool",
+                        )
+                        .unwrap();
+
+                    let range_check_bb = self.context.append_basic_block(
+                        current_fn,
+                        &format!("{name_prefix}_range_check_{i}"),
+                    );
+                    self.builder
+                        .build_conditional_branch(is_int_bool, range_check_bb, no_match_bb)
+                        .unwrap();
+                    self.builder.position_at_end(range_check_bb);
+
                     let start_val = self.compile_integer(*start);
-                    let elem_int = elem_checked.into_int_value();
+                    let elem_int = elem_val.into_int_value();
                     let start_int = start_val.into_int_value();
 
                     let ge_start = self

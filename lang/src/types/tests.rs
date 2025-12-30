@@ -262,10 +262,10 @@ fn infer_set_single_literal() {
 }
 
 #[test]
-fn infer_block_single_computed_expr() {
-    // { 1 + 1 } → Int (single computed expression is a block)
+fn infer_set_single_computed_expr() {
+    // { 1 + 1 } → Set<Int> (expression position braces are set literals)
     let ty = infer_type("{ 1 + 1 }");
-    assert_eq!(ty, Type::Int);
+    assert_eq!(ty, Type::Set(Box::new(Type::Int)));
 }
 
 #[test]

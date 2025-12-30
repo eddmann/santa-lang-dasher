@@ -631,13 +631,15 @@ part_one: match "a" {
 
 test: {
   input: 0
-  part_one: 1
+  part_one: nil
 }
 "#,
     );
     let runner = Runner::new();
-    let result = runner.execute_tests(&program);
-    assert!(matches!(result, Err(RunnerError::RuntimeError(_))));
+    let results = runner.execute_tests(&program).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
+    assert_eq!(results[0].part_one_actual, Some(Value::nil()));
 }
 
 #[test]
@@ -802,11 +804,9 @@ test: {
 fn execute_test_break_inside_fold_returns_value() {
     let program = parse_program(
         r#"
-part_one: {
-  fold(0, |acc, v| {
-    if v == 3 { break 99 } else { acc + v }
-  }, [1, 2, 3, 4])
-}
+part_one: fold(0, |acc, v| {
+  if v == 3 { break 99 } else { acc + v }
+}, [1, 2, 3, 4])
 
 test: {
   input: 0
@@ -1700,15 +1700,13 @@ let lookup = #{
 
 let parse_strategy = lines >> map(split(" "))
 
-part_two: {
-  parse_strategy(input)
-    |> map(|[elf, ending]| {
-      let move = (lookup[elf] + lookup[ending] + 2) % 3 + 1
-      let outcome = lookup[ending] * 3
-      move + outcome
-    })
-    |> sum
-}
+part_two: parse_strategy(input)
+  |> map(|[elf, ending]| {
+    let move = (lookup[elf] + lookup[ending] + 2) % 3 + 1
+    let outcome = lookup[ending] * 3
+    move + outcome
+  })
+  |> sum
 
 test: {
   input: "A Y
