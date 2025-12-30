@@ -2779,8 +2779,11 @@ pub extern "C" fn rt_min2(a: Value, b: Value) -> Value {
 /// - skip(1, {1, 2, 3}) → {2, 3}
 /// - skip(2, 1..5) → LazySequence(3..5)
 #[no_mangle]
-pub extern "C" fn rt_skip(total: Value, collection: Value) -> Value {
-    let n = total.as_integer().unwrap_or(0) as usize;
+pub extern "C-unwind" fn rt_skip(total: Value, collection: Value) -> Value {
+    let n = total
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("skip(total, collection) expects Integer total"))
+        as usize;
 
     // List
     if let Some(list) = collection.as_list() {
@@ -2818,7 +2821,7 @@ pub extern "C" fn rt_skip(total: Value, collection: Value) -> Value {
         }));
     }
 
-    collection
+    runtime_error("skip(total, collection) expects List, Set, Range, or LazySequence")
 }
 
 /// `take(total, collection)` → List
@@ -2830,8 +2833,11 @@ pub extern "C" fn rt_skip(total: Value, collection: Value) -> Value {
 /// - take(2, {1, 2, 3}) → [1, 2]
 /// - take(2, 1..5) → [1, 2]
 #[no_mangle]
-pub extern "C" fn rt_take(total: Value, collection: Value) -> Value {
-    let n = total.as_integer().unwrap_or(0) as usize;
+pub extern "C-unwind" fn rt_take(total: Value, collection: Value) -> Value {
+    let n = total
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("take(total, collection) expects Integer total"))
+        as usize;
 
     // List
     if let Some(list) = collection.as_list() {
@@ -2851,7 +2857,7 @@ pub extern "C" fn rt_take(total: Value, collection: Value) -> Value {
         return Value::from_list(result);
     }
 
-    Value::from_list(im::Vector::new())
+    runtime_error("take(total, collection) expects List, Set, Range, or LazySequence")
 }
 
 /// `sort(comparator, collection)` → List
@@ -2863,9 +2869,9 @@ pub extern "C" fn rt_take(total: Value, collection: Value) -> Value {
 /// - sort(<, [3, 2, 1]) → [1, 2, 3]
 /// - sort(>, [3, 2, 1]) → [3, 2, 1]
 /// - sort(-, [3, 2, 1]) → [1, 2, 3]
-/// - sort(>, 1..5) → [4, 3, 2, 1]
+/// - sort(|a, b| a % 2 < b % 2, [1, 2, 3, 4]) → [2, 4, 1, 3]
 #[no_mangle]
-pub extern "C" fn rt_sort(comparator: Value, collection: Value) -> Value {
+pub extern "C-unwind" fn rt_sort(comparator: Value, collection: Value) -> Value {
     if !is_callable(&comparator) {
         runtime_error("sort(comparator, collection) expects a function");
     }
@@ -2897,29 +2903,12 @@ pub extern "C" fn rt_sort(comparator: Value, collection: Value) -> Value {
         });
     };
 
-    // List
     if let Some(list) = collection.as_list() {
         let mut items: Vec<Value> = list.iter().copied().collect();
         sort_items(&mut items);
         return Value::from_list(items.into_iter().collect());
     }
-
-    // LazySequence (including Range) - collect and sort
-    if let Some(lazy) = collection.as_lazy_sequence() {
-        if is_infinite_lazy_sequence(lazy) {
-            runtime_error("sort on unbounded lazy sequence");
-        }
-        let mut items: Vec<Value> = Vec::new();
-        let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
-        while let Some((val, next_seq)) = lazy_next_with_closures(&current) {
-            items.push(val);
-            current = next_seq;
-        }
-        sort_items(&mut items);
-        return Value::from_list(items.into_iter().collect());
-    }
-
-    runtime_error("sort(comparator, collection) expects List, Set, String, Range, or LazySequence")
+    runtime_error("sort(comparator, collection) expects List")
 }
 
 /// `reverse(collection)` → Collection
@@ -2931,7 +2920,7 @@ pub extern "C" fn rt_sort(comparator: Value, collection: Value) -> Value {
 /// - reverse("abc") → "cba"
 /// - reverse(1..5) → [4, 3, 2, 1]
 #[no_mangle]
-pub extern "C" fn rt_reverse(collection: Value) -> Value {
+pub extern "C-unwind" fn rt_reverse(collection: Value) -> Value {
     // List
     if let Some(list) = collection.as_list() {
         let result: im::Vector<Value> = list.iter().rev().copied().collect();
@@ -2945,11 +2934,18 @@ pub extern "C" fn rt_reverse(collection: Value) -> Value {
         return Value::from_string(reversed);
     }
 
-    // LazySequence (including Range) - collect and reverse for bounded sequences
+    // Range (bounded only) - collect and reverse
     if let Some(lazy) = collection.as_lazy_sequence() {
-        if is_infinite_lazy_sequence(lazy) {
-            runtime_error("reverse on unbounded lazy sequence");
+        match &lazy.kind {
+            LazySeqKind::Range { end: Some(_), .. } => {}
+            LazySeqKind::Range { end: None, .. } => {
+                runtime_error("reverse on unbounded range");
+            }
+            _ => {
+                runtime_error("reverse(collection) expects List, String, or Range");
+            }
         }
+
         let mut elements: Vec<Value> = Vec::new();
         let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
         while let Some((val, next_seq)) = lazy_next_with_closures(&current) {
@@ -2960,7 +2956,7 @@ pub extern "C" fn rt_reverse(collection: Value) -> Value {
         return Value::from_list(elements.into_iter().collect());
     }
 
-    runtime_error("reverse(collection) expects List, String, Range, or LazySequence")
+    runtime_error("reverse(collection) expects List, String, or Range")
 }
 
 /// `rotate(steps, collection)` → List
@@ -2973,8 +2969,10 @@ pub extern "C" fn rt_reverse(collection: Value) -> Value {
 /// - rotate(1, [1, 2, 3]) → [3, 1, 2]
 /// - rotate(-1, [1, 2, 3]) → [2, 3, 1]
 #[no_mangle]
-pub extern "C" fn rt_rotate(steps: Value, collection: Value) -> Value {
-    let n = steps.as_integer().unwrap_or(0);
+pub extern "C-unwind" fn rt_rotate(steps: Value, collection: Value) -> Value {
+    let n = steps
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("rotate(steps, collection) expects Integer steps"));
 
     // List
     if let Some(list) = collection.as_list() {
@@ -3006,7 +3004,7 @@ pub extern "C" fn rt_rotate(steps: Value, collection: Value) -> Value {
         return Value::from_list(result);
     }
 
-    collection
+    runtime_error("rotate(steps, collection) expects List")
 }
 
 /// `chunk(size, collection)` → List[List]
@@ -3017,22 +3015,14 @@ pub extern "C" fn rt_rotate(steps: Value, collection: Value) -> Value {
 /// - chunk(2, [1, 2, 3]) → [[1, 2], [3]]
 /// - chunk(2, [1, 2, 3, 4]) → [[1, 2], [3, 4]]
 #[no_mangle]
-pub extern "C" fn rt_chunk(size: Value, collection: Value) -> Value {
-    let chunk_size = size.as_integer().unwrap_or(1) as usize;
-    if chunk_size == 0 {
-        return Value::from_list(im::Vector::new());
+pub extern "C-unwind" fn rt_chunk(size: Value, collection: Value) -> Value {
+    let chunk_size = size
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("chunk(size, collection) expects Integer size"));
+    if chunk_size <= 0 {
+        runtime_error("chunk(size, collection) expects size > 0");
     }
-
-    // String - chunk into substrings
-    if let Some(s) = collection.as_string() {
-        let mut chunks: im::Vector<Value> = im::Vector::new();
-        let chars: Vec<char> = s.chars().collect();
-        for chunk in chars.chunks(chunk_size) {
-            let chunk_str: String = chunk.iter().collect();
-            chunks.push_back(Value::from_string(&chunk_str));
-        }
-        return Value::from_list(chunks);
-    }
+    let chunk_size = chunk_size as usize;
 
     // List
     if let Some(list) = collection.as_list() {
@@ -3055,7 +3045,7 @@ pub extern "C" fn rt_chunk(size: Value, collection: Value) -> Value {
         return Value::from_list(chunks);
     }
 
-    Value::from_list(im::Vector::new())
+    runtime_error("chunk(size, collection) expects List")
 }
 
 // ============================================================================
@@ -3634,20 +3624,17 @@ pub extern "C" fn rt_repeat(value: Value) -> Value {
 /// Per LANG.txt §11.12:
 /// - cycle([1, 2, 3]) |> take(7) → [1, 2, 3, 1, 2, 3, 1]
 #[no_mangle]
-pub extern "C" fn rt_cycle(collection: Value) -> Value {
+pub extern "C-unwind" fn rt_cycle(collection: Value) -> Value {
     // Get elements from collection as a Vector
     let source = if let Some(list) = collection.as_list() {
         list.clone()
-    } else if let Some(set) = collection.as_set() {
-        set.iter().copied().collect()
     } else if let Some(s) = collection.as_string() {
         use unicode_segmentation::UnicodeSegmentation;
         s.graphemes(true)
             .map(|g| Value::from_string(g.to_string()))
             .collect()
     } else {
-        // Return empty lazy sequence
-        return Value::from_lazy_sequence(LazySequenceObject::cycle(im::Vector::new()));
+        runtime_error("cycle(collection) expects List or String");
     };
 
     let lazy = LazySequenceObject::cycle(source);
@@ -3674,21 +3661,17 @@ pub extern "C" fn rt_iterate(generator: Value, initial: Value) -> Value {
 /// Per LANG.txt §11.12:
 /// - combinations(2, [1, 2, 3]) |> list → [[1, 2], [1, 3], [2, 3]]
 #[no_mangle]
-pub extern "C" fn rt_combinations(size: Value, collection: Value) -> Value {
-    let k = size.as_integer().unwrap_or(0) as usize;
+pub extern "C-unwind" fn rt_combinations(size: Value, collection: Value) -> Value {
+    let k = size
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("combinations(size, collection) expects Integer size"))
+        as usize;
 
     // Get elements from collection
     let source: Vec<Value> = if let Some(list) = collection.as_list() {
         list.iter().copied().collect()
-    } else if let Some(set) = collection.as_set() {
-        set.iter().copied().collect()
     } else {
-        return Value::from_lazy_sequence(LazySequenceObject::new(LazySeqKind::Combinations {
-            source: vec![],
-            size: k,
-            indices: vec![],
-            done: true,
-        }));
+        runtime_error("combinations(size, collection) expects List");
     };
 
     if k == 0 || k > source.len() {
@@ -4282,11 +4265,11 @@ fn take_from_lazy_recursive(
 /// - lines("") → []
 /// - lines("a\nb\n") → ["a", "b"] (trailing empty lines filtered)
 #[no_mangle]
-pub extern "C" fn rt_lines(value: Value) -> Value {
+pub extern "C-unwind" fn rt_lines(value: Value) -> Value {
     // Only works on strings
     let s = match value.as_string() {
         Some(s) => s,
-        None => return Value::from_list(im::Vector::new()),
+        None => runtime_error("lines(string) expects a String"),
     };
 
     // Split on newlines, filtering empty trailing lines
@@ -4308,15 +4291,15 @@ pub extern "C" fn rt_lines(value: Value) -> Value {
 /// - split(" ", "hello world") → ["hello", "world"]
 /// - split("", "abc") → ["a", "b", "c"] (split into characters/graphemes)
 #[no_mangle]
-pub extern "C" fn rt_split(separator: Value, string: Value) -> Value {
+pub extern "C-unwind" fn rt_split(separator: Value, string: Value) -> Value {
     // Both must be strings
     let sep = match separator.as_string() {
         Some(s) => s,
-        None => return Value::from_list(im::Vector::new()),
+        None => runtime_error("split(separator, string) expects String arguments"),
     };
     let s = match string.as_string() {
         Some(s) => s,
-        None => return Value::from_list(im::Vector::new()),
+        None => runtime_error("split(separator, string) expects String arguments"),
     };
 
     // Empty separator: split into grapheme clusters
@@ -4449,11 +4432,11 @@ pub extern "C" fn rt_md5(value: Value) -> Value {
 /// Per LANG.txt §11.14:
 /// - upper("hello") → "HELLO"
 #[no_mangle]
-pub extern "C" fn rt_upper(value: Value) -> Value {
+pub extern "C-unwind" fn rt_upper(value: Value) -> Value {
     // Only works on strings
     let s = match value.as_string() {
         Some(s) => s,
-        None => return Value::from_string("".to_string()),
+        None => runtime_error("upper(string) expects a String"),
     };
 
     Value::from_string(s.to_uppercase())
@@ -4466,11 +4449,11 @@ pub extern "C" fn rt_upper(value: Value) -> Value {
 /// Per LANG.txt §11.14:
 /// - lower("HELLO") → "hello"
 #[no_mangle]
-pub extern "C" fn rt_lower(value: Value) -> Value {
+pub extern "C-unwind" fn rt_lower(value: Value) -> Value {
     // Only works on strings
     let s = match value.as_string() {
         Some(s) => s,
-        None => return Value::from_string("".to_string()),
+        None => runtime_error("lower(string) expects a String"),
     };
 
     Value::from_string(s.to_lowercase())
@@ -4484,19 +4467,19 @@ pub extern "C" fn rt_lower(value: Value) -> Value {
 /// - replace("a", "x", "banana") → "bxnxnx"
 /// - replace("world", "Santa", "hello world") → "hello Santa"
 #[no_mangle]
-pub extern "C" fn rt_replace(from: Value, to: Value, string: Value) -> Value {
+pub extern "C-unwind" fn rt_replace(from: Value, to: Value, string: Value) -> Value {
     // All must be strings
     let from_str = match from.as_string() {
         Some(s) => s,
-        None => return string,
+        None => runtime_error("replace(from, to, string) expects String arguments"),
     };
     let to_str = match to.as_string() {
         Some(s) => s,
-        None => return string,
+        None => runtime_error("replace(from, to, string) expects String arguments"),
     };
     let s = match string.as_string() {
         Some(s) => s,
-        None => return Value::from_string("".to_string()),
+        None => runtime_error("replace(from, to, string) expects String arguments"),
     };
 
     Value::from_string(s.replace(from_str, to_str))
@@ -4510,11 +4493,11 @@ pub extern "C" fn rt_replace(from: Value, to: Value, string: Value) -> Value {
 /// - join(", ", [1, 2, 3]) → "1, 2, 3"
 /// - join("-", ["a", "b", "c"]) → "a-b-c"
 #[no_mangle]
-pub extern "C" fn rt_join(separator: Value, collection: Value) -> Value {
+pub extern "C-unwind" fn rt_join(separator: Value, collection: Value) -> Value {
     // Separator must be a string
     let sep = match separator.as_string() {
         Some(s) => s.to_string(),
-        None => "".to_string(),
+        None => runtime_error("join(separator, collection) expects String separator"),
     };
 
     // Helper to convert value to string representation
@@ -4551,14 +4534,7 @@ pub extern "C" fn rt_join(separator: Value, collection: Value) -> Value {
         return Value::from_string(parts.join(&sep));
     }
 
-    // String (treat as list of graphemes)
-    if let Some(s) = collection.as_string() {
-        use unicode_segmentation::UnicodeSegmentation;
-        let parts: Vec<&str> = s.graphemes(true).collect();
-        return Value::from_string(parts.join(&sep));
-    }
-
-    Value::from_string("".to_string())
+    runtime_error("join(separator, collection) expects List or Set collection")
 }
 
 // ============================================================================
@@ -4574,7 +4550,7 @@ pub extern "C" fn rt_join(separator: Value, collection: Value) -> Value {
 /// - abs(5) → 5
 /// - abs(-3.7) → 3.7
 #[no_mangle]
-pub extern "C" fn rt_abs(value: Value) -> Value {
+pub extern "C-unwind" fn rt_abs(value: Value) -> Value {
     // Integer
     if let Some(i) = value.as_integer() {
         return Value::from_integer(i.abs());
@@ -4585,8 +4561,7 @@ pub extern "C" fn rt_abs(value: Value) -> Value {
         return Value::from_decimal(d.abs());
     }
 
-    // Other types - return 0
-    Value::from_integer(0)
+    runtime_error("abs(value) expects Integer or Decimal")
 }
 
 /// `signum(value)` → Integer
@@ -4600,7 +4575,7 @@ pub extern "C" fn rt_abs(value: Value) -> Value {
 /// - signum(5.5) → 1
 /// - signum(-5.5) → -1
 #[no_mangle]
-pub extern "C" fn rt_signum(value: Value) -> Value {
+pub extern "C-unwind" fn rt_signum(value: Value) -> Value {
     // Integer
     if let Some(i) = value.as_integer() {
         return Value::from_integer(i.signum());
@@ -4617,8 +4592,7 @@ pub extern "C" fn rt_signum(value: Value) -> Value {
         }
     }
 
-    // Other types - return 0
-    Value::from_integer(0)
+    runtime_error("signum(value) expects Integer or Decimal")
 }
 
 /// `vec_add(a, b)` → List
@@ -4630,15 +4604,15 @@ pub extern "C" fn rt_signum(value: Value) -> Value {
 /// - vec_add([1, 2], [3, 4]) → [4, 6]
 /// - vec_add([1, 2, 3], [10, 20]) → [11, 22]
 #[no_mangle]
-pub extern "C" fn rt_vec_add(a: Value, b: Value) -> Value {
+pub extern "C-unwind" fn rt_vec_add(a: Value, b: Value) -> Value {
     // Both must be lists
     let list_a = match a.as_list() {
         Some(l) => l,
-        None => return Value::from_list(im::Vector::new()),
+        None => runtime_error("vec_add(a, b) expects List arguments"),
     };
     let list_b = match b.as_list() {
         Some(l) => l,
-        None => return Value::from_list(im::Vector::new()),
+        None => runtime_error("vec_add(a, b) expects List arguments"),
     };
 
     // Element-wise addition, result length equals shorter list
@@ -4665,9 +4639,13 @@ pub extern "C" fn rt_vec_add(a: Value, b: Value) -> Value {
 /// Per LANG.txt §4.5:
 /// - bit_and(12, 10) → 8  (1100 & 1010 = 1000)
 #[no_mangle]
-pub extern "C" fn rt_bit_and(a: Value, b: Value) -> Value {
-    let ia = a.as_integer().unwrap_or(0);
-    let ib = b.as_integer().unwrap_or(0);
+pub extern "C-unwind" fn rt_bit_and(a: Value, b: Value) -> Value {
+    let ia = a
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("bit_and(a, b) expects Integer arguments"));
+    let ib = b
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("bit_and(a, b) expects Integer arguments"));
     Value::from_integer(ia & ib)
 }
 
@@ -4678,9 +4656,13 @@ pub extern "C" fn rt_bit_and(a: Value, b: Value) -> Value {
 /// Per LANG.txt §4.5:
 /// - bit_or(12, 10) → 14 (1100 | 1010 = 1110)
 #[no_mangle]
-pub extern "C" fn rt_bit_or(a: Value, b: Value) -> Value {
-    let ia = a.as_integer().unwrap_or(0);
-    let ib = b.as_integer().unwrap_or(0);
+pub extern "C-unwind" fn rt_bit_or(a: Value, b: Value) -> Value {
+    let ia = a
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("bit_or(a, b) expects Integer arguments"));
+    let ib = b
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("bit_or(a, b) expects Integer arguments"));
     Value::from_integer(ia | ib)
 }
 
@@ -4691,9 +4673,13 @@ pub extern "C" fn rt_bit_or(a: Value, b: Value) -> Value {
 /// Per LANG.txt §4.5:
 /// - bit_xor(12, 10) → 6  (1100 ^ 1010 = 0110)
 #[no_mangle]
-pub extern "C" fn rt_bit_xor(a: Value, b: Value) -> Value {
-    let ia = a.as_integer().unwrap_or(0);
-    let ib = b.as_integer().unwrap_or(0);
+pub extern "C-unwind" fn rt_bit_xor(a: Value, b: Value) -> Value {
+    let ia = a
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("bit_xor(a, b) expects Integer arguments"));
+    let ib = b
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("bit_xor(a, b) expects Integer arguments"));
     Value::from_integer(ia ^ ib)
 }
 
@@ -4704,8 +4690,10 @@ pub extern "C" fn rt_bit_xor(a: Value, b: Value) -> Value {
 /// Per LANG.txt §4.5:
 /// - bit_not(12) → -13 (bitwise complement)
 #[no_mangle]
-pub extern "C" fn rt_bit_not(value: Value) -> Value {
-    let i = value.as_integer().unwrap_or(0);
+pub extern "C-unwind" fn rt_bit_not(value: Value) -> Value {
+    let i = value
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("bit_not(value) expects Integer"));
     Value::from_integer(!i)
 }
 
@@ -4716,12 +4704,16 @@ pub extern "C" fn rt_bit_not(value: Value) -> Value {
 /// Per LANG.txt §4.5:
 /// - bit_shift_left(1, 3) → 8  (1 << 3 = 1000)
 #[no_mangle]
-pub extern "C" fn rt_bit_shift_left(value: Value, shift: Value) -> Value {
-    let i = value.as_integer().unwrap_or(0);
-    let s = shift.as_integer().unwrap_or(0);
+pub extern "C-unwind" fn rt_bit_shift_left(value: Value, shift: Value) -> Value {
+    let i = value
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("bit_shift_left(value, shift) expects Integer arguments"));
+    let s = shift
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("bit_shift_left(value, shift) expects Integer arguments"));
     // Clamp shift to valid range (0-63 for i64)
     if !(0..=63).contains(&s) {
-        return Value::from_integer(0);
+        runtime_error("bit_shift_left(value, shift) expects shift in 0..=63");
     }
     Value::from_integer(i << s)
 }
@@ -4733,12 +4725,16 @@ pub extern "C" fn rt_bit_shift_left(value: Value, shift: Value) -> Value {
 /// Per LANG.txt §4.5:
 /// - bit_shift_right(8, 2) → 2  (1000 >> 2 = 10)
 #[no_mangle]
-pub extern "C" fn rt_bit_shift_right(value: Value, shift: Value) -> Value {
-    let i = value.as_integer().unwrap_or(0);
-    let s = shift.as_integer().unwrap_or(0);
+pub extern "C-unwind" fn rt_bit_shift_right(value: Value, shift: Value) -> Value {
+    let i = value
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("bit_shift_right(value, shift) expects Integer arguments"));
+    let s = shift
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("bit_shift_right(value, shift) expects Integer arguments"));
     // Clamp shift to valid range (0-63 for i64)
     if !(0..=63).contains(&s) {
-        return Value::from_integer(0);
+        runtime_error("bit_shift_right(value, shift) expects shift in 0..=63");
     }
     Value::from_integer(i >> s)
 }

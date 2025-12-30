@@ -3117,6 +3117,19 @@ fn builtin_skip_range_all() {
     assert!(elements.is_empty());
 }
 
+#[test]
+#[should_panic(expected = "skip(total, collection) expects Integer total")]
+fn builtin_skip_non_integer_total() {
+    let list = Value::from_list(im::Vector::new());
+    let _ = rt_skip(Value::from_string("x"), list);
+}
+
+#[test]
+#[should_panic(expected = "skip(total, collection) expects List, Set, Range, or LazySequence")]
+fn builtin_skip_non_collection() {
+    let _ = rt_skip(Value::from_integer(1), Value::from_integer(2));
+}
+
 // take() tests per LANG.txt §11.9
 #[test]
 fn builtin_take_list() {
@@ -3189,6 +3202,19 @@ fn builtin_take_range_more_than_size() {
     let result = rt_take(Value::from_integer(10), v);
     let taken = result.as_list().expect("should be a list");
     assert_eq!(taken.len(), 4);
+}
+
+#[test]
+#[should_panic(expected = "take(total, collection) expects Integer total")]
+fn builtin_take_non_integer_total() {
+    let list = Value::from_list(im::Vector::new());
+    let _ = rt_take(Value::from_string("x"), list);
+}
+
+#[test]
+#[should_panic(expected = "take(total, collection) expects List, Set, Range, or LazySequence")]
+fn builtin_take_non_collection() {
+    let _ = rt_take(Value::from_integer(1), Value::from_integer(2));
 }
 
 // sort() tests per LANG.txt §11.9
@@ -3306,19 +3332,13 @@ fn builtin_sort_with_subtraction() {
 }
 
 #[test]
+#[should_panic(expected = "sort(comparator, collection) expects List")]
 fn builtin_sort_range() {
-    // sort(>, 1..5) → [1, 2, 3, 4] (ascending, matches Comet behavior)
     use crate::heap::LazySequenceObject;
     let range = LazySequenceObject::range(1, Some(5), false, 1);
     let v = Value::from_lazy_sequence(range);
     let comparator = make_test_closure(greater_comparator, 2);
-    let result = rt_sort(comparator, v);
-    let sorted = result.as_list().expect("should be a list");
-    assert_eq!(sorted.len(), 4);
-    assert_eq!(sorted[0].as_integer(), Some(1));
-    assert_eq!(sorted[1].as_integer(), Some(2));
-    assert_eq!(sorted[2].as_integer(), Some(3));
-    assert_eq!(sorted[3].as_integer(), Some(4));
+    let _ = rt_sort(comparator, v);
 }
 
 // reverse() tests per LANG.txt §11.9
@@ -3438,6 +3458,19 @@ fn builtin_rotate_multiple() {
     assert_eq!(rotated[3].as_integer(), Some(2));
 }
 
+#[test]
+#[should_panic(expected = "rotate(steps, collection) expects Integer steps")]
+fn builtin_rotate_non_integer_steps() {
+    let list = Value::from_list(im::Vector::new());
+    let _ = rt_rotate(Value::from_string("x"), list);
+}
+
+#[test]
+#[should_panic(expected = "rotate(steps, collection) expects List")]
+fn builtin_rotate_non_list() {
+    let _ = rt_rotate(Value::from_integer(1), Value::from_integer(2));
+}
+
 // chunk() tests per LANG.txt §11.9
 #[test]
 fn builtin_chunk_even() {
@@ -3498,6 +3531,19 @@ fn builtin_chunk_empty() {
     let result = rt_chunk(Value::from_integer(2), list);
     let chunks = result.as_list().expect("should be a list");
     assert!(chunks.is_empty());
+}
+
+#[test]
+#[should_panic(expected = "chunk(size, collection) expects size > 0")]
+fn builtin_chunk_zero_size() {
+    let list = Value::from_list(im::Vector::new());
+    let _ = rt_chunk(Value::from_integer(0), list);
+}
+
+#[test]
+#[should_panic(expected = "chunk(size, collection) expects List")]
+fn builtin_chunk_non_list() {
+    let _ = rt_chunk(Value::from_integer(2), Value::from_integer(1));
 }
 
 // ===== Set Operations (§11.10) =====
@@ -3993,6 +4039,12 @@ fn builtin_cycle_string() {
     assert_eq!(out[3].as_string(), Some("a"));
 }
 
+#[test]
+#[should_panic(expected = "cycle(collection) expects List or String")]
+fn builtin_cycle_non_collection() {
+    let _ = rt_cycle(Value::from_integer(1));
+}
+
 // iterate() tests
 #[test]
 fn builtin_iterate_generates_lazy_sequence() {
@@ -4096,6 +4148,12 @@ fn builtin_combinations_produces_correct_combinations() {
     assert_eq!(c3.len(), 2);
     assert_eq!(c3[0].as_integer(), Some(2));
     assert_eq!(c3[1].as_integer(), Some(3));
+}
+
+#[test]
+#[should_panic(expected = "combinations(size, collection) expects List")]
+fn builtin_combinations_non_list() {
+    let _ = rt_combinations(Value::from_integer(2), Value::from_integer(1));
 }
 
 // range() function tests
@@ -4268,12 +4326,10 @@ fn builtin_lines_empty_string() {
 }
 
 #[test]
+#[should_panic(expected = "lines(string) expects a String")]
 fn builtin_lines_non_string() {
-    // lines on non-string returns empty list
     let v = Value::from_integer(42);
-    let result = rt_lines(v);
-    let list = result.as_list().expect("should be a list");
-    assert_eq!(list.len(), 0);
+    let _ = rt_lines(v);
 }
 
 // split() function tests per LANG.txt §11.14
@@ -4313,6 +4369,22 @@ fn builtin_split_empty_separator() {
     assert_eq!(list[0].as_string(), Some("a"));
     assert_eq!(list[1].as_string(), Some("b"));
     assert_eq!(list[2].as_string(), Some("c"));
+}
+
+#[test]
+#[should_panic(expected = "split(separator, string) expects String arguments")]
+fn builtin_split_non_string_separator() {
+    let sep = Value::from_integer(1);
+    let s = Value::from_string("abc");
+    let _ = rt_split(sep, s);
+}
+
+#[test]
+#[should_panic(expected = "split(separator, string) expects String arguments")]
+fn builtin_split_non_string_input() {
+    let sep = Value::from_string(",");
+    let s = Value::from_integer(1);
+    let _ = rt_split(sep, s);
 }
 
 // md5() function tests per LANG.txt §11.14
@@ -4358,6 +4430,13 @@ fn builtin_upper_mixed() {
     assert_eq!(result.as_string(), Some("HELLO WORLD"));
 }
 
+#[test]
+#[should_panic(expected = "upper(string) expects a String")]
+fn builtin_upper_non_string() {
+    let v = Value::from_integer(1);
+    let _ = rt_upper(v);
+}
+
 // lower() function tests per LANG.txt §11.14
 #[test]
 fn builtin_lower() {
@@ -4373,6 +4452,13 @@ fn builtin_lower_mixed() {
     let v = Value::from_string("Hello World");
     let result = rt_lower(v);
     assert_eq!(result.as_string(), Some("hello world"));
+}
+
+#[test]
+#[should_panic(expected = "lower(string) expects a String")]
+fn builtin_lower_non_string() {
+    let v = Value::from_integer(1);
+    let _ = rt_lower(v);
 }
 
 // replace() function tests per LANG.txt §11.14
@@ -4394,6 +4480,15 @@ fn builtin_replace_word() {
     let s = Value::from_string("hello world");
     let result = rt_replace(from, to, s);
     assert_eq!(result.as_string(), Some("hello Santa"));
+}
+
+#[test]
+#[should_panic(expected = "replace(from, to, string) expects String arguments")]
+fn builtin_replace_non_string() {
+    let from = Value::from_integer(1);
+    let to = Value::from_string("x");
+    let s = Value::from_string("abc");
+    let _ = rt_replace(from, to, s);
 }
 
 // join() function tests per LANG.txt §11.14
@@ -4429,6 +4524,22 @@ fn builtin_join_strings() {
     );
     let result = rt_join(sep, list);
     assert_eq!(result.as_string(), Some("a-b-c"));
+}
+
+#[test]
+#[should_panic(expected = "join(separator, collection) expects String separator")]
+fn builtin_join_non_string_separator() {
+    let sep = Value::from_integer(1);
+    let list = Value::from_list(im::Vector::new());
+    let _ = rt_join(sep, list);
+}
+
+#[test]
+#[should_panic(expected = "join(separator, collection) expects List or Set collection")]
+fn builtin_join_non_collection() {
+    let sep = Value::from_string(",");
+    let value = Value::from_integer(1);
+    let _ = rt_join(sep, value);
 }
 
 // regex_match() function tests per LANG.txt §11.14
@@ -4565,6 +4676,13 @@ fn builtin_abs_positive_decimal() {
     assert_eq!(result.as_decimal(), Some(3.7));
 }
 
+#[test]
+#[should_panic(expected = "abs(value) expects Integer or Decimal")]
+fn builtin_abs_non_number() {
+    let v = Value::from_string("oops");
+    let _ = rt_abs(v);
+}
+
 // signum() function tests per LANG.txt §11.15
 #[test]
 fn builtin_signum_positive() {
@@ -4604,6 +4722,13 @@ fn builtin_signum_negative_decimal() {
     let v = Value::from_decimal(-5.5);
     let result = rt_signum(v);
     assert_eq!(result.as_integer(), Some(-1));
+}
+
+#[test]
+#[should_panic(expected = "signum(value) expects Integer or Decimal")]
+fn builtin_signum_non_number() {
+    let v = Value::from_string("oops");
+    let _ = rt_signum(v);
 }
 
 // vec_add() function tests per LANG.txt §11.15
@@ -4680,6 +4805,14 @@ fn builtin_vec_add_shorter_list() {
     assert_eq!(list[1].as_integer(), Some(22));
 }
 
+#[test]
+#[should_panic(expected = "vec_add(a, b) expects List arguments")]
+fn builtin_vec_add_non_list() {
+    let a = Value::from_integer(1);
+    let b = Value::from_list(im::Vector::new());
+    let _ = rt_vec_add(a, b);
+}
+
 // ===== Phase 14: Bitwise Functions (§4.5) =====
 
 use crate::builtins::{
@@ -4694,6 +4827,14 @@ fn builtin_bit_and() {
     let b = Value::from_integer(10);
     let result = rt_bit_and(a, b);
     assert_eq!(result.as_integer(), Some(8));
+}
+
+#[test]
+#[should_panic(expected = "bit_and(a, b) expects Integer arguments")]
+fn builtin_bit_and_non_integer() {
+    let a = Value::from_integer(1);
+    let b = Value::from_string("x");
+    let _ = rt_bit_and(a, b);
 }
 
 // bit_or() tests per LANG.txt §4.5
