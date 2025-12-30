@@ -6,7 +6,25 @@
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+fn newest_staticlib_in_deps(dir: &Path) -> Option<PathBuf> {
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = path.file_name()?.to_string_lossy();
+        if !file_name.starts_with("libsanta_lang_runtime-") || !file_name.ends_with(".a") {
+            continue;
+        }
+        let modified = entry.metadata().and_then(|m| m.modified()).ok()?;
+        match &newest {
+            Some((best_time, _)) if *best_time >= modified => {}
+            _ => newest = Some((modified, path)),
+        }
+    }
+    newest.map(|(_, path)| path)
+}
 
 fn main() {
     // Tell Cargo to re-run if the runtime library changes
@@ -29,20 +47,23 @@ fn main() {
             .display()
     );
 
-    // Try release first, then debug
-    let runtime_lib = project_root.join("target/release/libsanta_lang_runtime.a");
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    let profile_dir = project_root.join("target").join(&profile);
+
+    // Prefer profile-matched staticlib, then a deps-built staticlib for the same profile
+    let runtime_lib = profile_dir.join("libsanta_lang_runtime.a");
     let runtime_lib = if runtime_lib.exists() {
         runtime_lib
+    } else if let Some(dep_lib) = newest_staticlib_in_deps(&profile_dir.join("deps")) {
+        dep_lib
     } else {
-        let debug_lib = project_root.join("target/debug/libsanta_lang_runtime.a");
-        if debug_lib.exists() {
-            debug_lib
-        } else {
-            // Runtime not built yet - this is fine during initial build
-            // The pipeline will fall back to finding it externally
-            println!("cargo:warning=Runtime library not found, embedding disabled");
-            return;
-        }
+        // Runtime not built yet - this is fine during initial build
+        // The pipeline will fall back to finding it externally
+        println!(
+            "cargo:warning=Runtime library not found for profile '{}', embedding disabled",
+            profile
+        );
+        return;
     };
 
     // Read and compress the runtime library
