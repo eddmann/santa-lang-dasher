@@ -2357,41 +2357,6 @@ impl Parser {
         }
     }
 
-    /// Determines if an expression is suitable as a single set element.
-    /// Returns true for "value-like" expressions (identifiers, literals, collections).
-    /// Returns false for computed expressions (infix, calls) which suggest a block.
-    fn is_set_element_expr(expr: &Expr) -> bool {
-        match expr {
-            // These are clearly set elements (literals and collections)
-            Expr::Identifier(_) => true,
-            Expr::List(_) => true,
-            Expr::Dict(_) => true,
-            Expr::Set(_) => true,
-            Expr::Integer(_) => true,
-            Expr::Decimal(_) => true,
-            Expr::String(_) => true,
-            Expr::Boolean(_) => true,
-            Expr::Nil => true,
-            Expr::Placeholder => true,
-            Expr::RestIdentifier(_) => true,
-            // Range is a value (could be a set element)
-            Expr::Range { .. } => true,
-            // Index access is value-like (getting an element)
-            Expr::Index { .. } => true,
-            // These suggest computation, so treat as block
-            Expr::Infix { .. } => false,
-            Expr::Prefix { .. } => false,
-            Expr::Call { .. } => false,
-            Expr::InfixCall { .. } => false,
-            Expr::Function { .. } => false,
-            Expr::Block(_) => false,
-            Expr::If { .. } => false,
-            Expr::IfLet { .. } => false,
-            Expr::Match { .. } => false,
-            Expr::Spread(_) => false,
-            Expr::Assignment { .. } => false,
-        }
-    }
 }
 
 pub fn parse(tokens: Vec<Token>) -> Result<Expr, ParseError> {

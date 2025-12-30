@@ -793,20 +793,6 @@ impl<'ctx> CodegenContext<'ctx> {
         self.module.add_function(fn_name, fn_type, None)
     }
 
-    /// Get or declare the rt_expect_integer runtime function
-    fn get_or_declare_rt_expect_integer(&self) -> inkwell::values::FunctionValue<'ctx> {
-        let fn_name = "rt_expect_integer";
-
-        if let Some(func) = self.module.get_function(fn_name) {
-            return func;
-        }
-
-        // Declare: extern "C-unwind" fn(Value) -> Value
-        let i64_type = self.context.i64_type();
-        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
-    }
-
     /// Get or declare the rt_add runtime function
     fn get_or_declare_rt_add(&self) -> inkwell::values::FunctionValue<'ctx> {
         self.get_or_declare_rt_binop("rt_add")
