@@ -3125,42 +3125,40 @@ fn collect_elements(v: Value) -> Vec<Value> {
         set.iter().copied().collect()
     } else if let Some(lazy) = v.as_lazy_sequence() {
         use crate::heap::LazySeqKind;
-        match &lazy.kind {
-            LazySeqKind::Range { end: Some(_), .. } => {
-                let mut result = Vec::new();
-                let mut current = lazy.clone();
-                while let Some((val, next_seq)) = current.next() {
-                    result.push(val);
-                    current = *next_seq;
-                }
-                result
-            }
-            LazySeqKind::Range { end: None, .. } => {
-                runtime_error("set operations do not support unbounded ranges");
-            }
-            _ => {
-                runtime_error("set operations expect List, Set, String, or Range");
-            }
+        // Check for unbounded ranges first
+        if let LazySeqKind::Range { end: None, .. } = &lazy.kind {
+            runtime_error("set operations do not support unbounded ranges");
         }
+        // Collect all elements from the lazy sequence (including Map, Filter, etc.)
+        let mut result = Vec::new();
+        let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        while let Some((val, next_seq)) = lazy_next_with_closures(&current) {
+            result.push(val);
+            current = next_seq;
+        }
+        result
     } else if let Some(s) = v.as_string() {
         use unicode_segmentation::UnicodeSegmentation;
         s.graphemes(true)
             .map(|g| Value::from_string(g.to_string()))
             .collect()
     } else {
-        runtime_error("set operations expect List, Set, String, or Range");
+        runtime_error("set operations expect List, Set, String, LazySequence, or Range");
     };
 
-    for elem in &elements {
+    elements
+}
+
+/// Helper: check that all elements are hashable before inserting into a set
+fn check_hashable(elements: &[Value]) {
+    for elem in elements {
         if !elem.is_hashable() {
             runtime_error(&format!(
-                "{} is not hashable and cannot be used in set operations",
+                "{} is not hashable and cannot be added to a Set",
                 type_name(elem)
             ));
         }
     }
-
-    elements
 }
 
 /// `union(collection1, collection2)` → Set
@@ -3173,10 +3171,14 @@ fn collect_elements(v: Value) -> Vec<Value> {
 pub extern "C" fn rt_union(collection1: Value, collection2: Value) -> Value {
     let mut result: im::HashSet<Value> = im::HashSet::new();
 
-    for v in collect_elements(collection1) {
+    let elems1 = collect_elements(collection1);
+    check_hashable(&elems1);
+    for v in elems1 {
         result.insert(v);
     }
-    for v in collect_elements(collection2) {
+    let elems2 = collect_elements(collection2);
+    check_hashable(&elems2);
+    for v in elems2 {
         result.insert(v);
     }
 
@@ -3198,7 +3200,9 @@ pub extern "C" fn rt_union_all(collections: Value) -> Value {
         Some(l) => l,
         None => {
             // Single non-list value - return its elements as a set
-            return Value::from_set(collect_elements(collections).into_iter().collect());
+            let elems = collect_elements(collections);
+            check_hashable(&elems);
+            return Value::from_set(elems.into_iter().collect());
         }
     };
 
@@ -3226,11 +3230,14 @@ pub extern "C" fn rt_union_all(collections: Value) -> Value {
                 elements
             } else {
                 // Single collection - just return its elements as a set
+                check_hashable(&elements);
                 return Value::from_set(elements.into_iter().collect());
             }
         } else {
             // Single non-collection argument
-            return Value::from_set(collect_elements(first).into_iter().collect());
+            let elems = collect_elements(first);
+            check_hashable(&elems);
+            return Value::from_set(elems.into_iter().collect());
         }
     } else {
         // Multiple arguments - use them directly
@@ -3240,7 +3247,9 @@ pub extern "C" fn rt_union_all(collections: Value) -> Value {
     // Union all collections
     let mut result: im::HashSet<Value> = im::HashSet::new();
     for coll in collections_to_union {
-        for elem in collect_elements(coll) {
+        let elems = collect_elements(coll);
+        check_hashable(&elems);
+        for elem in elems {
             result.insert(elem);
         }
     }
@@ -3256,8 +3265,12 @@ pub extern "C" fn rt_union_all(collections: Value) -> Value {
 /// - intersection({1, 2}, {2, 3}) → {2}
 #[no_mangle]
 pub extern "C" fn rt_intersection(collection1: Value, collection2: Value) -> Value {
-    let set1: im::HashSet<Value> = collect_elements(collection1).into_iter().collect();
-    let set2: im::HashSet<Value> = collect_elements(collection2).into_iter().collect();
+    let elems1 = collect_elements(collection1);
+    check_hashable(&elems1);
+    let set1: im::HashSet<Value> = elems1.into_iter().collect();
+    let elems2 = collect_elements(collection2);
+    check_hashable(&elems2);
+    let set2: im::HashSet<Value> = elems2.into_iter().collect();
 
     // Find common elements
     let result: im::HashSet<Value> = set1.iter().filter(|v| set2.contains(*v)).copied().collect();
