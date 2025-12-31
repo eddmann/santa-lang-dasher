@@ -2895,16 +2895,14 @@ impl<'ctx> CodegenContext<'ctx> {
                 // 2. It's a self-referencing binding (e.g., let fib = memoize |n| fib(...))
                 let needs_cell = self.cell_variables.contains(name);
 
-                // Check if the variable was already forward-declared (for mutual recursion support)
-                // If so, reuse the existing alloca; otherwise create a new one
-                let already_forward_declared = self.variables.contains_key(name);
-                let alloca = if let Some(existing) = self.variables.get(name) {
-                    *existing
-                } else {
-                    self.builder
-                        .build_alloca(self.context.i64_type(), name)
-                        .unwrap()
-                };
+                // Always create a new alloca for each let binding.
+                // This ensures proper shadowing - inner scopes get their own storage
+                // and don't overwrite outer scope values.
+                let alloca = self
+                    .builder
+                    .build_alloca(self.context.i64_type(), name)
+                    .unwrap();
+                let already_forward_declared = false;
 
                 // For self-referencing bindings (both functions and non-functions),
                 // we need to create the cell BEFORE compiling so the value expression
