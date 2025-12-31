@@ -8,7 +8,7 @@ part_one: {
 
 part_two: {
   parse_inventories(input)
-    |> sort(>)
+    |> sort(<)
     |> take(3)
     |> sum;
 }
