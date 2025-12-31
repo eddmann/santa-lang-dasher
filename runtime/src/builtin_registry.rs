@@ -531,6 +531,13 @@ pub const BUILTIN_SPECS: &[BuiltinSpec] = &[
         pipeline: false,
     },
     BuiltinSpec {
+        name: "evaluate",
+        call_arity: BuiltinCallArity::Fixed(1),
+        partial_arity: Some(1),
+        value_arity: Some(1),
+        pipeline: false,
+    },
+    BuiltinSpec {
         name: "or",
         call_arity: BuiltinCallArity::Fixed(2),
         partial_arity: Some(2),

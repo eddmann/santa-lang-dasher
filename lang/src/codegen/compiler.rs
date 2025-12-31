@@ -5543,6 +5543,22 @@ impl<'ctx> CodegenContext<'ctx> {
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
+            "evaluate" => {
+                // evaluate(source) - parse and evaluate a literal value string
+                if args.len() != 1 {
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "evaluate expects 1 argument, got {}",
+                        args.len()
+                    )));
+                }
+                let source_arg = self.compile_arg(&args[0])?;
+                let rt_evaluate = self.get_or_declare_rt_evaluate();
+                let result = self
+                    .builder
+                    .build_call(rt_evaluate, &[source_arg.into()], "evaluate_result")
+                    .unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
             "map" => {
                 // map(mapper, collection) - transform each element
                 if args.len() != 2 {
@@ -7398,6 +7414,19 @@ impl<'ctx> CodegenContext<'ctx> {
         }
 
         // Signature: (func: Value) -> Value (returns memoized closure)
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_evaluate runtime function
+    fn get_or_declare_rt_evaluate(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_evaluate";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (source: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
         self.module.add_function(fn_name, fn_type, None)

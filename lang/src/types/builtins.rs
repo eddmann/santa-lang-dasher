@@ -382,6 +382,10 @@ fn builtin_signature_for(name: &'static str) -> BuiltinSignature {
             vec![ParamType::Function(1)],
             ReturnType::SameAs(0)
         ),
+        "evaluate" => sig!(
+            vec![ParamType::Concrete(Type::String)],
+            ReturnType::Dynamic
+        ),
         "or" => sig!(vec![ParamType::Any, ParamType::Any], ReturnType::Dynamic),
         "and" => sig!(vec![ParamType::Any, ParamType::Any], ReturnType::Dynamic),
         // ===== External Functions =====
