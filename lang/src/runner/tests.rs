@@ -763,20 +763,23 @@ test: {
 }
 
 #[test]
-fn execute_test_set_literal_unbounded_range_errors() {
+fn execute_test_section_block_returns_value_not_set() {
+    // In section context, {expr} is a Block, not a Set
+    // So {42} returns 42, not a set containing 42
     let program = parse_program(
         r#"
-part_one: {1..}
+part_one: {42}
 
 test: {
   input: 0
-  part_one: 0
+  part_one: 42
 }
 "#,
     );
     let runner = Runner::new();
-    let result = runner.execute_tests(&program);
-    assert!(matches!(result, Err(RunnerError::RuntimeError(_))));
+    let results = runner.execute_tests(&program).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].part_one_passed, Some(true));
 }
 
 #[test]
@@ -816,10 +819,15 @@ test: {
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].part_one_passed, Some(true));
-    assert_eq!(
-        results[0].part_one_actual,
-        Some(Value::from_string("[0, 1, 2]"))
-    );
+    // With parse_value fix, lists are now properly parsed as Lists, not Strings
+    let expected_list = Value::from_list({
+        let mut v = santa_lang_runtime::im::Vector::new();
+        v.push_back(Value::from_integer(0));
+        v.push_back(Value::from_integer(1));
+        v.push_back(Value::from_integer(2));
+        v
+    });
+    assert_eq!(results[0].part_one_actual, Some(expected_list));
 }
 
 #[test]

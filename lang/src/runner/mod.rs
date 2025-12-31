@@ -11,7 +11,7 @@
 mod tests;
 
 use crate::codegen::pipeline::Compiler;
-use crate::parser::ast::{Expr, Program, Section};
+use crate::parser::ast::{Expr, Pattern, Program, Section, Stmt};
 use crate::runtime::value::Value;
 use std::process::Command;
 use std::time::Duration;
@@ -575,8 +575,38 @@ impl Runner {
                 if stmts.is_empty() {
                     "{ }".to_string()
                 } else if stmts.len() == 1 {
-                    // Single statement block - no semicolon needed (returns value)
-                    format!("{{ {} }}", self.stmt_to_source(&stmts[0]))
+                    // Single statement block - unwrap if it's just an expression
+                    // This avoids { expr } being parsed as a Set when regenerated
+                    match &stmts[0] {
+                        Stmt::Expr(e) => {
+                            // Just output the expression, don't wrap in braces
+                            self.expr_to_source(e)
+                        }
+                        Stmt::Let { pattern, .. } => {
+                            // Let statement returns the bound value
+                            // Output as { let x = ...; x } for simple patterns
+                            if let Pattern::Identifier(name) = pattern {
+                                format!(
+                                    "{{ {}; {} }}",
+                                    self.stmt_to_source(&stmts[0]),
+                                    name
+                                )
+                            } else {
+                                // For complex patterns, use the first identifier from pattern
+                                // or just nil if we can't extract one
+                                let first_binding = self.first_pattern_identifier(pattern);
+                                if let Some(name) = first_binding {
+                                    format!("{{ {}; {} }}", self.stmt_to_source(&stmts[0]), name)
+                                } else {
+                                    format!("{{ {}; nil }}", self.stmt_to_source(&stmts[0]))
+                                }
+                            }
+                        }
+                        Stmt::Return(_) | Stmt::Break(_) => {
+                            // Return/break statements don't need disambiguation
+                            format!("{{ {} }}", self.stmt_to_source(&stmts[0]))
+                        }
+                    }
                 } else {
                     // Multiple statements - semicolons between, but NOT after last
                     // The last statement returns its value
@@ -826,6 +856,24 @@ impl Runner {
         }
     }
 
+    /// Get the first identifier from a pattern (for returning bound value)
+    fn first_pattern_identifier(&self, pattern: &Pattern) -> Option<String> {
+        match pattern {
+            Pattern::Identifier(name) => Some(name.clone()),
+            Pattern::List(patterns) => {
+                // Return the first non-rest, non-wildcard identifier
+                for p in patterns {
+                    if let Some(name) = self.first_pattern_identifier(p) {
+                        return Some(name);
+                    }
+                }
+                None
+            }
+            Pattern::RestIdentifier(name) => Some(name.clone()),
+            Pattern::Wildcard | Pattern::Literal(_) | Pattern::Range { .. } => None,
+        }
+    }
+
     /// Convert literal to source
     fn literal_to_source(&self, lit: &crate::parser::ast::Literal) -> String {
         use crate::parser::ast::Literal;
@@ -968,25 +1016,112 @@ impl Runner {
 
     /// Parse a string representation of a value
     fn parse_value(&self, s: &str) -> Result<Value, RunnerError> {
+        self.parse_value_recursive(s.trim())
+    }
+
+    /// Recursively parse a value from output format
+    fn parse_value_recursive(&self, s: &str) -> Result<Value, RunnerError> {
         let s = s.trim();
+
+        // Handle primitives first
         if let Ok(n) = s.parse::<i64>() {
-            Ok(Value::from_integer(n))
-        } else if let Ok(d) = s.parse::<f64>() {
-            Ok(Value::from_decimal(d))
-        } else if s == "true" {
-            Ok(Value::from_bool(true))
-        } else if s == "false" {
-            Ok(Value::from_bool(false))
-        } else if s == "nil" {
-            Ok(Value::nil())
-        } else if s.starts_with('"') && s.ends_with('"') {
-            // String value - strip quotes
-            let inner = &s[1..s.len() - 1];
-            Ok(Value::from_string(inner))
-        } else {
-            // Treat as string if no other type matches
-            Ok(Value::from_string(s))
+            return Ok(Value::from_integer(n));
         }
+        if let Ok(d) = s.parse::<f64>() {
+            return Ok(Value::from_decimal(d));
+        }
+        if s == "true" {
+            return Ok(Value::from_bool(true));
+        }
+        if s == "false" {
+            return Ok(Value::from_bool(false));
+        }
+        if s == "nil" {
+            return Ok(Value::nil());
+        }
+        if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
+            // String value - strip quotes and unescape
+            let inner = &s[1..s.len() - 1];
+            return Ok(Value::from_string(inner));
+        }
+
+        // Handle List: [elem, elem, ...]
+        if s.starts_with('[') && s.ends_with(']') {
+            let inner = &s[1..s.len() - 1].trim();
+            if inner.is_empty() {
+                return Ok(Value::from_list(santa_lang_runtime::im::Vector::new()));
+            }
+            let elements = self.split_collection_elements(inner);
+            let mut list = santa_lang_runtime::im::Vector::new();
+            for elem in elements {
+                list.push_back(self.parse_value_recursive(elem.trim())?);
+            }
+            return Ok(Value::from_list(list));
+        }
+
+        // Handle Set or Dict: {elem, elem, ...} or {key: value, ...}
+        if s.starts_with('{') && s.ends_with('}') {
+            let inner = &s[1..s.len() - 1].trim();
+            if inner.is_empty() {
+                return Ok(Value::from_set(santa_lang_runtime::im::HashSet::new()));
+            }
+            let elements = self.split_collection_elements(inner);
+            // Check if it's a Dict (has colons) or Set (no colons)
+            if elements.iter().any(|e| e.contains(':')) {
+                // Dict
+                let mut dict = santa_lang_runtime::im::HashMap::new();
+                for elem in elements {
+                    if let Some(colon_pos) = elem.find(':') {
+                        let key = elem[..colon_pos].trim();
+                        let val = elem[colon_pos + 1..].trim();
+                        let key_value = self.parse_value_recursive(key)?;
+                        let val_value = self.parse_value_recursive(val)?;
+                        dict.insert(key_value, val_value);
+                    }
+                }
+                return Ok(Value::from_dict(dict));
+            } else {
+                // Set
+                let mut set = santa_lang_runtime::im::HashSet::new();
+                for elem in elements {
+                    set.insert(self.parse_value_recursive(elem.trim())?);
+                }
+                return Ok(Value::from_set(set));
+            }
+        }
+
+        // Fallback: treat as unquoted string
+        Ok(Value::from_string(s))
+    }
+
+    /// Split collection elements, respecting nested brackets and braces
+    fn split_collection_elements<'a>(&self, s: &'a str) -> Vec<&'a str> {
+        let mut elements = Vec::new();
+        let mut start = 0;
+        let mut depth = 0;
+        let mut in_string = false;
+
+        let chars: Vec<char> = s.chars().collect();
+        for (i, &c) in chars.iter().enumerate() {
+            if c == '"' && (i == 0 || chars[i - 1] != '\\') {
+                in_string = !in_string;
+            }
+            if !in_string {
+                match c {
+                    '[' | '{' => depth += 1,
+                    ']' | '}' => depth -= 1,
+                    ',' if depth == 0 => {
+                        elements.push(&s[start..i]);
+                        start = i + 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if start < s.len() {
+            elements.push(&s[start..]);
+        }
+        elements
     }
 
     /// Generate source code for a program (for AOT compilation)
