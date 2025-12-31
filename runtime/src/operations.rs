@@ -762,17 +762,12 @@ pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -
 
     // Try partial application first - combine args and recurse
     if let Some(partial) = callee.as_partial_application() {
-        let total_argc = partial.args.len() + new_args.len();
         let expected = partial.args.len() + partial.remaining_arity as usize;
-        if total_argc > expected {
-            runtime_error(&format!(
-                "wrong function arity: expected {}, got {}",
-                expected, total_argc
-            ));
-        }
-        // Combine accumulated args with new args
+
+        // Combine accumulated args with new args, truncating if we have too many
         let mut all_args = partial.args.clone();
-        all_args.extend(new_args);
+        let args_needed = expected - partial.args.len();
+        all_args.extend(new_args.into_iter().take(args_needed));
 
         // Recurse with combined args on the original closure
         return rt_call(partial.closure, all_args.len() as u32, all_args.as_ptr());
@@ -780,12 +775,6 @@ pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -
 
     // Try regular closure
     if let Some(closure) = callee.as_closure() {
-        if argc > closure.arity {
-            runtime_error(&format!(
-                "wrong function arity: expected {}, got {}",
-                closure.arity, argc
-            ));
-        }
         // Check if we have enough arguments (auto-currying support)
         if argc < closure.arity {
             // Create a partial application
@@ -794,29 +783,30 @@ pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -
             return Value::from_partial_application(partial);
         }
 
+        // Truncate extra arguments if we have more than expected
+        let effective_argc = std::cmp::min(argc, closure.arity);
+
         // Cast the function pointer to the expected signature
         let fn_ptr: extern "C" fn(*const ClosureObject, u32, *const Value) -> Value =
             unsafe { std::mem::transmute(closure.function_ptr) };
 
-        // Call the function with the closure environment and arguments
-        return fn_ptr(closure as *const ClosureObject, argc, argv);
+        // Call the function with the closure environment and (possibly truncated) arguments
+        return fn_ptr(closure as *const ClosureObject, effective_argc, argv);
     }
 
     // Try memoized closure
     if let Some(memoized) = callee.as_memoized_closure() {
-        if argc > memoized.arity {
-            runtime_error(&format!(
-                "wrong function arity: expected {}, got {}",
-                memoized.arity, argc
-            ));
-        }
         if argc < memoized.arity {
             let remaining = memoized.arity - argc;
             let partial = PartialApplicationObject::new(callee, new_args, remaining);
             return Value::from_partial_application(partial);
         }
-        // Check cache first
-        if let Some(cached) = memoized.get_cached(&new_args) {
+
+        // Truncate extra arguments if we have more than expected
+        let effective_args: Vec<Value> = new_args.into_iter().take(memoized.arity as usize).collect();
+
+        // Check cache first (using truncated args)
+        if let Some(cached) = memoized.get_cached(&effective_args) {
             return cached;
         }
 
@@ -826,15 +816,15 @@ pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -
             runtime_error("memoized function is not callable");
         }
 
-        // Call the inner function (supports partial and memoized callables)
+        // Call the inner function with truncated args
         let result = rt_call(
             inner_closure,
-            new_args.len() as u32,
-            new_args.as_ptr(),
+            effective_args.len() as u32,
+            effective_args.as_ptr(),
         );
 
         // Cache the result
-        memoized.cache_result(new_args, result);
+        memoized.cache_result(effective_args, result);
 
         return result;
     }
