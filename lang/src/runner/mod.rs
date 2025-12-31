@@ -171,11 +171,23 @@ impl Runner {
                 slow,
             } = test
             {
+                // Only run parts that have expected values in this test
+                let run_part_one = if expected_one.is_some() {
+                    part_one_expr
+                } else {
+                    None
+                };
+                let run_part_two = if expected_two.is_some() {
+                    part_two_expr
+                } else {
+                    None
+                };
+
                 let result = self.execute_single_test(
                     &program.statements,
                     input,
-                    part_one_expr,
-                    part_two_expr,
+                    run_part_one,
+                    run_part_two,
                     expected_one.as_ref(),
                     expected_two.as_ref(),
                     *slow,
