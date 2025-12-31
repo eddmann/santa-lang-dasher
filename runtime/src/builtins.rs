@@ -3792,7 +3792,8 @@ pub extern "C" fn rt_range_fn(from: Value, to: Value, step: Value) -> Value {
         }
     }
 
-    let lazy = LazySequenceObject::range(start, Some(end), false, step_val);
+    // Per LANG.txt §11.13, range(from, to, step) is inclusive of 'to'
+    let lazy = LazySequenceObject::range(start, Some(end), true, step_val);
     Value::from_lazy_sequence(lazy)
 }
 
