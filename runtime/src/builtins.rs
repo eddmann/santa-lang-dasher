@@ -3529,28 +3529,19 @@ pub extern "C" fn rt_all(predicate: Value, collection: Value) -> Value {
         return Value::from_bool(true);
     }
 
-    // LazySequence (Range, Map, Filter, Zip, Iterate, etc.)
+    // LazySequence (including Range, Map, Filter, Zip, Iterate)
     if let Some(lazy) = collection.as_lazy_sequence() {
-        use crate::heap::LazySeqKind;
-
-        if let LazySeqKind::Range { end: Some(_), .. } = &lazy.kind {
-            // Bounded range - iterate using next()
-            let mut current = lazy.clone();
-            while let Some((val, next_seq)) = current.next() {
-                if !call_value(predicate, &[val]).is_truthy() {
-                    return Value::from_bool(false);
-                }
-                current = *next_seq;
+        let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+        while let Some((val, next_seq)) = lazy_next_with_closures(&current) {
+            if !call_value(predicate, &[val]).is_truthy() {
+                return Value::from_bool(false);
             }
-            return Value::from_bool(true);
-        } else if let LazySeqKind::Range { end: None, .. } = &lazy.kind {
-            runtime_error("all? does not support unbounded ranges");
-        } else {
-            runtime_error("all? does not support lazy sequences");
+            current = next_seq;
         }
+        return Value::from_bool(true);
     }
 
-    runtime_error("all?(predicate, collection) expects List, Set, String, or Range")
+    runtime_error("all?(predicate, collection) expects List, Set, String, Range, or LazySequence")
 }
 
 // ============================================================================
