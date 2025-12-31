@@ -1479,9 +1479,15 @@ pub extern "C" fn rt_flat_map(mapper: Value, collection: Value) -> Value {
             for v in list.iter() {
                 result.push_back(*v);
             }
+        } else if let Some(lazy) = mapped.as_lazy_sequence() {
+            // Handle lazy sequences (e.g., from map, filter, ranges)
+            let mut current: Box<LazySequenceObject> = Box::new(lazy.clone());
+            while let Some((val, next_seq)) = lazy_next_with_closures(&current) {
+                result.push_back(val);
+                current = next_seq;
+            }
         }
-        // If the mapper returns non-list, we could add it directly,
-        // but per spec flat_map expects mapper to return lists
+        // If the mapper returns non-collection, we ignore it per spec
     };
 
     // List
@@ -3554,7 +3560,24 @@ pub extern "C" fn rt_all(predicate: Value, collection: Value) -> Value {
         return Value::from_bool(true);
     }
 
-    runtime_error("all?(predicate, collection) expects List, Set, String, Range, or LazySequence")
+    // Dict (iterates over values, or (value, key) for 2-arg predicates)
+    if let Some(dict) = collection.as_dict() {
+        let arity = expect_callable_arity("all?(predicate, collection)", &predicate);
+        let is_two_arg = arity >= 2;
+        for (k, v) in dict.iter() {
+            let result = if is_two_arg {
+                call_value(predicate, &[*v, *k])
+            } else {
+                call_value(predicate, &[*v])
+            };
+            if !result.is_truthy() {
+                return Value::from_bool(false);
+            }
+        }
+        return Value::from_bool(true);
+    }
+
+    runtime_error("all?(predicate, collection) expects List, Set, String, Range, LazySequence, or Dictionary")
 }
 
 // ============================================================================

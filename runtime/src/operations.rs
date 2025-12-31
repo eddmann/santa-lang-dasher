@@ -963,8 +963,12 @@ extern "C" fn composed_closure_impl(
 #[no_mangle]
 pub extern "C" fn rt_compose(f: Value, g: Value) -> Value {
     // Verify both arguments are callable
-    let f_is_callable = f.as_closure().is_some() || f.as_memoized_closure().is_some();
-    let g_is_callable = g.as_closure().is_some() || g.as_memoized_closure().is_some();
+    let f_is_callable = f.as_closure().is_some()
+        || f.as_memoized_closure().is_some()
+        || f.as_partial_application().is_some();
+    let g_is_callable = g.as_closure().is_some()
+        || g.as_memoized_closure().is_some()
+        || g.as_partial_application().is_some();
 
     if !f_is_callable {
         runtime_error(&format!(

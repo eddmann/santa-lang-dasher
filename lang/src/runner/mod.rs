@@ -880,7 +880,7 @@ impl Runner {
         match lit {
             Literal::Integer(n) => n.to_string(),
             Literal::Decimal(d) => self.decimal_to_source(*d),
-            Literal::String(s) => format!("\"{}\"", s),
+            Literal::String(s) => self.string_to_source(s),
             Literal::Boolean(b) => b.to_string(),
             Literal::Nil => "nil".to_string(),
         }

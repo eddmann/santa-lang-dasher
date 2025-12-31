@@ -995,9 +995,15 @@ impl Parser {
         if let Ok(token) = self.current_token() {
             if matches!(token.kind, TokenKind::Colon) {
                 // It's a dict with explicit key:value syntax
+                // Convert identifier key to string (#{a: 1} means #{"a": 1})
+                let first_key = if let Expr::Identifier(name) = first_elem {
+                    Expr::String(name)
+                } else {
+                    first_elem
+                };
                 self.advance(); // consume ':'
                 let first_value = self.parse_pratt_expr(0)?;
-                let mut entries = vec![(first_elem, first_value)];
+                let mut entries = vec![(first_key, first_value)];
 
                 // Parse remaining entries
                 loop {
@@ -1107,11 +1113,11 @@ impl Parser {
 
     /// Parse a dict entry - either key:value or shorthand identifier
     fn parse_dict_entry(&mut self) -> Result<(Expr, Expr), ParseError> {
-        // Check if this is a shorthand identifier
+        // Check if this is a shorthand identifier or identifier key
         let token = self.current_token()?;
 
         if let TokenKind::Identifier(name) = &token.kind {
-            // Look ahead to see if there's a colon or comma/brace
+            // Look ahead to see what follows the identifier
             if let Some(next) = self.tokens.get(self.current + 1) {
                 if matches!(next.kind, TokenKind::Comma | TokenKind::RightBrace) {
                     // Shorthand: name → "name": name
@@ -1120,11 +1126,20 @@ impl Parser {
                     let key = Expr::String(name.clone());
                     let value = Expr::Identifier(name);
                     return Ok((key, value));
+                } else if matches!(next.kind, TokenKind::Colon) {
+                    // Identifier key: name: value → "name": value
+                    // The identifier becomes a string key, not a variable reference
+                    let name = name.clone();
+                    self.advance(); // consume identifier
+                    self.advance(); // consume ':'
+                    let key = Expr::String(name);
+                    let value = self.parse_pratt_expr(0)?;
+                    return Ok((key, value));
                 }
             }
         }
 
-        // Otherwise, parse as key:value
+        // Otherwise, parse as key:value with expression key
         let key = self.parse_pratt_expr(0)?;
         let colon = self.current_token()?;
         if !matches!(colon.kind, TokenKind::Colon) {
