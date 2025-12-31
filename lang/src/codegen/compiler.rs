@@ -2954,14 +2954,20 @@ impl<'ctx> CodegenContext<'ctx> {
                 // 2. It's a self-referencing binding (e.g., let fib = memoize |n| fib(...))
                 let needs_cell = self.cell_variables.contains(name);
 
-                // Always create a new alloca for each let binding.
-                // This ensures proper shadowing - inner scopes get their own storage
-                // and don't overwrite outer scope values.
-                let alloca = self
-                    .builder
-                    .build_alloca(self.context.i64_type(), name)
-                    .unwrap();
-                let already_forward_declared = false;
+                // Check if this variable was already forward-declared (for forward references).
+                // If so, reuse the existing alloca to ensure closures capture the correct cell.
+                // Note: We check forward_declared_variables, not variables, to distinguish from
+                // shadowed variables in inner scopes.
+                let already_forward_declared = self.forward_declared_variables.contains(name);
+                let alloca = if already_forward_declared {
+                    // Reuse the existing alloca from forward declaration
+                    *self.variables.get(name).unwrap()
+                } else {
+                    // Create a new alloca for this binding
+                    self.builder
+                        .build_alloca(self.context.i64_type(), name)
+                        .unwrap()
+                };
 
                 // For self-referencing bindings (both functions and non-functions),
                 // we need to create the cell BEFORE compiling so the value expression
@@ -3037,6 +3043,11 @@ impl<'ctx> CodegenContext<'ctx> {
                     // Only register here if we didn't already register for cell handling
                     self.variables.insert(name.clone(), alloca);
                 }
+
+                // Remove from forward_declared_variables after processing.
+                // This ensures that inner scopes creating a binding with the same name
+                // will create a new alloca (proper shadowing) instead of reusing this one.
+                self.forward_declared_variables.remove(name);
 
                 Ok(value_compiled)
             }

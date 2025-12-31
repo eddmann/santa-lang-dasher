@@ -36,6 +36,9 @@ pub struct CodegenContext<'ctx> {
     /// Variables that are stored in mutable cells (for closure capture of mutable vars)
     /// When a variable is in this set, reads go through rt_cell_get and writes through rt_cell_set
     pub cell_variables: HashSet<String>,
+    /// Variables that were forward-declared (for mutual recursion).
+    /// Used to distinguish from shadowed variables when compiling let bindings.
+    pub forward_declared_variables: HashSet<String>,
     /// Variables that are mutable in the current scope (declared with `let mut`)
     pub mutable_variables: HashSet<String>,
     /// Depth of nested function compilation (0 = top-level)
@@ -70,6 +73,7 @@ impl<'ctx> CodegenContext<'ctx> {
             tco_state: None,
             opt_level,
             cell_variables: HashSet::new(),
+            forward_declared_variables: HashSet::new(),
             mutable_variables: HashSet::new(),
             function_depth: 0,
             type_env: HashMap::new(),
@@ -156,6 +160,7 @@ impl<'ctx> CodegenContext<'ctx> {
         }
 
         self.variables.insert(name.to_string(), alloca);
+        self.forward_declared_variables.insert(name.to_string());
     }
 
     /// Get or declare a runtime function by name
