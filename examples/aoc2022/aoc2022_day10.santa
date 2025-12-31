@@ -10,7 +10,7 @@ let signal = lines >>
 part_one: {
   let cycles = signal(input);
 
-  range(20, 220, 40)
+  range(20, 221, 40)
     |> map(|cycle| cycle * cycles[cycle-1])
     |> sum;
 }
