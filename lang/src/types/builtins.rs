@@ -203,7 +203,7 @@ fn builtin_signature_for(name: &'static str) -> BuiltinSignature {
             vec![ParamType::Concrete(Type::Int), ParamType::Collection],
             ReturnType::ListOf(1)
         ),
-        "sort" => sig!(vec![ParamType::Collection], ReturnType::SameAs(0)),
+        "sort" => sig!(vec![ParamType::Function(2), ParamType::Collection], ReturnType::ListOf(1)),
         "reverse" => sig!(vec![ParamType::Collection], ReturnType::SameAs(0)),
         "rotate" => sig!(
             vec![ParamType::Concrete(Type::Int), ParamType::Collection],
