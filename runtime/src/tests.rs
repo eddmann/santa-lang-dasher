@@ -481,6 +481,17 @@ fn runtime_floored_division_negative_denominator() {
 }
 
 #[test]
+fn runtime_floored_division_mixed_int_decimal() {
+    // -7 / 2.0 should be -4 (floored, not truncated to -3)
+    let left = Value::from_integer(-7);
+    let right = Value::from_decimal(2.0);
+    let result = rt_div(left, right);
+
+    assert!(result.is_integer()); // left type wins
+    assert_eq!(result.as_integer(), Some(-4));
+}
+
+#[test]
 fn runtime_modulo_integers() {
     let left = Value::from_integer(10);
     let right = Value::from_integer(3);

@@ -341,13 +341,13 @@ pub extern "C-unwind" fn rt_div(left: Value, right: Value) -> Value {
         return Value::from_decimal(l / r);
     }
 
-    // Handle mixed Integer + Decimal (left type wins)
+    // Handle mixed Integer + Decimal (left type wins, floored division)
     if let Some(l) = left.as_integer() {
         if let Some(r) = right.as_decimal() {
             if r == 0.0 {
                 runtime_error("Division by zero");
             }
-            return Value::from_integer((l as f64 / r) as i64);
+            return Value::from_integer((l as f64 / r).floor() as i64);
         }
     }
 
