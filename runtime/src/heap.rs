@@ -1,4 +1,5 @@
 use im;
+use crate::operations::runtime_error;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::AtomicU32;
@@ -395,6 +396,16 @@ impl LazySequenceObject {
 
     /// Create a range sequence
     pub fn range(start: i64, end: Option<i64>, inclusive: bool, step: i64) -> Box<Self> {
+        if step == 0 {
+            runtime_error("range requires non-zero step");
+        }
+        if let Some(end_val) = end {
+            if start != end_val {
+                if (end_val > start && step < 0) || (end_val < start && step > 0) {
+                    runtime_error("range step direction does not match range");
+                }
+            }
+        }
         Self::new(LazySeqKind::Range {
             current: start,
             end,
