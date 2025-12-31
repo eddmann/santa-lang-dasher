@@ -454,12 +454,14 @@ pub extern "C" fn rt_is_list(value: Value) -> i64 {
 
 /// Ensure a value is a list and meets list pattern length constraints.
 ///
-/// `has_rest` is treated as a boolean (non-zero means allow extra elements).
+/// `has_rest` is treated as a boolean (non-zero means a rest pattern is present).
+/// Extra elements are always allowed (like in blitzen) - patterns like `[a]` can
+/// match `[1, 2, 3]` and just extract the first element.
 #[no_mangle]
 pub extern "C-unwind" fn rt_expect_list_len(
     value: Value,
     expected_len: Value,
-    has_rest: Value,
+    _has_rest: Value,
 ) -> Value {
     let list = value
         .as_list()
@@ -467,15 +469,12 @@ pub extern "C-unwind" fn rt_expect_list_len(
     let expected = expected_len
         .as_integer()
         .unwrap_or_else(|| runtime_error("List destructuring expects Integer length"));
-    let allow_extra = has_rest.as_integer().unwrap_or(0) != 0;
     let actual = list.len() as i64;
 
-    if allow_extra {
-        if actual < expected {
-            runtime_error("List destructuring length mismatch");
-        }
-    } else if actual != expected {
-        runtime_error("List destructuring length mismatch");
+    // Only check that we have at least the expected number of elements.
+    // Extra elements are silently ignored (matching blitzen behavior).
+    if actual < expected {
+        runtime_error("List destructuring length mismatch: not enough elements");
     }
 
     value
