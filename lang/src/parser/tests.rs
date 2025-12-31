@@ -1243,17 +1243,19 @@ part_two: { 1 + 1 }
                     ),
                 ),
                 PartTwo(
-                    Set(
+                    Block(
                         [
-                            Infix {
-                                left: Integer(
-                                    1,
-                                ),
-                                op: Add,
-                                right: Integer(
-                                    1,
-                                ),
-                            },
+                            Expr(
+                                Infix {
+                                    left: Integer(
+                                        1,
+                                    ),
+                                    op: Add,
+                                    right: Integer(
+                                        1,
+                                    ),
+                                },
+                            ),
                         ],
                     ),
                 ),

@@ -2024,7 +2024,9 @@ impl Parser {
                     return Ok(Expr::Set(elements));
                 }
                 // Closing brace with single expression and no semicolon
-                // Per decision: in expression position, {expr} is always a Set literal.
+                // In expression position, {expr} is a Set literal with one element.
+                // (For section bodies like part_one:, parse_body_expr_with_min_prec
+                // handles { as a block specifically.)
                 TokenKind::RightBrace => {
                     self.advance();
                     return Ok(Expr::Set(vec![first_expr]));
@@ -2234,7 +2236,8 @@ impl Parser {
                     }
                     self.advance(); // consume 'part_one'
                     self.expect(TokenKind::Colon)?;
-                    let expr = self.parse_expression()?;
+                    // Use parse_body_expr_with_min_prec to treat { as block, not set
+                    let expr = self.parse_body_expr_with_min_prec(0)?;
                     Ok(Section::PartOne(expr))
                 }
                 "part_two" => {
@@ -2248,7 +2251,8 @@ impl Parser {
                     }
                     self.advance(); // consume 'part_two'
                     self.expect(TokenKind::Colon)?;
-                    let expr = self.parse_expression()?;
+                    // Use parse_body_expr_with_min_prec to treat { as block, not set
+                    let expr = self.parse_body_expr_with_min_prec(0)?;
                     Ok(Section::PartTwo(expr))
                 }
                 "test" => {

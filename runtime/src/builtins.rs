@@ -3095,7 +3095,21 @@ pub extern "C-unwind" fn rt_chunk(size: Value, collection: Value) -> Value {
         return Value::from_list(chunks);
     }
 
-    runtime_error("chunk(size, collection) expects List")
+    // String - split into chunks of grapheme clusters
+    if let Some(s) = collection.as_string() {
+        use unicode_segmentation::UnicodeSegmentation;
+        let graphemes: Vec<&str> = s.graphemes(true).collect();
+        let mut chunks: im::Vector<Value> = im::Vector::new();
+
+        for chunk in graphemes.chunks(chunk_size) {
+            let chunk_str: String = chunk.concat();
+            chunks.push_back(Value::from_string(&chunk_str));
+        }
+
+        return Value::from_list(chunks);
+    }
+
+    runtime_error("chunk(size, collection) expects List or String")
 }
 
 // ============================================================================
