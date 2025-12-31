@@ -452,31 +452,21 @@ pub extern "C" fn rt_is_list(value: Value) -> i64 {
     }
 }
 
-/// Ensure a value is a list and meets list pattern length constraints.
+/// Ensure a value is a list for pattern binding.
 ///
-/// `has_rest` is treated as a boolean (non-zero means a rest pattern is present).
-/// Extra elements are always allowed (like in blitzen) - patterns like `[a]` can
-/// match `[1, 2, 3]` and just extract the first element.
+/// This function only verifies the value is a list - it does NOT check length.
+/// Like blitzen, missing elements are allowed and will be `nil` when indexed
+/// out of bounds (patterns like `[item, ..rest]` can match `[]` with item=nil).
 #[no_mangle]
 pub extern "C-unwind" fn rt_expect_list_len(
     value: Value,
-    expected_len: Value,
+    _expected_len: Value,
     _has_rest: Value,
 ) -> Value {
-    let list = value
-        .as_list()
-        .unwrap_or_else(|| runtime_error("List destructuring requires a List"));
-    let expected = expected_len
-        .as_integer()
-        .unwrap_or_else(|| runtime_error("List destructuring expects Integer length"));
-    let actual = list.len() as i64;
-
-    // Only check that we have at least the expected number of elements.
-    // Extra elements are silently ignored (matching blitzen behavior).
-    if actual < expected {
-        runtime_error("List destructuring length mismatch: not enough elements");
+    // Just verify it's a list - don't check length
+    if value.as_list().is_none() {
+        runtime_error("List destructuring requires a List");
     }
-
     value
 }
 

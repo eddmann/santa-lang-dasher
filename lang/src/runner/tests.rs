@@ -482,23 +482,25 @@ test: {
 }
 
 #[test]
-fn execute_test_let_destructuring_length_mismatch_errors() {
+fn execute_test_let_destructuring_missing_elements_are_nil() {
+    // Like blitzen: missing elements in list destructuring become nil
+    // [a, b] = [1] => a = 1, b = nil
     let program = parse_program(
         r#"
 part_one: {
   let [a, b] = [1]
-  a + b
+  if b == nil { a } else { -1 }
 }
 
 test: {
   input: 0
-  part_one: 0
+  part_one: 1
 }
 "#,
     );
     let runner = Runner::new();
     let result = runner.execute_tests(&program);
-    assert!(matches!(result, Err(RunnerError::RuntimeError(_))));
+    assert!(result.is_ok(), "Expected success, got: {:?}", result);
 }
 
 #[test]
