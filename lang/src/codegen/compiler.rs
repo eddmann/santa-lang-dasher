@@ -5114,10 +5114,39 @@ impl<'ctx> CodegenContext<'ctx> {
             if let Expr::Spread(inner) = &args[0] {
                 // Special case: builtin variadic functions with spread
                 if let Expr::Identifier(name) = function {
-                    if name == "zip" {
-                        return self.compile_builtin_spread_call("zip", inner);
+                    match name.as_str() {
+                        "zip" => {
+                            return self.compile_builtin_spread_call("zip", inner);
+                        }
+                        // For max/min/union/intersection, spreading a list is equivalent to
+                        // passing the list directly since they accept a single collection argument
+                        "max" | "min" | "union" | "intersection" => {
+                            // Compile inner as the collection and call the builtin with it
+                            let inner_ty = self.infer_expr_type(inner);
+                            let inner_typed = TypedExpr {
+                                expr: (**inner).clone(),
+                                ty: inner_ty,
+                                span: crate::lexer::token::Span::new(
+                                    crate::lexer::token::Position::new(0, 0),
+                                    crate::lexer::token::Position::new(0, 0),
+                                ),
+                            };
+                            let collection = self.compile_expr(&inner_typed)?;
+                            let rt_fn = match name.as_str() {
+                                "max" => self.get_or_declare_rt_max(),
+                                "min" => self.get_or_declare_rt_min(),
+                                "union" => self.get_or_declare_rt_union_all(),
+                                "intersection" => self.get_or_declare_rt_intersection_all(),
+                                _ => unreachable!(),
+                            };
+                            let result = self
+                                .builder
+                                .build_call(rt_fn, &[collection.into()], &format!("{}_result", name))
+                                .unwrap();
+                            return Ok(result.try_as_basic_value().left().unwrap());
+                        }
+                        _ => {}
                     }
-                    // Add other variadic builtins here as needed
                 }
 
                 // For non-builtin functions, use rt_apply
