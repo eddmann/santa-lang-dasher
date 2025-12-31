@@ -3826,6 +3826,9 @@ impl<'ctx> CodegenContext<'ctx> {
         // Calculate arity: count non-rest parameters
         // A rest parameter (|..args| or |a, ..rest|) doesn't count toward arity
         // because it accepts 0+ additional arguments
+        let has_rest = params
+            .iter()
+            .any(|p| matches!(p.pattern, Pattern::RestIdentifier(_)));
         let required_params = params
             .iter()
             .filter(|p| !matches!(p.pattern, Pattern::RestIdentifier(_)))
@@ -3834,6 +3837,10 @@ impl<'ctx> CodegenContext<'ctx> {
             .context
             .i32_type()
             .const_int(required_params as u64, false);
+        let has_rest_val = self
+            .context
+            .i8_type()
+            .const_int(if has_rest { 1 } else { 0 }, false);
 
         // Create array of captured values
         let captures_count = captured_vars.len();
@@ -3897,6 +3904,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 &[
                     fn_ptr.into(),
                     arity.into(),
+                    has_rest_val.into(),
                     captures_ptr.into(),
                     captures_count_val.into(),
                 ],
@@ -7347,8 +7355,9 @@ impl<'ctx> CodegenContext<'ctx> {
             return func;
         }
 
-        // Signature: (fn_ptr: ptr, arity: i32, captures_ptr: ptr, captures_count: i64) -> i64
+        // Signature: (fn_ptr: ptr, arity: i32, has_rest: i8, captures_ptr: ptr, captures_count: i64) -> i64
         let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
+        let i8_type = self.context.i8_type();
         let i32_type = self.context.i32_type();
         let i64_type = self.context.i64_type();
 
@@ -7356,6 +7365,7 @@ impl<'ctx> CodegenContext<'ctx> {
             &[
                 ptr_type.into(),
                 i32_type.into(),
+                i8_type.into(), // has_rest: bool
                 ptr_type.into(),
                 i64_type.into(),
             ],

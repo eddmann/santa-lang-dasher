@@ -192,8 +192,10 @@ pub struct ClosureObject {
     pub header: ObjectHeader,
     /// Pointer to the compiled function code
     pub function_ptr: *const (),
-    /// Number of parameters the function expects
+    /// Number of parameters the function expects (before rest param)
     pub arity: u32,
+    /// Whether this function has a rest parameter (..args) - 0 or 1
+    pub has_rest: u8,
     /// Captured environment values (flexible array)
     pub captures: Vec<super::value::Value>,
 }
@@ -202,12 +204,14 @@ impl ClosureObject {
     pub fn new(
         function_ptr: *const (),
         arity: u32,
+        has_rest: bool,
         captures: Vec<super::value::Value>,
     ) -> Box<Self> {
         Box::new(ClosureObject {
             header: ObjectHeader::new(TypeTag::Closure),
             function_ptr,
             arity,
+            has_rest: if has_rest { 1 } else { 0 },
             captures,
         })
     }

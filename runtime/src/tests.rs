@@ -208,7 +208,7 @@ fn refcount_closure_decrefs_captures_on_free() {
     extern "C" fn dummy_fn(_env: *const (), _argc: u32, _argv: *const Value) -> Value {
         Value::nil()
     }
-    let closure = ClosureObject::new(dummy_fn as *const (), 0, vec![captured_str]);
+    let closure = ClosureObject::new(dummy_fn as *const (), 0, false, vec![captured_str]);
     let closure_val = Value::from_closure(closure);
     assert_eq!(rt_get_refcount(closure_val), 1);
 
@@ -227,7 +227,7 @@ fn refcount_memoized_closure_decrefs_inner_closure_on_free() {
     extern "C" fn dummy_fn(_env: *const (), _argc: u32, _argv: *const Value) -> Value {
         Value::nil()
     }
-    let inner = ClosureObject::new(dummy_fn as *const (), 0, vec![]);
+    let inner = ClosureObject::new(dummy_fn as *const (), 0, false, vec![]);
     let inner_val = Value::from_closure(inner);
     assert_eq!(rt_get_refcount(inner_val), 1);
 
@@ -1577,7 +1577,7 @@ fn make_test_closure(
     func: extern "C" fn(*const ClosureObject, u32, *const Value) -> Value,
     arity: u32,
 ) -> Value {
-    let closure = ClosureObject::new(func as *const (), arity, Vec::new());
+    let closure = ClosureObject::new(func as *const (), arity, false, Vec::new());
     Value::from_closure(closure)
 }
 
@@ -5995,7 +5995,7 @@ fn format_function() {
     extern "C" fn dummy_fn(_: *const ClosureObject, _: u32, _: *const Value) -> Value {
         Value::nil()
     }
-    let closure = ClosureObject::new(dummy_fn as *const (), 0, vec![]);
+    let closure = ClosureObject::new(dummy_fn as *const (), 0, false, vec![]);
     let closure_val = Value::from_closure(closure);
     assert_eq!(format_value(&closure_val), "<function>");
 }
@@ -6197,10 +6197,10 @@ extern "C" fn compose_test_double(
 fn compose_two_functions() {
     // Test: inc >> double should apply inc first, then double
     // (inc >> double)(5) = double(inc(5)) = double(6) = 12
-    let inc = ClosureObject::new(compose_test_inc as *const (), 1, vec![]);
+    let inc = ClosureObject::new(compose_test_inc as *const (), 1, false, vec![]);
     let inc_val = Value::from_closure(inc);
 
-    let double = ClosureObject::new(compose_test_double as *const (), 1, vec![]);
+    let double = ClosureObject::new(compose_test_double as *const (), 1, false, vec![]);
     let double_val = Value::from_closure(double);
 
     let composed = rt_compose(inc_val, double_val);
@@ -6217,13 +6217,13 @@ fn compose_two_functions() {
 fn compose_three_functions() {
     // Test: inc >> double >> inc should apply: inc first, double second, inc third
     // (inc >> double >> inc)(5) = inc(double(inc(5))) = inc(double(6)) = inc(12) = 13
-    let inc1 = ClosureObject::new(compose_test_inc as *const (), 1, vec![]);
+    let inc1 = ClosureObject::new(compose_test_inc as *const (), 1, false, vec![]);
     let inc1_val = Value::from_closure(inc1);
 
-    let double = ClosureObject::new(compose_test_double as *const (), 1, vec![]);
+    let double = ClosureObject::new(compose_test_double as *const (), 1, false, vec![]);
     let double_val = Value::from_closure(double);
 
-    let inc2 = ClosureObject::new(compose_test_inc as *const (), 1, vec![]);
+    let inc2 = ClosureObject::new(compose_test_inc as *const (), 1, false, vec![]);
     let inc2_val = Value::from_closure(inc2);
 
     // Compose inc >> double first

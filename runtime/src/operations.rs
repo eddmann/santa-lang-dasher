@@ -709,13 +709,15 @@ use super::heap::{ClosureObject, PartialApplicationObject};
 ///
 /// Arguments:
 /// - function_ptr: Pointer to the compiled function code
-/// - arity: Number of parameters the function expects
+/// - arity: Number of parameters the function expects (before rest param)
+/// - has_rest: Whether the function has a rest parameter (..args) - 0 or 1
 /// - captures_ptr: Pointer to an array of captured values
 /// - captures_count: Number of captured values
 #[no_mangle]
 pub unsafe extern "C" fn rt_make_closure(
     function_ptr: *const (),
     arity: u32,
+    has_rest: u8,
     captures_ptr: *const Value,
     captures_count: usize,
 ) -> Value {
@@ -726,7 +728,7 @@ pub unsafe extern "C" fn rt_make_closure(
         std::slice::from_raw_parts(captures_ptr, captures_count).to_vec()
     };
 
-    let closure = ClosureObject::new(function_ptr, arity, captures);
+    let closure = ClosureObject::new(function_ptr, arity, has_rest != 0, captures);
     Value::from_closure(closure)
 }
 
@@ -772,14 +774,19 @@ pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -
             return Value::from_partial_application(partial);
         }
 
-        // Truncate extra arguments if we have more than expected
-        let effective_argc = std::cmp::min(argc, closure.arity);
+        // For closures with rest parameters, pass all arguments
+        // For regular closures, truncate extra arguments
+        let effective_argc = if closure.has_rest != 0 {
+            argc
+        } else {
+            std::cmp::min(argc, closure.arity)
+        };
 
         // Cast the function pointer to the expected signature
         let fn_ptr: extern "C" fn(*const ClosureObject, u32, *const Value) -> Value =
             unsafe { std::mem::transmute(closure.function_ptr) };
 
-        // Call the function with the closure environment and (possibly truncated) arguments
+        // Call the function with the closure environment and arguments
         return fn_ptr(closure as *const ClosureObject, effective_argc, argv);
     }
 
@@ -977,7 +984,8 @@ pub extern "C" fn rt_compose(f: Value, g: Value) -> Value {
     let captures = vec![f, g];
     let closure = ClosureObject::new(
         composed_closure_impl as *const (),
-        1, // arity = 1
+        1,     // arity = 1
+        false, // no rest parameter
         captures,
     );
 
