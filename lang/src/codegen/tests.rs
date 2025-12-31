@@ -1764,17 +1764,17 @@ fn codegen_get_ir() {
 }
 
 // ===== Phase 7: Builtin Name Shadowing =====
-// Builtins are protected per LANG.txt and cannot be shadowed.
+// Builtins can be shadowed by local variables.
 
 #[test]
-fn codegen_builtin_name_shadowing_sum_errors() {
+fn codegen_builtin_name_shadowing_sum_succeeds() {
     use crate::parser::ast::{Pattern, Stmt};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
     let _function = codegen.create_test_function();
 
-    // Binding to 'sum' (a builtin name) should succeed
+    // Binding to 'sum' (a builtin name) should succeed - shadowing is allowed
     let let_stmt = Stmt::Let {
         mutable: false,
         pattern: Pattern::Identifier("sum".to_string()),
@@ -1782,18 +1782,18 @@ fn codegen_builtin_name_shadowing_sum_errors() {
     };
 
     let result = codegen.compile_stmt(&let_stmt);
-    assert!(result.is_err(), "Binding to builtin name 'sum' should error");
+    assert!(result.is_ok(), "Binding to builtin name 'sum' should succeed (shadowing allowed)");
 }
 
 #[test]
-fn codegen_builtin_name_shadowing_map_errors() {
+fn codegen_builtin_name_shadowing_map_succeeds() {
     use crate::parser::ast::{Pattern, Stmt};
 
     let context = Context::create();
     let mut codegen = super::context::CodegenContext::new(&context, "test_module");
     let _function = codegen.create_test_function();
 
-    // Binding to 'map' (a builtin name) should succeed
+    // Binding to 'map' (a builtin name) should succeed - shadowing is allowed
     let let_stmt = Stmt::Let {
         mutable: false,
         pattern: Pattern::Identifier("map".to_string()),
@@ -1801,7 +1801,7 @@ fn codegen_builtin_name_shadowing_map_errors() {
     };
 
     let result = codegen.compile_stmt(&let_stmt);
-    assert!(result.is_err(), "Binding to builtin name 'map' should error");
+    assert!(result.is_ok(), "Binding to builtin name 'map' should succeed (shadowing allowed)");
 }
 
 #[test]

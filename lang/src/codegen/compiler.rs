@@ -2489,21 +2489,10 @@ impl<'ctx> CodegenContext<'ctx> {
         Ok(())
     }
 
-    /// Bind pattern variables to the subject value
+    /// Validate pattern bindings (currently allows all valid patterns including builtin names)
     fn validate_pattern_bindings(&self, pattern: &Pattern) -> Result<(), CompileError> {
         match pattern {
-            Pattern::Identifier(name) | Pattern::RestIdentifier(name) => {
-                if name.is_empty() {
-                    return Ok(());
-                }
-                if Self::is_protected_builtin_name(name) {
-                    return Err(CompileError::UnsupportedPattern(format!(
-                        "Cannot bind protected builtin name: {}",
-                        name
-                    )));
-                }
-                Ok(())
-            }
+            Pattern::Identifier(_) | Pattern::RestIdentifier(_) => Ok(()),
             Pattern::List(patterns) => {
                 for pat in patterns {
                     self.validate_pattern_bindings(pat)?;
@@ -5286,11 +5275,6 @@ impl<'ctx> CodegenContext<'ctx> {
     /// Arity used when a builtin is referenced as a function value.
     fn builtin_value_arity(name: &str) -> Option<usize> {
         builtin_spec(name).and_then(|spec| spec.value_arity)
-    }
-
-    /// Builtins are protected and cannot be shadowed.
-    fn is_protected_builtin_name(name: &str) -> bool {
-        builtin_spec(name).is_some()
     }
 
     /// Compile a builtin variadic function call with a spread argument.
