@@ -513,8 +513,11 @@ impl<'ctx> CodegenContext<'ctx> {
     /// Compile a pipeline operation: x |> f transforms to f(x)
     ///
     /// Per LANG.txt §4.7, the pipeline operator threads values through function calls.
-    /// If the RHS is a call expression, the piped value is appended as the last argument:
-    ///   x |> f(a, b)  →  f(a, b, x)
+    ///
+    /// The behavior differs based on whether the RHS is a builtin or non-builtin:
+    /// - For builtins: x |> builtin(a, b) → builtin(a, b, x) (append x as last arg)
+    /// - For non-builtins: x |> f(a, b) → (f(a, b))(x) (evaluate call, then call result)
+    ///
     /// Otherwise it is a simple call:
     ///   x |> f  →  f(x)
     fn compile_pipeline(
@@ -522,15 +525,71 @@ impl<'ctx> CodegenContext<'ctx> {
         value: &Expr,
         function: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
-        // If function is already a Call expression, append the piped value
+        // If RHS is a Call expression, handle based on whether it's a builtin
         if let Expr::Call {
             function: inner_fn,
             args,
         } = function
         {
-            let mut new_args = args.clone();
-            new_args.push(value.clone());
-            return self.compile_call(inner_fn, &new_args);
+            // Check if this is a builtin call (identifier not shadowed by user variable)
+            let is_builtin = if let Expr::Identifier(name) = inner_fn.as_ref() {
+                !self.variables.contains_key(name) && builtin_spec(name).is_some()
+            } else {
+                false
+            };
+
+            if is_builtin {
+                // Builtin: append piped value as last argument
+                let mut new_args = args.clone();
+                new_args.push(value.clone());
+                return self.compile_call(inner_fn, &new_args);
+            } else {
+                // Non-builtin: evaluate the call first, then call result with piped value
+                // x |> f(a) where f(a) returns a function → (f(a))(x)
+                let call_result = self.compile_call(inner_fn, args)?;
+
+                // Compile the piped value
+                let val_ty = self.infer_expr_type(value);
+                let val_typed = TypedExpr {
+                    expr: value.clone(),
+                    ty: val_ty,
+                    span: crate::lexer::token::Span::new(
+                        crate::lexer::token::Position::new(0, 0),
+                        crate::lexer::token::Position::new(0, 0),
+                    ),
+                };
+                let piped_val = self.compile_expr(&val_typed)?;
+
+                // Call the result with the piped value as argument
+                let rt_call = self.get_or_declare_rt_call();
+                let i64_type = self.context.i64_type();
+                let argc_val = self.context.i32_type().const_int(1, false);
+
+                // Allocate argv array on stack for the single argument
+                let argv_ptr = self
+                    .builder
+                    .build_array_alloca(i64_type, i64_type.const_int(1, false), "pipeline_argv")
+                    .unwrap();
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(i64_type, argv_ptr, &[i64_type.const_zero()], "argv_0")
+                        .unwrap()
+                };
+                self.builder
+                    .build_store(elem_ptr, piped_val.into_int_value())
+                    .unwrap();
+
+                let call_result_val = self
+                    .builder
+                    .build_call(
+                        rt_call,
+                        &[call_result.into(), argc_val.into(), argv_ptr.into()],
+                        "pipeline_call_result",
+                    )
+                    .unwrap();
+
+                return Ok(call_result_val.try_as_basic_value().left().unwrap());
+            }
         }
 
         // Otherwise, x |> f transforms to f(x)
