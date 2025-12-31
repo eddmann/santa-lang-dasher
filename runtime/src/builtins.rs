@@ -2834,6 +2834,31 @@ pub extern "C-unwind" fn rt_skip(total: Value, collection: Value) -> Value {
         } = &lazy.kind
         {
             let new_start = current + (n as i64) * step;
+            // Check if skip moved past the end - return empty range instead of invalid one
+            if let Some(end_val) = end {
+                let past_end = if *step > 0 {
+                    if *inclusive {
+                        new_start > *end_val
+                    } else {
+                        new_start >= *end_val
+                    }
+                } else if *inclusive {
+                    new_start < *end_val
+                } else {
+                    new_start <= *end_val
+                };
+                if past_end {
+                    // Return an empty range (start == end, exclusive)
+                    return Value::from_lazy_sequence(LazySequenceObject::new(
+                        LazySeqKind::Range {
+                            current: 0,
+                            end: Some(0),
+                            inclusive: false,
+                            step: 1,
+                        },
+                    ));
+                }
+            }
             return Value::from_lazy_sequence(LazySequenceObject::range(
                 new_start, *end, *inclusive, *step,
             ));
