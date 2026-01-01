@@ -57,9 +57,7 @@ pub struct Compiler {
 impl Compiler {
     /// Create a new compiler with default settings
     pub fn new() -> Self {
-        Self {
-            runtime_lib_path: None,
-        }
+        Self { runtime_lib_path: None }
     }
 
     /// Set the path to the runtime library
@@ -71,9 +69,7 @@ impl Compiler {
     /// Extract the embedded runtime library to a cache directory
     fn extract_embedded_runtime() -> Result<PathBuf, CompileError> {
         if EMBEDDED_RUNTIME.is_empty() {
-            return Err(CompileError::LinkError(
-                "No embedded runtime available".to_string(),
-            ));
+            return Err(CompileError::LinkError("No embedded runtime available".to_string()));
         }
 
         // Use a stable cache location
@@ -172,16 +168,12 @@ impl Compiler {
         }
 
         Err(CompileError::LinkError(
-            "Runtime library (libsanta_lang_runtime.a) not found. Run `cargo build --release` first.".to_string()
+            "Runtime library (libsanta_lang_runtime.a) not found. Run `cargo build --release` first.".to_string(),
         ))
     }
 
     /// Compile source code to an executable
-    pub fn compile_to_executable(
-        &self,
-        source: &str,
-        output_path: &Path,
-    ) -> Result<(), CompileError> {
+    pub fn compile_to_executable(&self, source: &str, output_path: &Path) -> Result<(), CompileError> {
         // Create temp directory for intermediate files with unique filename
         // Use atomic counter + timestamp + thread ID to ensure uniqueness across parallel tests
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -194,10 +186,7 @@ impl Compiler {
             .unwrap_or(0);
         let thread_id = std::thread::current().id();
         let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let obj_path = temp_dir.join(format!(
-            "santa_program_{:?}_{}_{}.o",
-            thread_id, unique_id, counter
-        ));
+        let obj_path = temp_dir.join(format!("santa_program_{:?}_{}_{}.o", thread_id, unique_id, counter));
 
         // Step 1: Compile to object file
         self.compile_to_object(source, &obj_path)?;
@@ -251,11 +240,7 @@ impl Compiler {
 
     /// Generate the main function from a program (legacy, uses simple type inference)
     #[allow(dead_code)]
-    fn generate_main<'ctx>(
-        &self,
-        codegen: &mut CodegenContext<'ctx>,
-        program: &Program,
-    ) -> Result<(), CompileError> {
+    fn generate_main(&self, codegen: &mut CodegenContext<'_>, program: &Program) -> Result<(), CompileError> {
         let context = codegen.context;
         let i64_type = context.i64_type();
 
@@ -294,14 +279,10 @@ impl Compiler {
                         .map_err(|e| CompileError::CodegenError(format!("{:?}", e)))?;
                 }
                 Stmt::Return(_) => {
-                    return Err(CompileError::CodegenError(
-                        "return outside function".to_string(),
-                    ));
+                    return Err(CompileError::CodegenError("return outside function".to_string()));
                 }
                 Stmt::Break(_) => {
-                    return Err(CompileError::CodegenError(
-                        "break outside iteration".to_string(),
-                    ));
+                    return Err(CompileError::CodegenError("break outside iteration".to_string()));
                 }
             }
         }
@@ -328,9 +309,9 @@ impl Compiler {
     ///
     /// This version uses pre-inferred types from the type inference pass,
     /// enabling better code generation through type specialization.
-    fn generate_main_typed<'ctx>(
+    fn generate_main_typed(
         &self,
-        codegen: &mut CodegenContext<'ctx>,
+        codegen: &mut CodegenContext<'_>,
         typed_program: &TypedProgram,
         program: &Program,
     ) -> Result<(), CompileError> {
@@ -394,14 +375,10 @@ impl Compiler {
                         .map_err(|e| CompileError::CodegenError(format!("{:?}", e)))?;
                 }
                 Stmt::Return(_) => {
-                    return Err(CompileError::CodegenError(
-                        "return outside function".to_string(),
-                    ));
+                    return Err(CompileError::CodegenError("return outside function".to_string()));
                 }
                 Stmt::Break(_) => {
-                    return Err(CompileError::CodegenError(
-                        "break outside iteration".to_string(),
-                    ));
+                    return Err(CompileError::CodegenError("break outside iteration".to_string()));
                 }
             }
         }
@@ -526,10 +503,7 @@ mod tests {
             .unwrap_or(0);
         let thread_id = std::thread::current().id();
         let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
-        temp_dir.join(format!(
-            "{}_{:?}_{}_{}_.{}",
-            base, thread_id, unique_id, counter, ext
-        ))
+        temp_dir.join(format!("{}_{:?}_{}_{}_.{}", base, thread_id, unique_id, counter, ext))
     }
 
     #[test]
@@ -595,11 +569,7 @@ mod tests {
             .expect("Failed to execute compiled program");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains("42"),
-            "Output should contain '42', got: {}",
-            stdout
-        );
+        assert!(stdout.contains("42"), "Output should contain '42', got: {}", stdout);
 
         // Clean up
         std::fs::remove_file(&exe_path).ok();
@@ -611,13 +581,8 @@ mod tests {
         let exe_path = unique_path("test_time_nanos_exec", "exe");
 
         // Compile __time_nanos() call and print it
-        let result =
-            compiler.compile_to_executable("let t = __time_nanos()\nputs(t)\n0", &exe_path);
-        assert!(
-            result.is_ok(),
-            "Failed to compile __time_nanos: {:?}",
-            result.err()
-        );
+        let result = compiler.compile_to_executable("let t = __time_nanos()\nputs(t)\n0", &exe_path);
+        assert!(result.is_ok(), "Failed to compile __time_nanos: {:?}", result.err());
 
         // Execute and capture stdout
         let output = Command::new(&exe_path)
@@ -651,11 +616,7 @@ mod tests {
             0
         "#;
         let result = compiler.compile_to_executable(source, &exe_path);
-        assert!(
-            result.is_ok(),
-            "Failed to compile match: {:?}",
-            result.err()
-        );
+        assert!(result.is_ok(), "Failed to compile match: {:?}", result.err());
 
         // Execute and capture stdout
         let output = Command::new(&exe_path)
@@ -663,11 +624,7 @@ mod tests {
             .expect("Failed to execute compiled program");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains("200"),
-            "Output should contain '200', got: {}",
-            stdout
-        );
+        assert!(stdout.contains("200"), "Output should contain '200', got: {}", stdout);
 
         // Clean up
         std::fs::remove_file(&exe_path).ok();
@@ -685,11 +642,7 @@ mod tests {
             0
         "#;
         let result = compiler.compile_to_executable(source, &exe_path);
-        assert!(
-            result.is_ok(),
-            "Failed to compile update: {:?}",
-            result.err()
-        );
+        assert!(result.is_ok(), "Failed to compile update: {:?}", result.err());
 
         // Execute and capture stdout
         let output = Command::new(&exe_path)
@@ -697,11 +650,7 @@ mod tests {
             .expect("Failed to execute compiled program");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains("2"),
-            "Output should contain '2', got: {}",
-            stdout
-        );
+        assert!(stdout.contains("2"), "Output should contain '2', got: {}", stdout);
 
         // Clean up
         std::fs::remove_file(&exe_path).ok();
@@ -720,11 +669,7 @@ mod tests {
             0
         "#;
         let result = compiler.compile_to_executable(source, &exe_path);
-        assert!(
-            result.is_ok(),
-            "Failed to compile update_d: {:?}",
-            result.err()
-        );
+        assert!(result.is_ok(), "Failed to compile update_d: {:?}", result.err());
 
         // Execute and capture stdout
         let output = Command::new(&exe_path)
@@ -732,11 +677,7 @@ mod tests {
             .expect("Failed to execute compiled program");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains("6"),
-            "Output should contain '6', got: {}",
-            stdout
-        );
+        assert!(stdout.contains("6"), "Output should contain '6', got: {}", stdout);
 
         // Clean up
         std::fs::remove_file(&exe_path).ok();

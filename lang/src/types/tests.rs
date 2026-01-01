@@ -532,11 +532,7 @@ fn infer_user_defined_function_call_int() {
     let program = infer_program("let add = |a, b| a + b\nadd(1, 2)");
     assert_eq!(program.statements.len(), 2);
     // The call add(1, 2) should return Int
-    assert_eq!(
-        program.statements[1].ty,
-        Type::Int,
-        "add(1, 2) should be Int"
-    );
+    assert_eq!(program.statements[1].ty, Type::Int, "add(1, 2) should be Int");
 }
 
 #[test]
@@ -558,11 +554,7 @@ fn infer_user_defined_function_call_with_comparison() {
     // is_positive(5)  → should infer as Bool
     let program = infer_program("let is_positive = |x| x > 0\nis_positive(5)");
     assert_eq!(program.statements.len(), 2);
-    assert_eq!(
-        program.statements[1].ty,
-        Type::Bool,
-        "is_positive(5) should be Bool"
-    );
+    assert_eq!(program.statements[1].ty, Type::Bool, "is_positive(5) should be Bool");
 }
 
 #[test]
@@ -570,8 +562,7 @@ fn infer_user_defined_function_nested_call() {
     // let double = |x| x * 2
     // let quad = |x| double(double(x))
     // quad(3)  → should infer as Int
-    let program =
-        infer_program("let double = |x| x * 2\nlet quad = |x| double(double(x))\nquad(3)");
+    let program = infer_program("let double = |x| x * 2\nlet quad = |x| double(double(x))\nquad(3)");
     assert_eq!(program.statements.len(), 3);
     assert_eq!(program.statements[2].ty, Type::Int, "quad(3) should be Int");
 }
@@ -675,11 +666,7 @@ fn infer_if_let_list_destructure() {
             Pattern::Identifier("a".to_string()),
             Pattern::RestIdentifier("rest".to_string()),
         ]),
-        value: Box::new(Expr::List(vec![
-            Expr::Integer(1),
-            Expr::Integer(2),
-            Expr::Integer(3),
-        ])),
+        value: Box::new(Expr::List(vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)])),
         then_branch: Box::new(Expr::Identifier("a".to_string())),
         else_branch: Some(Box::new(Expr::Integer(0))),
     };
@@ -755,16 +742,8 @@ fn infer_lambda_param_from_map_unknown_without_context() {
     let ty = infer_type("|x| x * 2");
     match ty {
         Type::Function { params, ret } => {
-            assert_eq!(
-                params[0],
-                Type::Unknown,
-                "Without context, param should be Unknown"
-            );
-            assert_eq!(
-                *ret,
-                Type::Unknown,
-                "Without context, Unknown * Int = Unknown"
-            );
+            assert_eq!(params[0], Type::Unknown, "Without context, param should be Unknown");
+            assert_eq!(*ret, Type::Unknown, "Without context, Unknown * Int = Unknown");
         }
         _ => panic!("Expected Function type"),
     }

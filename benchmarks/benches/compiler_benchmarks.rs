@@ -147,8 +147,7 @@ fn bench_optimization_levels(c: &mut Criterion) {
             |b, opt_level| {
                 b.iter(|| {
                     let context = Context::create();
-                    let codegen =
-                        CodegenContext::with_optimization(&context, "bench_module", *opt_level);
+                    let codegen = CodegenContext::with_optimization(&context, "bench_module", *opt_level);
                     // Return something that doesn't hold a reference to context
                     black_box(codegen.optimization_level())
                 })

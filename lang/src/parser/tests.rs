@@ -494,10 +494,7 @@ fn parse_operator_reference_add() {
                     _ => panic!("Expected Infix body"),
                 }
             }
-            _ => panic!(
-                "Expected Function for operator reference, got {:?}",
-                args[1]
-            ),
+            _ => panic!("Expected Function for operator reference, got {:?}", args[1]),
         }
     } else {
         panic!("Expected Call expression");

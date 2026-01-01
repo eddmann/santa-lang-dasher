@@ -46,10 +46,7 @@ impl Parser {
     /// Used when operators like + are passed as function references: fold(0, +, list)
     fn make_operator_lambda(op: InfixOp) -> Expr {
         Expr::Function {
-            params: vec![
-                Param::simple("__op_0".to_string()),
-                Param::simple("__op_1".to_string()),
-            ],
+            params: vec![Param::simple("__op_0".to_string()), Param::simple("__op_1".to_string())],
             body: Box::new(Expr::Infix {
                 left: Box::new(Expr::Identifier("__op_0".to_string())),
                 op,
@@ -159,22 +156,12 @@ impl Parser {
         match expr {
             Expr::Placeholder => 1,
             Expr::Prefix { right, .. } => self.count_placeholders(right),
-            Expr::Infix { left, right, .. } => {
-                self.count_placeholders(left) + self.count_placeholders(right)
-            }
-            Expr::InfixCall { left, right, .. } => {
-                self.count_placeholders(left) + self.count_placeholders(right)
-            }
+            Expr::Infix { left, right, .. } => self.count_placeholders(left) + self.count_placeholders(right),
+            Expr::InfixCall { left, right, .. } => self.count_placeholders(left) + self.count_placeholders(right),
             Expr::Call { function, args } => {
-                self.count_placeholders(function)
-                    + args
-                        .iter()
-                        .map(|a| self.count_placeholders(a))
-                        .sum::<usize>()
+                self.count_placeholders(function) + args.iter().map(|a| self.count_placeholders(a)).sum::<usize>()
             }
-            Expr::Index { collection, index } => {
-                self.count_placeholders(collection) + self.count_placeholders(index)
-            }
+            Expr::Index { collection, index } => self.count_placeholders(collection) + self.count_placeholders(index),
             Expr::List(elements) => elements.iter().map(|e| self.count_placeholders(e)).sum(),
             Expr::Set(elements) => elements.iter().map(|e| self.count_placeholders(e)).sum(),
             Expr::Dict(entries) => entries
@@ -206,11 +193,7 @@ impl Parser {
                 op,
                 right: Box::new(self.replace_placeholders(*right, counter)),
             },
-            Expr::InfixCall {
-                function,
-                left,
-                right,
-            } => Expr::InfixCall {
+            Expr::InfixCall { function, left, right } => Expr::InfixCall {
                 function,
                 left: Box::new(self.replace_placeholders(*left, counter)),
                 right: Box::new(self.replace_placeholders(*right, counter)),
@@ -463,10 +446,7 @@ impl Parser {
                 let close = self.current_token()?;
                 if !matches!(close.kind, TokenKind::RightParen) {
                     return Err(ParseError {
-                        message: format!(
-                            "Expected ')' after grouped expression, got {:?}",
-                            close.kind
-                        ),
+                        message: format!("Expected ')' after grouped expression, got {:?}", close.kind),
                         line: close.span.start.line as usize,
                         column: close.span.start.column as usize,
                     });
@@ -566,10 +546,7 @@ impl Parser {
                         }
                         _ => {
                             return Err(ParseError {
-                                message: format!(
-                                    "Expected ',' or '|' in function parameters, got {:?}",
-                                    next.kind
-                                ),
+                                message: format!("Expected ',' or '|' in function parameters, got {:?}", next.kind),
                                 line: next.span.start.line as usize,
                                 column: next.span.start.column as usize,
                             });
@@ -594,10 +571,7 @@ impl Parser {
                         }
                         _ => {
                             return Err(ParseError {
-                                message: format!(
-                                    "Expected ',' or '|' after pattern parameter, got {:?}",
-                                    next.kind
-                                ),
+                                message: format!("Expected ',' or '|' after pattern parameter, got {:?}", next.kind),
                                 line: next.span.start.line as usize,
                                 column: next.span.start.column as usize,
                             });
@@ -624,10 +598,7 @@ impl Parser {
                         }
                         _ => {
                             return Err(ParseError {
-                                message: format!(
-                                    "Expected ',' or '|' after wildcard parameter, got {:?}",
-                                    next.kind
-                                ),
+                                message: format!("Expected ',' or '|' after wildcard parameter, got {:?}", next.kind),
                                 line: next.span.start.line as usize,
                                 column: next.span.start.column as usize,
                             });
@@ -660,10 +631,7 @@ impl Parser {
                     let next = self.current_token()?;
                     if !matches!(next.kind, TokenKind::VerticalBar) {
                         return Err(ParseError {
-                            message: format!(
-                                "Rest parameter must be last, expected '|' but got {:?}",
-                                next.kind
-                            ),
+                            message: format!("Rest parameter must be last, expected '|' but got {:?}", next.kind),
                             line: next.span.start.line as usize,
                             column: next.span.start.column as usize,
                         });
@@ -829,10 +797,7 @@ impl Parser {
                             let next = self.current_token()?;
                             if !matches!(next.kind, TokenKind::VerticalBar) {
                                 return Err(ParseError {
-                                    message: format!(
-                                        "Expected '|' after rest parameter, got {:?}",
-                                        next.kind
-                                    ),
+                                    message: format!("Expected '|' after rest parameter, got {:?}", next.kind),
                                     line: next.span.start.line as usize,
                                     column: next.span.start.column as usize,
                                 });
@@ -846,10 +811,7 @@ impl Parser {
                         }
                         _ => {
                             return Err(ParseError {
-                                message: format!(
-                                    "Expected parameter or '|', got {:?}",
-                                    token.kind
-                                ),
+                                message: format!("Expected parameter or '|', got {:?}", token.kind),
                                 line: token.span.start.line as usize,
                                 column: token.span.start.column as usize,
                             });
@@ -932,10 +894,7 @@ impl Parser {
                 }
                 _ => {
                     return Err(ParseError {
-                        message: format!(
-                            "Expected ',' or ')' in call arguments, got {:?}",
-                            token.kind
-                        ),
+                        message: format!("Expected ',' or ')' in call arguments, got {:?}", token.kind),
                         line: token.span.start.line as usize,
                         column: token.span.start.column as usize,
                     })
@@ -1026,10 +985,7 @@ impl Parser {
                         }
                         _ => {
                             return Err(ParseError {
-                                message: format!(
-                                    "Expected ',' or '}}' in dict literal, got {:?}",
-                                    token.kind
-                                ),
+                                message: format!("Expected ',' or '}}' in dict literal, got {:?}", token.kind),
                                 line: token.span.start.line as usize,
                                 column: token.span.start.column as usize,
                             })
@@ -1070,10 +1026,7 @@ impl Parser {
                                 break;
                             } else if !matches!(token.kind, TokenKind::Comma) {
                                 return Err(ParseError {
-                                    message: format!(
-                                        "Expected ',' or '}}' in dict literal, got {:?}",
-                                        token.kind
-                                    ),
+                                    message: format!("Expected ',' or '}}' in dict literal, got {:?}", token.kind),
                                     line: token.span.start.line as usize,
                                     column: token.span.start.column as usize,
                                 });
@@ -1088,10 +1041,7 @@ impl Parser {
                 }
 
                 return Err(ParseError {
-                    message: format!(
-                        "Expected ':' after key in dict literal, got {:?}",
-                        token.kind
-                    ),
+                    message: format!("Expected ':' after key in dict literal, got {:?}", token.kind),
                     line: token.span.start.line as usize,
                     column: token.span.start.column as usize,
                 });
@@ -1100,10 +1050,7 @@ impl Parser {
 
         let token = self.current_token()?;
         Err(ParseError {
-            message: format!(
-                "Expected ':' or '}}' after dict key, got {:?}",
-                token.kind
-            ),
+            message: format!("Expected ':' or '}}' after dict key, got {:?}", token.kind),
             line: token.span.start.line as usize,
             column: token.span.start.column as usize,
         })
@@ -1260,10 +1207,7 @@ impl Parser {
                 TokenKind::Identifier(name) => name.clone(),
                 _ => {
                     return Err(ParseError {
-                        message: format!(
-                            "Expected function name in backtick expression, got {:?}",
-                            fn_token.kind
-                        ),
+                        message: format!("Expected function name in backtick expression, got {:?}", fn_token.kind),
                         line: fn_token.span.start.line as usize,
                         column: fn_token.span.start.column as usize,
                     });
@@ -1381,24 +1325,16 @@ impl Parser {
             TokenKind::EqualEqual | TokenKind::NotEqual => PREC_EQUALITY,
 
             // Comparison
-            TokenKind::Less
-            | TokenKind::LessEqual
-            | TokenKind::Greater
-            | TokenKind::GreaterEqual => PREC_COMPARISON,
+            TokenKind::Less | TokenKind::LessEqual | TokenKind::Greater | TokenKind::GreaterEqual => PREC_COMPARISON,
 
             // Composition/Pipeline/Range
-            TokenKind::RightRight
-            | TokenKind::Pipe
-            | TokenKind::DotDot
-            | TokenKind::DotDotEqual => PREC_PIPELINE,
+            TokenKind::RightRight | TokenKind::Pipe | TokenKind::DotDot | TokenKind::DotDotEqual => PREC_PIPELINE,
 
             // Additive
             TokenKind::Plus | TokenKind::Minus => PREC_ADDITIVE,
 
             // Multiplicative/Infix
-            TokenKind::Star | TokenKind::Slash | TokenKind::Percent | TokenKind::Backtick => {
-                PREC_MULTIPLICATIVE
-            }
+            TokenKind::Star | TokenKind::Slash | TokenKind::Percent | TokenKind::Backtick => PREC_MULTIPLICATIVE,
 
             // Not an infix operator
             _ => 0,
@@ -1516,7 +1452,7 @@ impl Parser {
                     match next.kind {
                         TokenKind::DotDot => {
                             self.advance(); // consume '..'
-                            // Check for end value (optional for unbounded range)
+                                            // Check for end value (optional for unbounded range)
                             let end = self.parse_range_end_integer(false)?;
                             return Ok(Pattern::Range {
                                 start,
@@ -1526,7 +1462,7 @@ impl Parser {
                         }
                         TokenKind::DotDotEqual => {
                             self.advance(); // consume '..='
-                            // Inclusive range requires end value
+                                            // Inclusive range requires end value
                             let end = self.parse_range_end_integer(true)?.unwrap();
                             return Ok(Pattern::Range {
                                 start,
@@ -1581,10 +1517,7 @@ impl Parser {
                         Ok(Pattern::Literal(Literal::Decimal(value)))
                     }
                     _ => Err(ParseError {
-                        message: format!(
-                            "Expected numeric literal after '-' in pattern, got {:?}",
-                            next.kind
-                        ),
+                        message: format!("Expected numeric literal after '-' in pattern, got {:?}", next.kind),
                         line: next.span.start.line as usize,
                         column: next.span.start.column as usize,
                     }),
@@ -1683,10 +1616,7 @@ impl Parser {
                         }
                         _ => {
                             return Err(ParseError {
-                                message: format!(
-                                    "Expected ',' or ']' after rest pattern, got {:?}",
-                                    next.kind
-                                ),
+                                message: format!("Expected ',' or ']' after rest pattern, got {:?}", next.kind),
                                 line: next.span.start.line as usize,
                                 column: next.span.start.column as usize,
                             });
@@ -1711,10 +1641,7 @@ impl Parser {
                         }
                         _ => {
                             return Err(ParseError {
-                                message: format!(
-                                    "Expected ',' or ']' in list pattern, got {:?}",
-                                    next.kind
-                                ),
+                                message: format!("Expected ',' or ']' in list pattern, got {:?}", next.kind),
                                 line: next.span.start.line as usize,
                                 column: next.span.start.column as usize,
                             });
@@ -1756,10 +1683,7 @@ impl Parser {
                     Ok(Some(-n))
                 } else {
                     Err(ParseError {
-                        message: format!(
-                            "Expected integer after '-' in range pattern, got {:?}",
-                            next.kind
-                        ),
+                        message: format!("Expected integer after '-' in range pattern, got {:?}", next.kind),
                         line: next.span.start.line as usize,
                         column: next.span.start.column as usize,
                     })
@@ -1768,10 +1692,7 @@ impl Parser {
             _ => {
                 if required {
                     Err(ParseError {
-                        message: format!(
-                            "Expected integer in range pattern, got {:?}",
-                            token.kind
-                        ),
+                        message: format!("Expected integer in range pattern, got {:?}", token.kind),
                         line: token.span.start.line as usize,
                         column: token.span.start.column as usize,
                     })
@@ -1827,27 +1748,23 @@ impl Parser {
             let then_branch = self.parse_block()?;
 
             // Check for else branch
-            let else_branch =
-                if matches!(self.current_token().map(|t| &t.kind), Ok(TokenKind::Else)) {
-                    self.advance(); // consume 'else'
-                    let token = self.current_token()?;
-                    if matches!(token.kind, TokenKind::LeftBrace) {
-                        Some(self.parse_block()?)
-                    } else if matches!(token.kind, TokenKind::If) {
-                        Some(self.parse_if()?)
-                    } else {
-                        return Err(ParseError {
-                            message: format!(
-                                "Expected '{{' or 'if' after else, got {:?}",
-                                token.kind
-                            ),
-                            line: token.span.start.line as usize,
-                            column: token.span.start.column as usize,
-                        });
-                    }
+            let else_branch = if matches!(self.current_token().map(|t| &t.kind), Ok(TokenKind::Else)) {
+                self.advance(); // consume 'else'
+                let token = self.current_token()?;
+                if matches!(token.kind, TokenKind::LeftBrace) {
+                    Some(self.parse_block()?)
+                } else if matches!(token.kind, TokenKind::If) {
+                    Some(self.parse_if()?)
                 } else {
-                    None
-                };
+                    return Err(ParseError {
+                        message: format!("Expected '{{' or 'if' after else, got {:?}", token.kind),
+                        line: token.span.start.line as usize,
+                        column: token.span.start.column as usize,
+                    });
+                }
+            } else {
+                None
+            };
 
             return Ok(Expr::IfLet {
                 pattern,
@@ -1953,11 +1870,7 @@ impl Parser {
 
             let body = self.parse_block()?;
 
-            arms.push(MatchArm {
-                pattern,
-                guard,
-                body,
-            });
+            arms.push(MatchArm { pattern, guard, body });
         }
 
         Ok(Expr::Match {
@@ -1985,10 +1898,7 @@ impl Parser {
         // Check if the first token indicates this must be a block
         // (statement-starting keywords that can't be expression starts)
         if let Ok(token) = self.current_token() {
-            if matches!(
-                token.kind,
-                TokenKind::Let | TokenKind::Return | TokenKind::Break
-            ) {
+            if matches!(token.kind, TokenKind::Let | TokenKind::Return | TokenKind::Break) {
                 // Definitely a block - use parse_block logic
                 return self.parse_block_body();
             }
@@ -2025,10 +1935,7 @@ impl Parser {
                             }
                             _ => {
                                 return Err(ParseError {
-                                    message: format!(
-                                        "Expected ',' or '}}' in set literal, got {:?}",
-                                        token.kind
-                                    ),
+                                    message: format!("Expected ',' or '}}' in set literal, got {:?}", token.kind),
                                     line: token.span.start.line as usize,
                                     column: token.span.start.column as usize,
                                 })
@@ -2182,10 +2089,7 @@ impl Parser {
             }
         }
 
-        Ok(Program {
-            statements,
-            sections,
-        })
+        Ok(Program { statements, sections })
     }
 
     /// Skip semicolons and newlines (statement terminators)
@@ -2228,8 +2132,7 @@ impl Parser {
                 "input" => {
                     if slow {
                         return Err(ParseError {
-                            message: "@slow attribute can only be applied to test sections"
-                                .to_string(),
+                            message: "@slow attribute can only be applied to test sections".to_string(),
                             line: token.span.start.line as usize,
                             column: token.span.start.column as usize,
                         });
@@ -2242,8 +2145,7 @@ impl Parser {
                 "part_one" => {
                     if slow {
                         return Err(ParseError {
-                            message: "@slow attribute can only be applied to test sections"
-                                .to_string(),
+                            message: "@slow attribute can only be applied to test sections".to_string(),
                             line: token.span.start.line as usize,
                             column: token.span.start.column as usize,
                         });
@@ -2257,8 +2159,7 @@ impl Parser {
                 "part_two" => {
                     if slow {
                         return Err(ParseError {
-                            message: "@slow attribute can only be applied to test sections"
-                                .to_string(),
+                            message: "@slow attribute can only be applied to test sections".to_string(),
                             line: token.span.start.line as usize,
                             column: token.span.start.column as usize,
                         });
@@ -2308,10 +2209,7 @@ impl Parser {
                                 }
                                 _ => {
                                     return Err(ParseError {
-                                        message: format!(
-                                            "Unexpected field in test section: {}",
-                                            field_name
-                                        ),
+                                        message: format!("Unexpected field in test section: {}", field_name),
                                         line: token.span.start.line as usize,
                                         column: token.span.start.column as usize,
                                     });
@@ -2319,10 +2217,7 @@ impl Parser {
                             }
                         } else {
                             return Err(ParseError {
-                                message: format!(
-                                    "Expected field name in test section, got {:?}",
-                                    token.kind
-                                ),
+                                message: format!("Expected field name in test section, got {:?}", token.kind),
                                 line: token.span.start.line as usize,
                                 column: token.span.start.column as usize,
                             });
@@ -2356,7 +2251,6 @@ impl Parser {
             })
         }
     }
-
 }
 
 pub fn parse(tokens: Vec<Token>) -> Result<Expr, ParseError> {

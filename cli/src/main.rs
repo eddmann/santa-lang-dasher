@@ -2,14 +2,18 @@
 //!
 //! Usage:
 //!   dasher <SCRIPT>           Run solution file
+//!   dasher -e <CODE>          Evaluate inline script
 //!   dasher -t <SCRIPT>        Run tests (exclude @slow)
 //!   dasher -t -s <SCRIPT>     Run tests (include @slow)
 //!   dasher -c <SCRIPT>        Compile to executable (same name as script)
+//!   <stdin> | dasher          Read source from stdin
 
 use clap::Parser;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use santa_lang::codegen::pipeline::Compiler;
 use santa_lang::lexer::lex;
 use santa_lang::parser::Parser as SantaParser;
 use santa_lang::runner::{Runner, RunnerConfig};
@@ -17,10 +21,14 @@ use santa_lang::runner::{Runner, RunnerConfig};
 /// Dasher - Santa-lang LLVM Compiler
 #[derive(Parser, Debug)]
 #[command(name = "dasher")]
-#[command(author, version, about, long_about = None)]
+#[command(version, about = "Santa-lang LLVM Compiler", long_about = None)]
 struct Args {
-    /// The script file to run
-    script: PathBuf,
+    /// The script file to run (optional if using -e or stdin)
+    script: Option<PathBuf>,
+
+    /// Evaluate inline script
+    #[arg(short = 'e', long = "eval")]
+    eval: Option<String>,
 
     /// Run tests instead of the solution
     #[arg(short = 't', long = "test")]
@@ -35,77 +43,140 @@ struct Args {
     compile: bool,
 }
 
+/// Source of the script being executed
+enum Source {
+    /// From a file path
+    File { path: PathBuf, content: String },
+    /// From -e flag or stdin (no file path)
+    Inline { content: String },
+}
+
 fn main() -> ExitCode {
     let args = Args::parse();
 
-    // Canonicalize script path to absolute for proper input file resolution
-    let script_path = match args.script.canonicalize() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error resolving script path {:?}: {}", args.script, e);
-            return ExitCode::from(1);
-        }
-    };
-
-    // Read the script file
-    let source = match std::fs::read_to_string(&script_path) {
+    // Determine source: -e flag > file argument > stdin
+    let source = match get_source(&args) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Error reading file {:?}: {}", args.script, e);
+            eprintln!("{}", e);
             return ExitCode::from(1);
         }
     };
 
     // Emit mode: compile to executable and exit (don't run)
     if args.compile {
-        use santa_lang::codegen::pipeline::Compiler;
-
-        // Output path: same directory as script, same name without extension
-        let emit_path = script_path.with_extension("");
-
-        // Parse first to check if it's a solution file
-        let tokens = match lex(&source) {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("Lexer error: {:?}", e);
-                return ExitCode::from(2);
-            }
-        };
-
-        let mut parser = SantaParser::new(tokens);
-        let program = match parser.parse_program() {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("Parse error: {:?}", e);
-                return ExitCode::from(2);
-            }
-        };
-
-        // Check if it's a solution file (has part_one/part_two sections)
-        let runner = Runner::new();
-        let final_source = if runner.is_script_mode(&program) {
-            // Script mode: compile source directly
-            source.clone()
-        } else {
-            // Solution mode: use Runner to generate executable source
-            // If input is an AOC read, resolve it and bake into the binary
-            let resolved_input = runner.get_aoc_url_from_input(&program).and_then(|url| {
-                santa_lang::runtime::builtins::resolve_aoc_input(&url, &script_path)
-            });
-            runner.generate_source_with_resolved_input(&program, resolved_input.as_deref())
-        };
-
-        let compiler = Compiler::new();
-        if let Err(e) = compiler.compile_to_executable(&final_source, &emit_path) {
-            eprintln!("Compilation error: {:?}", e);
-            return ExitCode::from(2);
-        }
-        println!("Compiled to: {}", emit_path.display());
-        return ExitCode::SUCCESS;
+        return compile_to_executable(&source);
     }
 
-    // Lex and parse
-    let tokens = match lex(&source) {
+    // Parse the source
+    let (program, source_content) = match parse_source(&source) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+
+    // Create runner with configuration
+    let config = RunnerConfig {
+        include_slow: args.include_slow,
+        script_path: source.path().map(|p| p.to_path_buf()),
+    };
+    let runner = Runner::with_config(config);
+
+    // Validate the program
+    if let Err(e) = runner.validate_program(&program) {
+        eprintln!("Program validation error: {:?}", e);
+        return ExitCode::from(2);
+    }
+
+    if args.test_mode {
+        run_tests(&runner, &program)
+    } else if runner.is_script_mode(&program) {
+        run_script(&source, source_content)
+    } else {
+        run_solution(&runner, &program)
+    }
+}
+
+fn get_source(args: &Args) -> Result<Source, String> {
+    // Priority: -e flag > file argument > stdin
+    if let Some(ref eval_script) = args.eval {
+        return Ok(Source::Inline {
+            content: eval_script.clone(),
+        });
+    }
+
+    if let Some(ref script_path) = args.script {
+        let path = script_path
+            .canonicalize()
+            .map_err(|e| format!("Error resolving script path {:?}: {}", script_path, e))?;
+        let content =
+            std::fs::read_to_string(&path).map_err(|e| format!("Error reading file {:?}: {}", script_path, e))?;
+        return Ok(Source::File { path, content });
+    }
+
+    // Try stdin if not a TTY
+    if !atty::is(atty::Stream::Stdin) {
+        let mut content = String::new();
+        std::io::stdin()
+            .read_to_string(&mut content)
+            .map_err(|e| format!("Error reading from stdin: {}", e))?;
+        return Ok(Source::Inline { content });
+    }
+
+    Err("No input provided. Use: dasher <SCRIPT>, dasher -e <CODE>, or pipe to stdin".to_string())
+}
+
+impl Source {
+    fn content(&self) -> &str {
+        match self {
+            Source::File { content, .. } => content,
+            Source::Inline { content } => content,
+        }
+    }
+
+    fn path(&self) -> Option<&PathBuf> {
+        match self {
+            Source::File { path, .. } => Some(path),
+            Source::Inline { .. } => None,
+        }
+    }
+}
+
+fn parse_source(source: &Source) -> Result<(santa_lang::parser::ast::Program, &str), ExitCode> {
+    let content = source.content();
+
+    let tokens = match lex(content) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Lexer error: {:?}", e);
+            return Err(ExitCode::from(2));
+        }
+    };
+
+    let mut parser = SantaParser::new(tokens);
+    let program = match parser.parse_program() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Parse error: {:?}", e);
+            return Err(ExitCode::from(2));
+        }
+    };
+
+    Ok((program, content))
+}
+
+fn compile_to_executable(source: &Source) -> ExitCode {
+    let path = match source.path() {
+        Some(p) => p,
+        None => {
+            eprintln!("Error: --compile requires a file path");
+            return ExitCode::from(1);
+        }
+    };
+
+    let content = source.content();
+
+    // Parse first to check if it's a solution file
+    let tokens = match lex(content) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("Lexer error: {:?}", e);
@@ -122,158 +193,163 @@ fn main() -> ExitCode {
         }
     };
 
-    // Create runner with configuration
-    let config = RunnerConfig {
-        include_slow: args.include_slow,
-        script_path: Some(script_path.clone()),
-    };
-    let runner = Runner::with_config(config);
+    // Output path: same directory as script, same name without extension
+    let emit_path = path.with_extension("");
 
-    // Validate the program
-    if let Err(e) = runner.validate_program(&program) {
-        eprintln!("Program validation error: {:?}", e);
+    // Check if it's a solution file (has part_one/part_two sections)
+    let runner = Runner::new();
+    let final_source = if runner.is_script_mode(&program) {
+        content.to_string()
+    } else {
+        // Solution mode: use Runner to generate executable source
+        // If input is an AOC read, resolve it and bake into the binary
+        let resolved_input = runner
+            .get_aoc_url_from_input(&program)
+            .and_then(|url| santa_lang::runtime::builtins::resolve_aoc_input(&url, path));
+        runner.generate_source_with_resolved_input(&program, resolved_input.as_deref())
+    };
+
+    let compiler = Compiler::new();
+    if let Err(e) = compiler.compile_to_executable(&final_source, &emit_path) {
+        eprintln!("Compilation error: {:?}", e);
+        return ExitCode::from(2);
+    }
+    println!("Compiled to: {}", emit_path.display());
+    ExitCode::SUCCESS
+}
+
+fn run_script(source: &Source, content: &str) -> ExitCode {
+    use std::process::Command;
+
+    let temp_dir = std::env::temp_dir();
+    let exe_path = temp_dir.join(format!("santa_script_{}", std::process::id()));
+
+    let compiler = Compiler::new();
+    if let Err(e) = compiler.compile_to_executable(content, &exe_path) {
+        eprintln!("Compilation error: {:?}", e);
         return ExitCode::from(2);
     }
 
-    if args.test_mode {
-        // Test mode: run tests
-        match runner.execute_tests(&program) {
-            Ok(results) => {
-                let mut exit_code = 0;
+    let mut cmd = Command::new(&exe_path);
+    // Set script path env var for AOC input resolution (if we have a file path)
+    if let Some(path) = source.path() {
+        cmd.env("DASHER_SCRIPT_PATH", path);
+    }
+    let status = cmd.status().expect("Failed to run compiled program");
 
-                for (i, result) in results.iter().enumerate() {
-                    let test_num = i + 1;
+    std::fs::remove_file(&exe_path).ok();
 
-                    // Print blank line between tests (not before first)
-                    if i > 0 {
-                        println!();
-                    }
+    if status.success() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(status.code().unwrap_or(1) as u8)
+    }
+}
 
-                    // Print testcase header with optional slow marker
-                    if result.slow {
-                        println!("\x1b[4mTestcase #{}\x1b[0m \x1b[33m(slow)\x1b[0m", test_num);
+fn run_solution(runner: &Runner, program: &santa_lang::parser::ast::Program) -> ExitCode {
+    match runner.execute_solution(program) {
+        Ok(result) => {
+            if let Some(ref part_one) = result.part_one {
+                let time_ms = result.part_one_time.map(|d| d.as_millis()).unwrap_or(0);
+                println!(
+                    "Part 1: \x1b[32m{}\x1b[0m \x1b[90m{}ms\x1b[0m",
+                    santa_lang::runtime::builtins::format_value(part_one),
+                    time_ms
+                );
+            }
+            if let Some(ref part_two) = result.part_two {
+                let time_ms = result.part_two_time.map(|d| d.as_millis()).unwrap_or(0);
+                println!(
+                    "Part 2: \x1b[32m{}\x1b[0m \x1b[90m{}ms\x1b[0m",
+                    santa_lang::runtime::builtins::format_value(part_two),
+                    time_ms
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Execution error: {:?}", e);
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn run_tests(runner: &Runner, program: &santa_lang::parser::ast::Program) -> ExitCode {
+    match runner.execute_tests(program) {
+        Ok(results) => {
+            let mut exit_code = 0;
+
+            for (i, result) in results.iter().enumerate() {
+                let test_num = i + 1;
+
+                // Print blank line between tests (not before first)
+                if i > 0 {
+                    println!();
+                }
+
+                // Print testcase header with optional slow marker
+                if result.slow {
+                    println!("\x1b[4mTestcase #{}\x1b[0m \x1b[33m(slow)\x1b[0m", test_num);
+                } else {
+                    println!("\x1b[4mTestcase #{}\x1b[0m", test_num);
+                }
+
+                // Check if no expectations
+                if result.part_one_passed.is_none() && result.part_two_passed.is_none() {
+                    println!("No expectations");
+                    continue;
+                }
+
+                // Check part_one
+                if let Some(passed) = result.part_one_passed {
+                    let actual = result
+                        .part_one_actual
+                        .as_ref()
+                        .map(santa_lang::runtime::builtins::format_value)
+                        .unwrap_or_else(|| "nil".to_string());
+                    if passed {
+                        println!("Part 1: {} \x1b[32m✔\x1b[0m", actual);
                     } else {
-                        println!("\x1b[4mTestcase #{}\x1b[0m", test_num);
-                    }
-
-                    // Check if no expectations
-                    if result.part_one_passed.is_none() && result.part_two_passed.is_none() {
-                        println!("No expectations");
-                        continue;
-                    }
-
-                    // Check part_one
-                    if let Some(passed) = result.part_one_passed {
-                        let actual = result
-                            .part_one_actual
+                        let expected = result
+                            .part_one_expected
                             .as_ref()
                             .map(santa_lang::runtime::builtins::format_value)
                             .unwrap_or_else(|| "nil".to_string());
-                        if passed {
-                            println!("Part 1: {} \x1b[32m✔\x1b[0m", actual);
-                        } else {
-                            let expected = result
-                                .part_one_expected
-                                .as_ref()
-                                .map(santa_lang::runtime::builtins::format_value)
-                                .unwrap_or_else(|| "nil".to_string());
-                            println!(
-                                "Part 1: {} \x1b[31m✘ (Expected: {})\x1b[0m",
-                                actual, expected
-                            );
-                            exit_code = 3;
-                        }
-                    }
-
-                    // Check part_two
-                    if let Some(passed) = result.part_two_passed {
-                        let actual = result
-                            .part_two_actual
-                            .as_ref()
-                            .map(santa_lang::runtime::builtins::format_value)
-                            .unwrap_or_else(|| "nil".to_string());
-                        if passed {
-                            println!("Part 2: {} \x1b[32m✔\x1b[0m", actual);
-                        } else {
-                            let expected = result
-                                .part_two_expected
-                                .as_ref()
-                                .map(santa_lang::runtime::builtins::format_value)
-                                .unwrap_or_else(|| "nil".to_string());
-                            println!(
-                                "Part 2: {} \x1b[31m✘ (Expected: {})\x1b[0m",
-                                actual, expected
-                            );
-                            exit_code = 3;
-                        }
+                        println!("Part 1: {} \x1b[31m✘ (Expected: {})\x1b[0m", actual, expected);
+                        exit_code = 3;
                     }
                 }
 
-                if exit_code != 0 {
-                    ExitCode::from(exit_code)
-                } else {
-                    ExitCode::SUCCESS
+                // Check part_two
+                if let Some(passed) = result.part_two_passed {
+                    let actual = result
+                        .part_two_actual
+                        .as_ref()
+                        .map(santa_lang::runtime::builtins::format_value)
+                        .unwrap_or_else(|| "nil".to_string());
+                    if passed {
+                        println!("Part 2: {} \x1b[32m✔\x1b[0m", actual);
+                    } else {
+                        let expected = result
+                            .part_two_expected
+                            .as_ref()
+                            .map(santa_lang::runtime::builtins::format_value)
+                            .unwrap_or_else(|| "nil".to_string());
+                        println!("Part 2: {} \x1b[31m✘ (Expected: {})\x1b[0m", actual, expected);
+                        exit_code = 3;
+                    }
                 }
             }
-            Err(e) => {
-                eprintln!("Test execution error: {:?}", e);
-                ExitCode::from(2)
+
+            if exit_code != 0 {
+                ExitCode::from(exit_code)
+            } else {
+                ExitCode::SUCCESS
             }
         }
-    } else {
-        // Solution mode: execute the solution
-        if runner.is_script_mode(&program) {
-            // Script mode: compile and run directly, showing all output
-            use santa_lang::codegen::pipeline::Compiler;
-            use std::process::Command;
-
-            let temp_dir = std::env::temp_dir();
-            let exe_path = temp_dir.join(format!("santa_script_{}", std::process::id()));
-
-            let compiler = Compiler::new();
-            if let Err(e) = compiler.compile_to_executable(&source, &exe_path) {
-                eprintln!("Compilation error: {:?}", e);
-                return ExitCode::from(2);
-            }
-
-            let mut cmd = Command::new(&exe_path);
-            // Set script path env var for AOC input resolution
-            cmd.env("DASHER_SCRIPT_PATH", &script_path);
-            let status = cmd.status().expect("Failed to run compiled program");
-
-            std::fs::remove_file(&exe_path).ok();
-
-            if status.success() {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(status.code().unwrap_or(1) as u8)
-            }
-        } else {
-            match runner.execute_solution(&program) {
-                Ok(result) => {
-                    if let Some(ref part_one) = result.part_one {
-                        let time_ms = result.part_one_time.map(|d| d.as_millis()).unwrap_or(0);
-                        println!(
-                            "Part 1: \x1b[32m{}\x1b[0m \x1b[90m{}ms\x1b[0m",
-                            santa_lang::runtime::builtins::format_value(part_one),
-                            time_ms
-                        );
-                    }
-                    if let Some(ref part_two) = result.part_two {
-                        let time_ms = result.part_two_time.map(|d| d.as_millis()).unwrap_or(0);
-                        println!(
-                            "Part 2: \x1b[32m{}\x1b[0m \x1b[90m{}ms\x1b[0m",
-                            santa_lang::runtime::builtins::format_value(part_two),
-                            time_ms
-                        );
-                    }
-                    ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("Execution error: {:?}", e);
-                    ExitCode::from(2)
-                }
-            }
+        Err(e) => {
+            eprintln!("Test execution error: {:?}", e);
+            ExitCode::from(2)
         }
     }
 }
@@ -287,7 +363,7 @@ mod tests {
         let args = Args::try_parse_from(["dasher", "test.santa"]).unwrap();
         assert!(!args.test_mode);
         assert!(!args.include_slow);
-        assert_eq!(args.script, PathBuf::from("test.santa"));
+        assert_eq!(args.script, Some(PathBuf::from("test.santa")));
     }
 
     #[test]
@@ -315,13 +391,26 @@ mod tests {
     fn parse_args_compile_mode() {
         let args = Args::try_parse_from(["dasher", "-c", "test.santa"]).unwrap();
         assert!(args.compile);
-        assert_eq!(args.script, PathBuf::from("test.santa"));
+        assert_eq!(args.script, Some(PathBuf::from("test.santa")));
     }
 
     #[test]
     fn parse_args_compile_mode_long() {
         let args = Args::try_parse_from(["dasher", "--compile", "path/to/script.santa"]).unwrap();
         assert!(args.compile);
-        assert_eq!(args.script, PathBuf::from("path/to/script.santa"));
+        assert_eq!(args.script, Some(PathBuf::from("path/to/script.santa")));
+    }
+
+    #[test]
+    fn parse_args_eval_mode() {
+        let args = Args::try_parse_from(["dasher", "-e", "1 + 2"]).unwrap();
+        assert_eq!(args.eval, Some("1 + 2".to_string()));
+        assert!(args.script.is_none());
+    }
+
+    #[test]
+    fn parse_args_eval_mode_long() {
+        let args = Args::try_parse_from(["dasher", "--eval", "puts(42)"]).unwrap();
+        assert_eq!(args.eval, Some("puts(42)".to_string()));
     }
 }

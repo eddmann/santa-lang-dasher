@@ -125,11 +125,7 @@ impl fmt::Display for SantaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SantaError::LexError { message, position } => {
-                write!(
-                    f,
-                    "LexError at {}:{}: {}",
-                    position.line, position.column, message
-                )
+                write!(f, "LexError at {}:{}: {}", position.line, position.column, message)
             }
             SantaError::ParseError { message, span } => {
                 write!(
@@ -149,10 +145,7 @@ impl fmt::Display for SantaError {
                     write!(f, "CompileError: {}", message)
                 }
             }
-            SantaError::RuntimeError {
-                message,
-                stack_trace,
-            } => {
+            SantaError::RuntimeError { message, stack_trace } => {
                 write!(f, "RuntimeError: {}", message)?;
                 if !stack_trace.is_empty() {
                     writeln!(f)?;
@@ -186,9 +179,7 @@ impl From<crate::lexer::LexError> for SantaError {
             LexError::UnexpectedCharacter { ch, position } => {
                 SantaError::lex(format!("Unexpected character '{}'", ch), position)
             }
-            LexError::UnterminatedString { position } => {
-                SantaError::lex("Unterminated string literal", position)
-            }
+            LexError::UnterminatedString { position } => SantaError::lex("Unterminated string literal", position),
             LexError::InvalidNumber { text, position } => {
                 SantaError::lex(format!("Invalid number: '{}'", text), position)
             }

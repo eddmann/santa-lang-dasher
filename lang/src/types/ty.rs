@@ -33,9 +33,7 @@ impl Type {
             Type::Unknown | Type::TypeVar(_) => false,
             Type::List(elem) | Type::Set(elem) | Type::LazySequence(elem) => elem.is_concrete(),
             Type::Dict(k, v) => k.is_concrete() && v.is_concrete(),
-            Type::Function { params, ret } => {
-                params.iter().all(|p| p.is_concrete()) && ret.is_concrete()
-            }
+            Type::Function { params, ret } => params.iter().all(|p| p.is_concrete()) && ret.is_concrete(),
             _ => true,
         }
     }

@@ -1,6 +1,6 @@
 use super::heap::{
-    ClosureObject, DictObject, LazySequenceObject, ListObject, MemoizedClosureObject,
-    MutableCellObject, ObjectHeader, PartialApplicationObject, SetObject, StringObject, TypeTag,
+    ClosureObject, DictObject, LazySequenceObject, ListObject, MemoizedClosureObject, MutableCellObject, ObjectHeader,
+    PartialApplicationObject, SetObject, StringObject, TypeTag,
 };
 
 /// 64-bit NaN-boxed value representation
@@ -68,8 +68,7 @@ impl PartialEq for Value {
                             return false;
                         }
                         // Check all key-value pairs in d1 match d2
-                        d1.iter()
-                            .all(|(k, v1)| d2.get(k).is_some_and(|v2| v1 == v2))
+                        d1.iter().all(|(k, v1)| d2.get(k).is_some_and(|v2| v1 == v2))
                     }
                     _ => false,
                 }

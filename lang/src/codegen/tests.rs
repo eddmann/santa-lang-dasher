@@ -701,11 +701,7 @@ fn codegen_function_call() {
 
     // Compile the expression
     let result = codegen.compile_expr(&expr);
-    assert!(
-        result.is_ok(),
-        "Failed to compile function call: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Failed to compile function call: {:?}", result.err());
     assert!(result.unwrap().is_int_value());
 }
 
@@ -720,10 +716,7 @@ fn codegen_function_with_multiple_params() {
     // Create a multi-param function: |a, b| a + b
     let expr = TypedExpr {
         expr: Expr::Function {
-            params: vec![
-                Param::simple("a".to_string()),
-                Param::simple("b".to_string()),
-            ],
+            params: vec![Param::simple("a".to_string()), Param::simple("b".to_string())],
             body: Box::new(Expr::Infix {
                 left: Box::new(Expr::Identifier("a".to_string())),
                 op: InfixOp::Add,
@@ -958,10 +951,7 @@ fn codegen_tco_factorial_accumulator() {
         mutable: false,
         pattern: Pattern::Identifier("factorial".to_string()),
         value: Expr::Function {
-            params: vec![
-                Param::simple("acc".to_string()),
-                Param::simple("n".to_string()),
-            ],
+            params: vec![Param::simple("acc".to_string()), Param::simple("n".to_string())],
             body: Box::new(Expr::If {
                 condition: Box::new(Expr::Infix {
                     left: Box::new(Expr::Identifier("n".to_string())),
@@ -1041,10 +1031,7 @@ fn codegen_tco_generates_branch_not_call() {
     // (There may be other rt_call invocations for helper functions)
 
     // Check that there's a closure function with a body block
-    assert!(
-        ir.contains("define i64 @closure_"),
-        "Should define a closure function"
-    );
+    assert!(ir.contains("define i64 @closure_"), "Should define a closure function");
 
     // Check that there's a branch back to body (the TCO jump)
     // The pattern should show "br label %body" inside the else branch
@@ -1153,10 +1140,7 @@ fn codegen_tco_match_expression() {
     let ir = codegen.module.print_to_string().to_string();
 
     // Check that there's a closure function with a body block
-    assert!(
-        ir.contains("define i64 @closure_"),
-        "Should define a closure function"
-    );
+    assert!(ir.contains("define i64 @closure_"), "Should define a closure function");
 
     // Check that there's a branch back to body (the TCO jump)
     // This shows that match expressions properly propagate tail position
@@ -1204,11 +1188,7 @@ fn codegen_match_literal_integer() {
 
     // Compile the match expression
     let result = codegen.compile_expr(&expr);
-    assert!(
-        result.is_ok(),
-        "Failed to compile match expression: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Failed to compile match expression: {:?}", result.err());
 }
 
 #[test]
@@ -1234,11 +1214,7 @@ fn codegen_match_wildcard_captures_all() {
     };
 
     let result = codegen.compile_expr(&expr);
-    assert!(
-        result.is_ok(),
-        "Failed to compile wildcard match: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Failed to compile wildcard match: {:?}", result.err());
 }
 
 #[test]
@@ -1310,11 +1286,7 @@ fn codegen_match_with_guard() {
     };
 
     let result = codegen.compile_expr(&expr);
-    assert!(
-        result.is_ok(),
-        "Failed to compile match with guard: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Failed to compile match with guard: {:?}", result.err());
 }
 
 #[test]
@@ -1722,11 +1694,7 @@ fn codegen_emit_object_file() {
     let obj_path = temp_dir.join("test_emit.o");
 
     let result = codegen.write_object_file(&obj_path);
-    assert!(
-        result.is_ok(),
-        "Failed to emit object file: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Failed to emit object file: {:?}", result.err());
 
     // Verify the file exists and has content
     assert!(obj_path.exists(), "Object file was not created");
@@ -1757,10 +1725,7 @@ fn codegen_get_ir() {
 
     // Verify IR contains expected elements
     assert!(ir.contains("my_func"), "IR should contain function name");
-    assert!(
-        ir.contains("ret i64 42"),
-        "IR should contain return statement"
-    );
+    assert!(ir.contains("ret i64 42"), "IR should contain return statement");
 }
 
 // ===== Phase 7: Builtin Name Shadowing =====
@@ -1782,7 +1747,10 @@ fn codegen_builtin_name_shadowing_sum_succeeds() {
     };
 
     let result = codegen.compile_stmt(&let_stmt);
-    assert!(result.is_ok(), "Binding to builtin name 'sum' should succeed (shadowing allowed)");
+    assert!(
+        result.is_ok(),
+        "Binding to builtin name 'sum' should succeed (shadowing allowed)"
+    );
 }
 
 #[test]
@@ -1801,7 +1769,10 @@ fn codegen_builtin_name_shadowing_map_succeeds() {
     };
 
     let result = codegen.compile_stmt(&let_stmt);
-    assert!(result.is_ok(), "Binding to builtin name 'map' should succeed (shadowing allowed)");
+    assert!(
+        result.is_ok(),
+        "Binding to builtin name 'map' should succeed (shadowing allowed)"
+    );
 }
 
 #[test]
@@ -1865,18 +1836,11 @@ fn codegen_pipeline_operator() {
 
     // This should compile successfully
     let result = codegen.compile_expr(&expr);
-    assert!(
-        result.is_ok(),
-        "Pipeline operator should compile: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Pipeline operator should compile: {:?}", result.err());
 
     // Verify the generated IR contains a call
     let ir = codegen.module.print_to_string().to_string();
-    assert!(
-        ir.contains("rt_call"),
-        "Pipeline should generate a function call"
-    );
+    assert!(ir.contains("rt_call"), "Pipeline should generate a function call");
 }
 
 // ===== Phase 20: Optimization Level Tests =====
@@ -1899,19 +1863,13 @@ fn codegen_configurable_optimization_level() {
     let context = Context::create();
 
     // Test creating context with O3 (Most aggressive optimization)
-    let codegen = super::context::CodegenContext::with_optimization(
-        &context,
-        "test_module",
-        OptimizationLevel::Aggressive,
-    );
+    let codegen =
+        super::context::CodegenContext::with_optimization(&context, "test_module", OptimizationLevel::Aggressive);
     assert_eq!(codegen.optimization_level(), OptimizationLevel::Aggressive);
 
     // Test creating context with O0 (No optimization - for debugging)
-    let codegen_debug = super::context::CodegenContext::with_optimization(
-        &context,
-        "test_debug",
-        OptimizationLevel::None,
-    );
+    let codegen_debug =
+        super::context::CodegenContext::with_optimization(&context, "test_debug", OptimizationLevel::None);
     assert_eq!(codegen_debug.optimization_level(), OptimizationLevel::None);
 }
 
@@ -1921,11 +1879,8 @@ fn codegen_object_file_uses_optimization_level() {
     use std::fs;
 
     let context = Context::create();
-    let codegen = super::context::CodegenContext::with_optimization(
-        &context,
-        "opt_test",
-        OptimizationLevel::Aggressive,
-    );
+    let codegen =
+        super::context::CodegenContext::with_optimization(&context, "opt_test", OptimizationLevel::Aggressive);
 
     // Create a simple main function
     let i64_type = context.i64_type();
@@ -1943,11 +1898,7 @@ fn codegen_object_file_uses_optimization_level() {
     let obj_path = temp_dir.join("test_opt_level.o");
 
     let result = codegen.write_object_file(&obj_path);
-    assert!(
-        result.is_ok(),
-        "Should emit optimized object file: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Should emit optimized object file: {:?}", result.err());
 
     // Verify the file exists
     assert!(obj_path.exists(), "Optimized object file was not created");

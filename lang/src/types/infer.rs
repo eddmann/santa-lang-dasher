@@ -1,10 +1,6 @@
 use crate::lexer::token::{Position, Span};
-use crate::parser::ast::{
-    Expr, InfixOp, MatchArm, Param, Pattern, PrefixOp, Program, Section, Stmt,
-};
-use crate::types::builtins::{
-    builtin_signatures, compute_expected_lambda_type, compute_return_type, BuiltinSignature,
-};
+use crate::parser::ast::{Expr, InfixOp, MatchArm, Param, Pattern, PrefixOp, Program, Section, Stmt};
+use crate::types::builtins::{builtin_signatures, compute_expected_lambda_type, compute_return_type, BuiltinSignature};
 use crate::types::ty::{Type, TypedExpr, TypedProgram, TypedSection, TypedStmt};
 use crate::types::unify::Unifier;
 use std::collections::{HashMap, HashSet};
@@ -206,16 +202,11 @@ impl TypeInference {
                     None => Type::Nil, // No else branch returns nil when condition is false
                 };
                 // Unify the two branches - if they don't match, we get Unknown
-                self.unifier
-                    .unify(&then_ty, &else_ty)
-                    .unwrap_or(Type::Unknown)
+                self.unifier.unify(&then_ty, &else_ty).unwrap_or(Type::Unknown)
             }
 
             // Index expressions (collection[index])
-            Expr::Index {
-                collection,
-                index: _,
-            } => {
+            Expr::Index { collection, index: _ } => {
                 let collection_ty = self.infer_expr(collection)?.ty;
                 self.infer_index(&collection_ty)
             }
@@ -255,9 +246,7 @@ impl TypeInference {
                 };
 
                 // Unify the two branches
-                self.unifier
-                    .unify(&then_ty, &else_ty)
-                    .unwrap_or(Type::Unknown)
+                self.unifier.unify(&then_ty, &else_ty).unwrap_or(Type::Unknown)
             }
 
             // Everything else is Unknown for now
@@ -447,11 +436,7 @@ impl TypeInference {
     /// This also handles user-defined functions passed to builtins:
     /// `map(double, [1,2,3])` where `double = |x| x * 2` will re-infer double
     /// with Int param type to get the correct return type.
-    fn infer_builtin_call(
-        &mut self,
-        sig: &BuiltinSignature,
-        args: &[Expr],
-    ) -> Result<Type, TypeError> {
+    fn infer_builtin_call(&mut self, sig: &BuiltinSignature, args: &[Expr]) -> Result<Type, TypeError> {
         // Phase 1: Infer types for non-function arguments first
         // This gives us the information we need to determine expected function types
         let mut arg_types: Vec<Type> = vec![Type::Unknown; args.len()];
@@ -478,8 +463,7 @@ impl TypeInference {
                 // Skip if we're already inferring this function (prevent infinite recursion)
                 Expr::Identifier(name) if self.function_defs.contains_key(name) && !self.inferring.contains(name) => {
                     let expected_ty = compute_expected_lambda_type(sig, i, &arg_types);
-                    arg_types[i] =
-                        self.infer_function_ref_with_expected(name, expected_ty.as_ref())?;
+                    arg_types[i] = self.infer_function_ref_with_expected(name, expected_ty.as_ref())?;
                 }
                 _ => {}
             }
@@ -493,11 +477,7 @@ impl TypeInference {
     ///
     /// When a user-defined function is passed to a HOF (e.g., `map(double, list)`),
     /// we re-infer its body with the expected parameter types to get the correct return type.
-    fn infer_function_ref_with_expected(
-        &mut self,
-        name: &str,
-        expected: Option<&Type>,
-    ) -> Result<Type, TypeError> {
+    fn infer_function_ref_with_expected(&mut self, name: &str, expected: Option<&Type>) -> Result<Type, TypeError> {
         // Check if we're already inferring this function (prevent infinite recursion)
         if self.inferring.contains(name) {
             return Ok(Type::Unknown);
@@ -546,11 +526,7 @@ impl TypeInference {
     }
 
     /// Infer expression type with an expected type hint for bidirectional inference
-    fn infer_expr_with_expected(
-        &mut self,
-        expr: &Expr,
-        expected: Option<&Type>,
-    ) -> Result<TypedExpr, TypeError> {
+    fn infer_expr_with_expected(&mut self, expr: &Expr, expected: Option<&Type>) -> Result<TypedExpr, TypeError> {
         let span = Span::new(Position::new(1, 1), Position::new(1, 1));
 
         match expr {
@@ -660,11 +636,8 @@ impl TypeInference {
 
                 // If this is a function binding with a simple identifier pattern,
                 // store the function definition for call-site type inference
-                if let (Pattern::Identifier(name), Expr::Function { params, body }) =
-                    (pattern, value)
-                {
-                    self.function_defs
-                        .insert(name.clone(), (params.clone(), body.clone()));
+                if let (Pattern::Identifier(name), Expr::Function { params, body }) = (pattern, value) {
+                    self.function_defs.insert(name.clone(), (params.clone(), body.clone()));
                 }
 
                 // Bind pattern variables to their types in the environment
@@ -708,9 +681,7 @@ impl TypeInference {
             Pattern::List(patterns) => {
                 // Get element type from list/sequence
                 let elem_ty = match ty {
-                    Type::List(elem) | Type::Set(elem) | Type::LazySequence(elem) => {
-                        (**elem).clone()
-                    }
+                    Type::List(elem) | Type::Set(elem) | Type::LazySequence(elem) => (**elem).clone(),
                     _ => Type::Unknown,
                 };
                 // Bind each pattern to element type (simplified - doesn't handle rest properly)
@@ -780,25 +751,19 @@ impl TypeInference {
 
         // Unify with all other entries
         // If types can't be unified, fall back to Unknown (heterogeneous dicts are valid)
-        let (key_ty, value_ty) = entries[1..].iter().fold(
-            (first_key_ty, first_value_ty),
-            |(acc_key, acc_value), (k, v)| {
-                let key_ty = self.infer_expr(k).map(|t| t.ty).unwrap_or(Type::Unknown);
-                let value_ty = self.infer_expr(v).map(|t| t.ty).unwrap_or(Type::Unknown);
+        let (key_ty, value_ty) =
+            entries[1..]
+                .iter()
+                .fold((first_key_ty, first_value_ty), |(acc_key, acc_value), (k, v)| {
+                    let key_ty = self.infer_expr(k).map(|t| t.ty).unwrap_or(Type::Unknown);
+                    let value_ty = self.infer_expr(v).map(|t| t.ty).unwrap_or(Type::Unknown);
 
-                let unified_key = self
-                    .unifier
-                    .unify(&acc_key, &key_ty)
-                    .unwrap_or(Type::Unknown);
+                    let unified_key = self.unifier.unify(&acc_key, &key_ty).unwrap_or(Type::Unknown);
 
-                let unified_value = self
-                    .unifier
-                    .unify(&acc_value, &value_ty)
-                    .unwrap_or(Type::Unknown);
+                    let unified_value = self.unifier.unify(&acc_value, &value_ty).unwrap_or(Type::Unknown);
 
-                (unified_key, unified_value)
-            },
-        );
+                    (unified_key, unified_value)
+                });
 
         Ok(Type::Dict(Box::new(key_ty), Box::new(value_ty)))
     }
@@ -841,19 +806,13 @@ impl TypeInference {
             (Add, Type::String, _) => Type::String,
 
             // Comparison operators: return Bool
-            (
-                Equal | NotEqual | LessThan | LessThanOrEqual | GreaterThan | GreaterThanOrEqual,
-                _,
-                _,
-            ) => Type::Bool,
+            (Equal | NotEqual | LessThan | LessThanOrEqual | GreaterThan | GreaterThanOrEqual, _, _) => Type::Bool,
 
             // Logical operators: always return Bool (truthiness)
             (And | Or, _, _) => Type::Bool,
 
             // Range operators: Int..Int → LazySequence<Int>
-            (Range | RangeInclusive, Type::Int, Type::Int) => {
-                Type::LazySequence(Box::new(Type::Int))
-            }
+            (Range | RangeInclusive, Type::Int, Type::Int) => Type::LazySequence(Box::new(Type::Int)),
 
             // Unknown operands or unsupported combinations: fall back to runtime
             _ => Type::Unknown,
@@ -910,10 +869,7 @@ impl TypeInference {
             // Unify with previous arm types
             result_ty = Some(match &result_ty {
                 None => body_ty,
-                Some(prev_ty) => self
-                    .unifier
-                    .unify(prev_ty, &body_ty)
-                    .unwrap_or(Type::Unknown),
+                Some(prev_ty) => self.unifier.unify(prev_ty, &body_ty).unwrap_or(Type::Unknown),
             });
         }
 

@@ -75,9 +75,7 @@ impl Unifier {
                 Box::new(self.apply_substitutions(k)),
                 Box::new(self.apply_substitutions(v)),
             ),
-            Type::LazySequence(elem) => {
-                Type::LazySequence(Box::new(self.apply_substitutions(elem)))
-            }
+            Type::LazySequence(elem) => Type::LazySequence(Box::new(self.apply_substitutions(elem))),
             Type::Function { params, ret } => Type::Function {
                 params: params.iter().map(|p| self.apply_substitutions(p)).collect(),
                 ret: Box::new(self.apply_substitutions(ret)),

@@ -28,10 +28,7 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::Identifier(name) => {
                 // Look up the variable and load its value
                 if let Some(alloca) = self.variables.get(name) {
-                    let load = self
-                        .builder
-                        .build_load(self.context.i64_type(), *alloca, name)
-                        .unwrap();
+                    let load = self.builder.build_load(self.context.i64_type(), *alloca, name).unwrap();
                     // If this is a cell variable, unwrap the cell to get the actual value
                     if self.cell_variables.contains(name) {
                         let rt_cell_get = self.get_or_declare_rt_cell_get();
@@ -65,11 +62,7 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::List(elements) => self.compile_list(elements),
             Expr::Set(elements) => self.compile_set(elements),
             Expr::Dict(entries) => self.compile_dict(entries),
-            Expr::Range {
-                start,
-                end,
-                inclusive,
-            } => self.compile_range(start, end.as_deref(), *inclusive),
+            Expr::Range { start, end, inclusive } => self.compile_range(start, end.as_deref(), *inclusive),
             Expr::Index { collection, index } => self.compile_index(collection, index),
             Expr::If {
                 condition,
@@ -85,11 +78,7 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::Block(stmts) => self.compile_block(stmts),
             Expr::Function { params, body } => self.compile_function(params, body),
             Expr::Call { function, args } => self.compile_call(function, args),
-            Expr::InfixCall {
-                function,
-                left,
-                right,
-            } => {
+            Expr::InfixCall { function, left, right } => {
                 // a `f` b transforms to f(a, b)
                 let fn_expr = Expr::Identifier(function.clone());
                 let args = vec![(**left).clone(), (**right).clone()];
@@ -105,17 +94,10 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Compile an assignment expression (for mutable variables)
-    fn compile_assignment(
-        &mut self,
-        name: &str,
-        value: &Expr,
-    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_assignment(&mut self, name: &str, value: &Expr) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Look up the variable
         let alloca = self.variables.get(name).cloned().ok_or_else(|| {
-            CompileError::UnsupportedExpression(format!(
-                "Undefined variable for assignment: {}",
-                name
-            ))
+            CompileError::UnsupportedExpression(format!("Undefined variable for assignment: {}", name))
         })?;
 
         if !self.mutable_variables.contains(name) {
@@ -221,11 +203,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let len = self.context.i64_type().const_int(value.len() as u64, false);
         let call_result = self
             .builder
-            .build_call(
-                rt_string_fn,
-                &[string_ptr.into(), len.into()],
-                "string_value",
-            )
+            .build_call(rt_string_fn, &[string_ptr.into(), len.into()], "string_value")
             .unwrap();
 
         Ok(call_result.try_as_basic_value().left().unwrap())
@@ -305,12 +283,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let val = right_val.into_int_value();
                 let shifted = self
                     .builder
-                    .build_right_shift(
-                        val,
-                        self.context.i64_type().const_int(3, false),
-                        false,
-                        "shift",
-                    )
+                    .build_right_shift(val, self.context.i64_type().const_int(3, false), false, "shift")
                     .unwrap();
                 let bool_val = self
                     .builder
@@ -326,19 +299,11 @@ impl<'ctx> CodegenContext<'ctx> {
                 // Re-box as boolean
                 let shifted_back = self
                     .builder
-                    .build_left_shift(
-                        flipped,
-                        self.context.i64_type().const_int(3, false),
-                        "shift_back",
-                    )
+                    .build_left_shift(flipped, self.context.i64_type().const_int(3, false), "shift_back")
                     .unwrap();
                 let tagged = self
                     .builder
-                    .build_or(
-                        shifted_back,
-                        self.context.i64_type().const_int(0b011, false),
-                        "tag",
-                    )
+                    .build_or(shifted_back, self.context.i64_type().const_int(0b011, false), "tag")
                     .unwrap();
                 Ok(tagged.into())
             }
@@ -467,10 +432,7 @@ impl<'ctx> CodegenContext<'ctx> {
                     .build_int_compare(IntPredicate::SLT, r, zero, "b_neg")
                     .unwrap();
                 let signs_differ = self.builder.build_xor(r_neg, b_neg, "signs_differ").unwrap();
-                let need_adjust = self
-                    .builder
-                    .build_and(r_neq_zero, signs_differ, "need_adjust")
-                    .unwrap();
+                let need_adjust = self.builder.build_and(r_neq_zero, signs_differ, "need_adjust").unwrap();
 
                 // If need_adjust, subtract 1 from quotient
                 let q_minus_one = self.builder.build_int_sub(q, one, "q_minus_one").unwrap();
@@ -508,10 +470,7 @@ impl<'ctx> CodegenContext<'ctx> {
                     .build_int_compare(IntPredicate::SLT, r, zero, "b_neg")
                     .unwrap();
                 let signs_differ = self.builder.build_xor(r_neg, b_neg, "signs_differ").unwrap();
-                let need_adjust = self
-                    .builder
-                    .build_and(r_neq_zero, signs_differ, "need_adjust")
-                    .unwrap();
+                let need_adjust = self.builder.build_and(r_neq_zero, signs_differ, "need_adjust").unwrap();
 
                 // If need_adjust, add divisor to remainder
                 let rem_plus_b = self.builder.build_int_add(rem, r, "rem_plus_b").unwrap();
@@ -526,10 +485,7 @@ impl<'ctx> CodegenContext<'ctx> {
             (Type::Int, InfixOp::LessThan, Type::Int) => {
                 let l = self.unbox_int(left_val);
                 let r = self.unbox_int(right_val);
-                let cmp = self
-                    .builder
-                    .build_int_compare(IntPredicate::SLT, l, r, "lt")
-                    .unwrap();
+                let cmp = self.builder.build_int_compare(IntPredicate::SLT, l, r, "lt").unwrap();
                 Ok(self.box_bool(cmp))
             }
 
@@ -537,10 +493,7 @@ impl<'ctx> CodegenContext<'ctx> {
             (Type::Int, InfixOp::LessThanOrEqual, Type::Int) => {
                 let l = self.unbox_int(left_val);
                 let r = self.unbox_int(right_val);
-                let cmp = self
-                    .builder
-                    .build_int_compare(IntPredicate::SLE, l, r, "le")
-                    .unwrap();
+                let cmp = self.builder.build_int_compare(IntPredicate::SLE, l, r, "le").unwrap();
                 Ok(self.box_bool(cmp))
             }
 
@@ -548,10 +501,7 @@ impl<'ctx> CodegenContext<'ctx> {
             (Type::Int, InfixOp::GreaterThan, Type::Int) => {
                 let l = self.unbox_int(left_val);
                 let r = self.unbox_int(right_val);
-                let cmp = self
-                    .builder
-                    .build_int_compare(IntPredicate::SGT, l, r, "gt")
-                    .unwrap();
+                let cmp = self.builder.build_int_compare(IntPredicate::SGT, l, r, "gt").unwrap();
                 Ok(self.box_bool(cmp))
             }
 
@@ -559,10 +509,7 @@ impl<'ctx> CodegenContext<'ctx> {
             (Type::Int, InfixOp::GreaterThanOrEqual, Type::Int) => {
                 let l = self.unbox_int(left_val);
                 let r = self.unbox_int(right_val);
-                let cmp = self
-                    .builder
-                    .build_int_compare(IntPredicate::SGE, l, r, "ge")
-                    .unwrap();
+                let cmp = self.builder.build_int_compare(IntPredicate::SGE, l, r, "ge").unwrap();
                 Ok(self.box_bool(cmp))
             }
 
@@ -571,10 +518,7 @@ impl<'ctx> CodegenContext<'ctx> {
             (Type::Int, InfixOp::Equal, Type::Int) => {
                 let l = self.unbox_int(left_val);
                 let r = self.unbox_int(right_val);
-                let cmp = self
-                    .builder
-                    .build_int_compare(IntPredicate::EQ, l, r, "eq")
-                    .unwrap();
+                let cmp = self.builder.build_int_compare(IntPredicate::EQ, l, r, "eq").unwrap();
                 Ok(self.box_bool(cmp))
             }
 
@@ -582,10 +526,7 @@ impl<'ctx> CodegenContext<'ctx> {
             (Type::Int, InfixOp::NotEqual, Type::Int) => {
                 let l = self.unbox_int(left_val);
                 let r = self.unbox_int(right_val);
-                let cmp = self
-                    .builder
-                    .build_int_compare(IntPredicate::NE, l, r, "ne")
-                    .unwrap();
+                let cmp = self.builder.build_int_compare(IntPredicate::NE, l, r, "ne").unwrap();
                 Ok(self.box_bool(cmp))
             }
 
@@ -676,11 +617,7 @@ impl<'ctx> CodegenContext<'ctx> {
     ///
     /// Otherwise it is a simple call:
     ///   x |> f  →  f(x)
-    fn compile_pipeline(
-        &mut self,
-        value: &Expr,
-        function: &Expr,
-    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_pipeline(&mut self, value: &Expr, function: &Expr) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // If RHS is a Call expression, handle based on whether it's a builtin
         if let Expr::Call {
             function: inner_fn,
@@ -731,9 +668,7 @@ impl<'ctx> CodegenContext<'ctx> {
                         .build_in_bounds_gep(i64_type, argv_ptr, &[i64_type.const_zero()], "argv_0")
                         .unwrap()
                 };
-                self.builder
-                    .build_store(elem_ptr, piped_val.into_int_value())
-                    .unwrap();
+                self.builder.build_store(elem_ptr, piped_val.into_int_value()).unwrap();
 
                 let call_result_val = self
                     .builder
@@ -755,18 +690,9 @@ impl<'ctx> CodegenContext<'ctx> {
     /// Compile short-circuit AND: a && b
     /// If a is falsy, return false without evaluating b.
     /// Otherwise, evaluate b and return its truthiness as a boolean.
-    fn compile_short_circuit_and(
-        &mut self,
-        left: &Expr,
-        right: &Expr,
-    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_short_circuit_and(&mut self, left: &Expr, right: &Expr) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Get the current function
-        let function = self
-            .builder
-            .get_insert_block()
-            .unwrap()
-            .get_parent()
-            .unwrap();
+        let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
 
         // Create basic blocks for the short-circuit evaluation
         let eval_right_bb = self.context.append_basic_block(function, "and_eval_right");
@@ -850,10 +776,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Merge block: phi node selects between false (if short-circuited) and right truthiness
         self.builder.position_at_end(merge_bb);
         let false_val = self.compile_boolean(false);
-        let phi = self
-            .builder
-            .build_phi(self.context.i64_type(), "and_result")
-            .unwrap();
+        let phi = self.builder.build_phi(self.context.i64_type(), "and_result").unwrap();
         phi.add_incoming(&[(&false_val, left_bb), (&right_boxed, right_bb)]);
 
         Ok(phi.as_basic_value())
@@ -862,18 +785,9 @@ impl<'ctx> CodegenContext<'ctx> {
     /// Compile short-circuit OR: a || b
     /// If a is truthy, return true without evaluating b.
     /// Otherwise, evaluate b and return its truthiness as a boolean.
-    fn compile_short_circuit_or(
-        &mut self,
-        left: &Expr,
-        right: &Expr,
-    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_short_circuit_or(&mut self, left: &Expr, right: &Expr) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Get the current function
-        let function = self
-            .builder
-            .get_insert_block()
-            .unwrap()
-            .get_parent()
-            .unwrap();
+        let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
 
         // Create basic blocks for the short-circuit evaluation
         let eval_right_bb = self.context.append_basic_block(function, "or_eval_right");
@@ -957,10 +871,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Merge block: phi node selects between true (if truthy) and right truthiness
         self.builder.position_at_end(merge_bb);
         let true_val = self.compile_boolean(true);
-        let phi = self
-            .builder
-            .build_phi(self.context.i64_type(), "or_result")
-            .unwrap();
+        let phi = self.builder.build_phi(self.context.i64_type(), "or_result").unwrap();
         phi.add_incoming(&[(&true_val, left_bb), (&right_boxed, right_bb)]);
 
         Ok(phi.as_basic_value())
@@ -1168,19 +1079,13 @@ impl<'ctx> CodegenContext<'ctx> {
             (Type::Int, Add | Subtract | Multiply | Divide | Modulo, Type::Int) => Type::Int,
             (Type::Decimal, Add | Subtract | Multiply | Divide, Type::Decimal) => Type::Decimal,
             // Comparisons always return Bool
-            (
-                _,
-                LessThan | LessThanOrEqual | GreaterThan | GreaterThanOrEqual | Equal | NotEqual,
-                _,
-            ) => Type::Bool,
+            (_, LessThan | LessThanOrEqual | GreaterThan | GreaterThanOrEqual | Equal | NotEqual, _) => Type::Bool,
             // Logical operations always return Bool (truthiness)
             (_, And | Or, _) => Type::Bool,
             // String concatenation
             (Type::String, Add, _) => Type::String,
             // Ranges
-            (Type::Int, Range | RangeInclusive, Type::Int) => {
-                Type::LazySequence(Box::new(Type::Int))
-            }
+            (Type::Int, Range | RangeInclusive, Type::Int) => Type::LazySequence(Box::new(Type::Int)),
             _ => Type::Unknown,
         }
     }
@@ -1200,12 +1105,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Arithmetic right shift by 3 to remove tag bits and restore sign
         let val = value.into_int_value();
         self.builder
-            .build_right_shift(
-                val,
-                self.context.i64_type().const_int(3, false),
-                true,
-                "unbox_int",
-            )
+            .build_right_shift(val, self.context.i64_type().const_int(3, false), true, "unbox_int")
             .unwrap()
     }
 
@@ -1218,11 +1118,7 @@ impl<'ctx> CodegenContext<'ctx> {
             .unwrap();
         let tagged = self
             .builder
-            .build_or(
-                shifted,
-                self.context.i64_type().const_int(0b001, false),
-                "tag",
-            )
+            .build_or(shifted, self.context.i64_type().const_int(0b001, false), "tag")
             .unwrap();
         tagged.into()
     }
@@ -1242,7 +1138,7 @@ impl<'ctx> CodegenContext<'ctx> {
             .builder
             .build_bit_cast(value, self.context.i64_type(), "box_dec")
             .unwrap();
-        casted.into()
+        casted
     }
 
     /// Box boolean into NaN-boxed value
@@ -1254,19 +1150,11 @@ impl<'ctx> CodegenContext<'ctx> {
             .unwrap();
         let shifted = self
             .builder
-            .build_left_shift(
-                extended,
-                self.context.i64_type().const_int(3, false),
-                "shift",
-            )
+            .build_left_shift(extended, self.context.i64_type().const_int(3, false), "shift")
             .unwrap();
         let tagged = self
             .builder
-            .build_or(
-                shifted,
-                self.context.i64_type().const_int(0b011, false),
-                "tag",
-            )
+            .build_or(shifted, self.context.i64_type().const_int(0b011, false), "tag")
             .unwrap();
         tagged.into()
     }
@@ -1279,10 +1167,7 @@ impl<'ctx> CodegenContext<'ctx> {
         if elements.is_empty() {
             // Empty list: call rt_list_new()
             let rt_list_new = self.get_or_declare_rt_list_new();
-            let call_result = self
-                .builder
-                .build_call(rt_list_new, &[], "empty_list")
-                .unwrap();
+            let call_result = self.builder.build_call(rt_list_new, &[], "empty_list").unwrap();
             Ok(call_result.try_as_basic_value().left().unwrap())
         } else if has_spread {
             // List with spread elements: build incrementally
@@ -1313,11 +1198,7 @@ impl<'ctx> CodegenContext<'ctx> {
                         let rt_list_concat = self.get_or_declare_rt_list_concat();
                         result = self
                             .builder
-                            .build_call(
-                                rt_list_concat,
-                                &[result.into(), spread_val.into()],
-                                "spread_concat",
-                            )
+                            .build_call(rt_list_concat, &[result.into(), spread_val.into()], "spread_concat")
                             .unwrap()
                             .try_as_basic_value()
                             .left()
@@ -1338,11 +1219,7 @@ impl<'ctx> CodegenContext<'ctx> {
                         let rt_list_push = self.get_or_declare_rt_list_push();
                         result = self
                             .builder
-                            .build_call(
-                                rt_list_push,
-                                &[result.into(), elem_val.into()],
-                                "list_push",
-                            )
+                            .build_call(rt_list_push, &[result.into(), elem_val.into()], "list_push")
                             .unwrap()
                             .try_as_basic_value()
                             .left()
@@ -1373,10 +1250,7 @@ impl<'ctx> CodegenContext<'ctx> {
             // Allocate an array on the stack to hold the elements
             let i64_type = self.context.i64_type();
             let array_type = i64_type.array_type(elements.len() as u32);
-            let array_alloca = self
-                .builder
-                .build_alloca(array_type, "list_elements")
-                .unwrap();
+            let array_alloca = self.builder.build_alloca(array_type, "list_elements").unwrap();
 
             // Store each element in the array
             for (i, elem) in compiled_elements.iter().enumerate() {
@@ -1403,17 +1277,10 @@ impl<'ctx> CodegenContext<'ctx> {
 
             // Call rt_list_from_values(values, count)
             let rt_list_from_values = self.get_or_declare_rt_list_from_values();
-            let count = self
-                .context
-                .i64_type()
-                .const_int(elements.len() as u64, false);
+            let count = self.context.i64_type().const_int(elements.len() as u64, false);
             let call_result = self
                 .builder
-                .build_call(
-                    rt_list_from_values,
-                    &[values_ptr.into(), count.into()],
-                    "list",
-                )
+                .build_call(rt_list_from_values, &[values_ptr.into(), count.into()], "list")
                 .unwrap();
 
             Ok(call_result.try_as_basic_value().left().unwrap())
@@ -1478,10 +1345,7 @@ impl<'ctx> CodegenContext<'ctx> {
         if elements.is_empty() {
             // Empty set: call rt_set_new()
             let rt_set_new = self.get_or_declare_rt_set_new();
-            let call_result = self
-                .builder
-                .build_call(rt_set_new, &[], "empty_set")
-                .unwrap();
+            let call_result = self.builder.build_call(rt_set_new, &[], "empty_set").unwrap();
             Ok(call_result.try_as_basic_value().left().unwrap())
         } else {
             // Non-empty set: compile elements and call rt_set_from_values(values, count)
@@ -1503,10 +1367,7 @@ impl<'ctx> CodegenContext<'ctx> {
             // Allocate an array on the stack
             let i64_type = self.context.i64_type();
             let array_type = i64_type.array_type(elements.len() as u32);
-            let array_alloca = self
-                .builder
-                .build_alloca(array_type, "set_elements")
-                .unwrap();
+            let array_alloca = self.builder.build_alloca(array_type, "set_elements").unwrap();
 
             // Store each element in the array
             for (i, elem) in compiled_elements.iter().enumerate() {
@@ -1533,17 +1394,10 @@ impl<'ctx> CodegenContext<'ctx> {
 
             // Call rt_set_from_values(values, count)
             let rt_set_from_values = self.get_or_declare_rt_set_from_values();
-            let count = self
-                .context
-                .i64_type()
-                .const_int(elements.len() as u64, false);
+            let count = self.context.i64_type().const_int(elements.len() as u64, false);
             let call_result = self
                 .builder
-                .build_call(
-                    rt_set_from_values,
-                    &[values_ptr.into(), count.into()],
-                    "set",
-                )
+                .build_call(rt_set_from_values, &[values_ptr.into(), count.into()], "set")
                 .unwrap();
 
             Ok(call_result.try_as_basic_value().left().unwrap())
@@ -1576,17 +1430,11 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Compile a dict literal
-    fn compile_dict(
-        &mut self,
-        entries: &[(Expr, Expr)],
-    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_dict(&mut self, entries: &[(Expr, Expr)]) -> Result<BasicValueEnum<'ctx>, CompileError> {
         if entries.is_empty() {
             // Empty dict: call rt_dict_new()
             let rt_dict_new = self.get_or_declare_rt_dict_new();
-            let call_result = self
-                .builder
-                .build_call(rt_dict_new, &[], "empty_dict")
-                .unwrap();
+            let call_result = self.builder.build_call(rt_dict_new, &[], "empty_dict").unwrap();
             Ok(call_result.try_as_basic_value().left().unwrap())
         } else {
             // Non-empty dict: compile keys and values separately
@@ -1626,10 +1474,7 @@ impl<'ctx> CodegenContext<'ctx> {
             let array_type = i64_type.array_type(entries.len() as u32);
 
             let keys_alloca = self.builder.build_alloca(array_type, "dict_keys").unwrap();
-            let values_alloca = self
-                .builder
-                .build_alloca(array_type, "dict_values")
-                .unwrap();
+            let values_alloca = self.builder.build_alloca(array_type, "dict_values").unwrap();
 
             // Store keys and values
             for (i, (key, value)) in compiled_keys.iter().zip(compiled_values.iter()).enumerate() {
@@ -1675,10 +1520,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
             // Call rt_dict_from_entries(keys, values, count)
             let rt_dict_from_entries = self.get_or_declare_rt_dict_from_entries();
-            let count = self
-                .context
-                .i64_type()
-                .const_int(entries.len() as u64, false);
+            let count = self.context.i64_type().const_int(entries.len() as u64, false);
             let call_result = self
                 .builder
                 .build_call(
@@ -1813,11 +1655,7 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Compile an index expression (collection[index])
-    fn compile_index(
-        &mut self,
-        collection: &Expr,
-        index: &Expr,
-    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_index(&mut self, collection: &Expr, index: &Expr) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Compile collection expression
         let collection_ty = self.infer_expr_type(collection);
         let collection_typed = TypedExpr {
@@ -1865,9 +1703,7 @@ impl<'ctx> CodegenContext<'ctx> {
             .get_insert_block()
             .and_then(|bb| bb.get_parent())
             .ok_or_else(|| {
-                CompileError::UnsupportedExpression(
-                    "if expression requires a function context".to_string(),
-                )
+                CompileError::UnsupportedExpression("if expression requires a function context".to_string())
             })?;
 
         // Compile the condition
@@ -1949,10 +1785,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Merge block with phi node
         self.builder.position_at_end(merge_bb);
-        let phi = self
-            .builder
-            .build_phi(self.context.i64_type(), "if_result")
-            .unwrap();
+        let phi = self.builder.build_phi(self.context.i64_type(), "if_result").unwrap();
         phi.add_incoming(&[(&then_val, then_end_bb), (&else_val, else_end_bb)]);
 
         Ok(phi.as_basic_value())
@@ -1975,9 +1808,7 @@ impl<'ctx> CodegenContext<'ctx> {
             .get_insert_block()
             .and_then(|bb| bb.get_parent())
             .ok_or_else(|| {
-                CompileError::UnsupportedExpression(
-                    "if-let expression requires a function context".to_string(),
-                )
+                CompileError::UnsupportedExpression("if-let expression requires a function context".to_string())
             })?;
 
         // Compile the value expression
@@ -2101,9 +1932,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let mut mutable_vars: HashSet<String> = HashSet::new();
         for stmt in stmts {
             if let Stmt::Let {
-                mutable: true,
-                pattern,
-                ..
+                mutable: true, pattern, ..
             } = stmt
             {
                 Self::collect_pattern_variables(pattern, &mut mutable_vars);
@@ -2115,13 +1944,11 @@ impl<'ctx> CodegenContext<'ctx> {
         for stmt in stmts {
             match stmt {
                 Stmt::Let { value, .. } => {
-                    let captures =
-                        self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
+                    let captures = self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
                     self.cell_variables.extend(captures);
                 }
                 Stmt::Expr(expr) | Stmt::Return(expr) | Stmt::Break(expr) => {
-                    let captures =
-                        self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
+                    let captures = self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
                     self.cell_variables.extend(captures);
                 }
             }
@@ -2193,12 +2020,7 @@ impl<'ctx> CodegenContext<'ctx> {
                     self.builder.build_return(Some(&return_val)).unwrap();
 
                     // Create a new basic block for any code after return (unreachable)
-                    let func = self
-                        .builder
-                        .get_insert_block()
-                        .unwrap()
-                        .get_parent()
-                        .unwrap();
+                    let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
                     let unreachable_block = self.context.append_basic_block(func, "after_return");
                     self.builder.position_at_end(unreachable_block);
                 }
@@ -2228,12 +2050,7 @@ impl<'ctx> CodegenContext<'ctx> {
                         .unwrap();
 
                     // Create a new basic block for any code after break (unreachable)
-                    let func = self
-                        .builder
-                        .get_insert_block()
-                        .unwrap()
-                        .get_parent()
-                        .unwrap();
+                    let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
                     let unreachable_block = self.context.append_basic_block(func, "after_break");
                     self.builder.position_at_end(unreachable_block);
                 }
@@ -2306,20 +2123,14 @@ impl<'ctx> CodegenContext<'ctx> {
     ///
     /// Generates a decision tree of comparisons and branches for each arm.
     /// Each arm is checked in order, and the first matching pattern's body is executed.
-    fn compile_match(
-        &mut self,
-        subject: &Expr,
-        arms: &[MatchArm],
-    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_match(&mut self, subject: &Expr, arms: &[MatchArm]) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Get the current function
         let current_fn = self
             .builder
             .get_insert_block()
             .and_then(|bb| bb.get_parent())
             .ok_or_else(|| {
-                CompileError::UnsupportedExpression(
-                    "match expression requires a function context".to_string(),
-                )
+                CompileError::UnsupportedExpression("match expression requires a function context".to_string())
             })?;
 
         // Compile the subject expression
@@ -2338,23 +2149,17 @@ impl<'ctx> CodegenContext<'ctx> {
         let merge_bb = self.context.append_basic_block(current_fn, "match_merge");
 
         // Track incoming values for the phi node
-        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
-            Vec::new();
+        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
 
         // Create blocks for each arm
         let arm_blocks: Vec<_> = arms
             .iter()
             .enumerate()
-            .map(|(i, _)| {
-                self.context
-                    .append_basic_block(current_fn, &format!("match_arm_{}", i))
-            })
+            .map(|(i, _)| self.context.append_basic_block(current_fn, &format!("match_arm_{}", i)))
             .collect();
 
         // Create a fallthrough block for when no pattern matches (returns nil)
-        let no_match_bb = self
-            .context
-            .append_basic_block(current_fn, "match_no_match");
+        let no_match_bb = self.context.append_basic_block(current_fn, "match_no_match");
 
         // Generate pattern tests - each test branches to arm body on match, or continues to next test
         // We need to create test blocks for each arm (separate from body blocks)
@@ -2368,9 +2173,7 @@ impl<'ctx> CodegenContext<'ctx> {
             .collect();
 
         // Branch from current position to first test block
-        self.builder
-            .build_unconditional_branch(test_blocks[0])
-            .unwrap();
+        self.builder.build_unconditional_branch(test_blocks[0]).unwrap();
 
         // Generate pattern tests and branches for each arm
         for (i, arm) in arms.iter().enumerate() {
@@ -2432,10 +2235,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Merge block with phi
         self.builder.position_at_end(merge_bb);
-        let phi = self
-            .builder
-            .build_phi(self.context.i64_type(), "match_result")
-            .unwrap();
+        let phi = self.builder.build_phi(self.context.i64_type(), "match_result").unwrap();
         for (val, bb) in incoming {
             phi.add_incoming(&[(&val, bb)]);
         }
@@ -2520,12 +2320,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
                 if let Some(guard_expr) = guard {
                     // Create a guard test block
-                    let current_fn = self
-                        .builder
-                        .get_insert_block()
-                        .unwrap()
-                        .get_parent()
-                        .unwrap();
+                    let current_fn = self.builder.get_insert_block().unwrap().get_parent().unwrap();
                     let guard_bb = self.context.append_basic_block(current_fn, "guard_test");
 
                     // Branch to guard test if pattern matches, else to no_match
@@ -2555,11 +2350,7 @@ impl<'ctx> CodegenContext<'ctx> {
                         .unwrap();
                 }
             }
-            Pattern::Range {
-                start,
-                end,
-                inclusive,
-            } => {
+            Pattern::Range { start, end, inclusive } => {
                 // Only match integer subjects; non-integers fail to match (no error)
                 let rt_is_integer = self.get_or_declare_rt_is_integer();
                 let is_int = self
@@ -2580,14 +2371,8 @@ impl<'ctx> CodegenContext<'ctx> {
                     .unwrap();
 
                 // Branch to range check only if integer
-                let current_fn = self
-                    .builder
-                    .get_insert_block()
-                    .unwrap()
-                    .get_parent()
-                    .unwrap();
-                let range_check_bb =
-                    self.context.append_basic_block(current_fn, "range_check");
+                let current_fn = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                let range_check_bb = self.context.append_basic_block(current_fn, "range_check");
                 self.builder
                     .build_conditional_branch(is_int_bool, range_check_bb, no_match_bb)
                     .unwrap();
@@ -2628,12 +2413,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 };
 
                 if let Some(guard_expr) = guard {
-                    let current_fn = self
-                        .builder
-                        .get_insert_block()
-                        .unwrap()
-                        .get_parent()
-                        .unwrap();
+                    let current_fn = self.builder.get_insert_block().unwrap().get_parent().unwrap();
                     let guard_bb = self.context.append_basic_block(current_fn, "guard_test");
                     self.builder
                         .build_conditional_branch(in_range, guard_bb, no_match_bb)
@@ -2661,8 +2441,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
             }
             Pattern::List(patterns) => {
-                let success_bb =
-                    self.compile_list_pattern_match(subject, patterns, no_match_bb, "list_pat")?;
+                let success_bb = self.compile_list_pattern_match(subject, patterns, no_match_bb, "list_pat")?;
                 self.builder.position_at_end(success_bb);
 
                 // All elements matched - check guard if present
@@ -2705,12 +2484,12 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Validate pattern bindings (currently allows all valid patterns including builtin names)
-    fn validate_pattern_bindings(&self, pattern: &Pattern) -> Result<(), CompileError> {
+    fn validate_pattern_bindings(pattern: &Pattern) -> Result<(), CompileError> {
         match pattern {
             Pattern::Identifier(_) | Pattern::RestIdentifier(_) => Ok(()),
             Pattern::List(patterns) => {
                 for pat in patterns {
-                    self.validate_pattern_bindings(pat)?;
+                    Self::validate_pattern_bindings(pat)?;
                 }
                 Ok(())
             }
@@ -2753,12 +2532,8 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Bind pattern variables to the subject value
-    fn bind_pattern_variables(
-        &mut self,
-        pattern: &Pattern,
-        subject: BasicValueEnum<'ctx>,
-    ) -> Result<(), CompileError> {
-        self.validate_pattern_bindings(pattern)?;
+    fn bind_pattern_variables(&mut self, pattern: &Pattern, subject: BasicValueEnum<'ctx>) -> Result<(), CompileError> {
+        Self::validate_pattern_bindings(pattern)?;
         match pattern {
             Pattern::Wildcard => {
                 // Nothing to bind
@@ -2766,10 +2541,7 @@ impl<'ctx> CodegenContext<'ctx> {
             }
             Pattern::Identifier(name) => {
                 // Bind the subject to this name
-                let alloca = self
-                    .builder
-                    .build_alloca(self.context.i64_type(), name)
-                    .unwrap();
+                let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
                 self.builder.build_store(alloca, subject).unwrap();
                 self.variables.insert(name.clone(), alloca);
                 Ok(())
@@ -2824,8 +2596,7 @@ impl<'ctx> CodegenContext<'ctx> {
                             // Compute index based on position relative to rest
                             let elem_val = if is_after_rest {
                                 // Element after rest: compute index from end
-                                let offset_from_end =
-                                    (patterns_after_rest - after_rest_offset) as u64;
+                                let offset_from_end = (patterns_after_rest - after_rest_offset) as u64;
                                 let idx_from_end = self
                                     .builder
                                     .build_int_sub(
@@ -2846,11 +2617,7 @@ impl<'ctx> CodegenContext<'ctx> {
                                     .unwrap();
                                 let tagged_idx = self
                                     .builder
-                                    .build_or(
-                                        tagged_idx,
-                                        self.context.i64_type().const_int(0b001, false),
-                                        "tag_idx",
-                                    )
+                                    .build_or(tagged_idx, self.context.i64_type().const_int(0b001, false), "tag_idx")
                                     .unwrap();
 
                                 let rt_get = self.get_or_declare_rt_get();
@@ -2870,19 +2637,12 @@ impl<'ctx> CodegenContext<'ctx> {
                                 let rt_get = self.get_or_declare_rt_get();
                                 let elem_result = self
                                     .builder
-                                    .build_call(
-                                        rt_get,
-                                        &[idx_val.into(), list_val.into()],
-                                        &format!("elem_{}", i),
-                                    )
+                                    .build_call(rt_get, &[idx_val.into(), list_val.into()], &format!("elem_{}", i))
                                     .unwrap();
                                 elem_result.try_as_basic_value().left().unwrap()
                             };
 
-                            let alloca = self
-                                .builder
-                                .build_alloca(self.context.i64_type(), name)
-                                .unwrap();
+                            let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
                             self.builder.build_store(alloca, elem_val).unwrap();
                             self.variables.insert(name.clone(), alloca);
                         }
@@ -2898,11 +2658,7 @@ impl<'ctx> CodegenContext<'ctx> {
                             let skip_count = self.compile_integer(i as i64);
                             let after_skip = self
                                 .builder
-                                .build_call(
-                                    rt_skip,
-                                    &[skip_count.into(), list_val.into()],
-                                    "after_skip",
-                                )
+                                .build_call(rt_skip, &[skip_count.into(), list_val.into()], "after_skip")
                                 .unwrap();
                             let after_skip_val = after_skip.try_as_basic_value().left().unwrap();
 
@@ -2913,10 +2669,7 @@ impl<'ctx> CodegenContext<'ctx> {
                                 .context
                                 .i64_type()
                                 .const_int((i + patterns_after_rest) as u64, false);
-                            let rest_len = self
-                                .builder
-                                .build_int_sub(actual_len, total_skip, "rest_len")
-                                .unwrap();
+                            let rest_len = self.builder.build_int_sub(actual_len, total_skip, "rest_len").unwrap();
 
                             // Convert to tagged integer
                             let tagged_rest_len = self
@@ -2939,18 +2692,11 @@ impl<'ctx> CodegenContext<'ctx> {
                             let rt_take = self.get_or_declare_rt_take();
                             let rest_result = self
                                 .builder
-                                .build_call(
-                                    rt_take,
-                                    &[tagged_rest_len.into(), after_skip_val.into()],
-                                    "rest_val",
-                                )
+                                .build_call(rt_take, &[tagged_rest_len.into(), after_skip_val.into()], "rest_val")
                                 .unwrap();
                             let rest_val = rest_result.try_as_basic_value().left().unwrap();
 
-                            let alloca = self
-                                .builder
-                                .build_alloca(self.context.i64_type(), name)
-                                .unwrap();
+                            let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
                             self.builder.build_store(alloca, rest_val).unwrap();
                             self.variables.insert(name.clone(), alloca);
                         }
@@ -2964,8 +2710,7 @@ impl<'ctx> CodegenContext<'ctx> {
                             // Nested list - get the element first (considering rest position)
                             let nested_elem = if is_after_rest {
                                 // Element after rest: compute index from end
-                                let offset_from_end =
-                                    (patterns_after_rest - after_rest_offset) as u64;
+                                let offset_from_end = (patterns_after_rest - after_rest_offset) as u64;
                                 let idx_from_end = self
                                     .builder
                                     .build_int_sub(
@@ -3018,10 +2763,7 @@ impl<'ctx> CodegenContext<'ctx> {
                             };
 
                             // Bind variables in the nested pattern (supports deep nesting + rest)
-                            self.bind_pattern_variables(
-                                &Pattern::List(nested_patterns.clone()),
-                                nested_elem,
-                            )?;
+                            self.bind_pattern_variables(&Pattern::List(nested_patterns.clone()), nested_elem)?;
                         }
                         _ => {}
                     }
@@ -3041,9 +2783,7 @@ impl<'ctx> CodegenContext<'ctx> {
             Literal::Integer(n) => self.compile_integer(*n),
             Literal::Decimal(f) => self.compile_decimal(*f),
             Literal::Boolean(b) => self.compile_boolean(*b),
-            Literal::String(s) => self
-                .compile_string(s)
-                .unwrap_or_else(|_| self.compile_nil()),
+            Literal::String(s) => self.compile_string(s).unwrap_or_else(|_| self.compile_nil()),
             Literal::Nil => self.compile_nil(),
         }
     }
@@ -3055,12 +2795,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let int_val = value.into_int_value();
         let shifted = self
             .builder
-            .build_right_shift(
-                int_val,
-                self.context.i64_type().const_int(3, false),
-                false,
-                "shift",
-            )
+            .build_right_shift(int_val, self.context.i64_type().const_int(3, false), false, "shift")
             .unwrap();
         self.builder
             .build_int_truncate(shifted, self.context.bool_type(), "to_bool")
@@ -3079,12 +2814,10 @@ impl<'ctx> CodegenContext<'ctx> {
                 self.compile_let(pattern, value, *mutable)?;
                 Ok(())
             }
-            Stmt::Return(_) | Stmt::Break(_) | Stmt::Expr(_) => {
-                Err(CompileError::UnsupportedStatement(format!(
-                    "Statement type not yet implemented: {:?}",
-                    stmt
-                )))
-            }
+            Stmt::Return(_) | Stmt::Break(_) | Stmt::Expr(_) => Err(CompileError::UnsupportedStatement(format!(
+                "Statement type not yet implemented: {:?}",
+                stmt
+            ))),
         }
     }
 
@@ -3096,7 +2829,7 @@ impl<'ctx> CodegenContext<'ctx> {
         value: &Expr,
         mutable: bool,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
-        self.validate_pattern_bindings(pattern)?;
+        Self::validate_pattern_bindings(pattern)?;
         self.set_pattern_mutability(pattern, mutable);
         match pattern {
             Pattern::Identifier(name) => {
@@ -3120,9 +2853,7 @@ impl<'ctx> CodegenContext<'ctx> {
                     *self.variables.get(name).unwrap()
                 } else {
                     // Create a new alloca for this binding
-                    self.builder
-                        .build_alloca(self.context.i64_type(), name)
-                        .unwrap()
+                    self.builder.build_alloca(self.context.i64_type(), name).unwrap()
                 };
 
                 // For self-referencing bindings (both functions and non-functions),
@@ -3135,11 +2866,7 @@ impl<'ctx> CodegenContext<'ctx> {
                     let nil_val = self.compile_nil();
                     let cell = self
                         .builder
-                        .build_call(
-                            rt_cell_new,
-                            &[nil_val.into()],
-                            &format!("{}_cell_init", name),
-                        )
+                        .build_call(rt_cell_new, &[nil_val.into()], &format!("{}_cell_init", name))
                         .unwrap();
                     // Store the cell in the alloca
                     self.builder
@@ -3175,11 +2902,7 @@ impl<'ctx> CodegenContext<'ctx> {
                     // Cell was already created - now set its value
                     let cell = self
                         .builder
-                        .build_load(
-                            self.context.i64_type(),
-                            alloca,
-                            &format!("{}_cell_load", name),
-                        )
+                        .build_load(self.context.i64_type(), alloca, &format!("{}_cell_load", name))
                         .unwrap();
                     let rt_cell_set = self.get_or_declare_rt_cell_set();
                     self.builder
@@ -3239,7 +2962,7 @@ impl<'ctx> CodegenContext<'ctx> {
         list_val: BasicValueEnum<'ctx>,
     ) -> Result<(), CompileError> {
         for pat in patterns {
-            self.validate_pattern_bindings(pat)?;
+            Self::validate_pattern_bindings(pat)?;
         }
         let list_val = self.emit_list_pattern_check(list_val, patterns, "list_destructure_check")?;
         let rt_get = self.get_or_declare_rt_get();
@@ -3247,9 +2970,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let rt_take = self.get_or_declare_rt_take();
         let rt_size = self.get_or_declare_rt_size();
 
-        let rest_pos = patterns
-            .iter()
-            .position(|p| matches!(p, Pattern::RestIdentifier(_)));
+        let rest_pos = patterns.iter().position(|p| matches!(p, Pattern::RestIdentifier(_)));
         let patterns_after_rest = if let Some(pos) = rest_pos {
             patterns.len() - pos - 1
         } else {
@@ -3297,19 +3018,11 @@ impl<'ctx> CodegenContext<'ctx> {
 
                         let tagged_idx = self
                             .builder
-                            .build_left_shift(
-                                idx_from_end,
-                                self.context.i64_type().const_int(3, false),
-                                "shift_idx",
-                            )
+                            .build_left_shift(idx_from_end, self.context.i64_type().const_int(3, false), "shift_idx")
                             .unwrap();
                         let tagged_idx = self
                             .builder
-                            .build_or(
-                                tagged_idx,
-                                self.context.i64_type().const_int(0b001, false),
-                                "tag_idx",
-                            )
+                            .build_or(tagged_idx, self.context.i64_type().const_int(0b001, false), "tag_idx")
                             .unwrap();
 
                         let elem_result = self
@@ -3335,10 +3048,7 @@ impl<'ctx> CodegenContext<'ctx> {
                         elem_result.try_as_basic_value().left().unwrap()
                     };
 
-                    let alloca = self
-                        .builder
-                        .build_alloca(self.context.i64_type(), name)
-                        .unwrap();
+                    let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
                     self.builder.build_store(alloca, elem).unwrap();
                     self.variables.insert(name.clone(), alloca);
                 }
@@ -3421,24 +3131,16 @@ impl<'ctx> CodegenContext<'ctx> {
                     let rest_val = if patterns_after_rest == 0 {
                         after_skip_val
                     } else {
-                        let actual_len =
-                            actual_len.expect("rest position requires list length");
+                        let actual_len = actual_len.expect("rest position requires list length");
                         let total_skip = self
                             .context
                             .i64_type()
                             .const_int((i + patterns_after_rest) as u64, false);
-                        let rest_len = self
-                            .builder
-                            .build_int_sub(actual_len, total_skip, "rest_len")
-                            .unwrap();
+                        let rest_len = self.builder.build_int_sub(actual_len, total_skip, "rest_len").unwrap();
 
                         let tagged_rest_len = self
                             .builder
-                            .build_left_shift(
-                                rest_len,
-                                self.context.i64_type().const_int(3, false),
-                                "shift_rest_len",
-                            )
+                            .build_left_shift(rest_len, self.context.i64_type().const_int(3, false), "shift_rest_len")
                             .unwrap();
                         let tagged_rest_len = self
                             .builder
@@ -3451,19 +3153,12 @@ impl<'ctx> CodegenContext<'ctx> {
 
                         let rest_result = self
                             .builder
-                            .build_call(
-                                rt_take,
-                                &[tagged_rest_len.into(), after_skip_val.into()],
-                                "rest_val",
-                            )
+                            .build_call(rt_take, &[tagged_rest_len.into(), after_skip_val.into()], "rest_val")
                             .unwrap();
                         rest_result.try_as_basic_value().left().unwrap()
                     };
 
-                    let alloca = self
-                        .builder
-                        .build_alloca(self.context.i64_type(), name)
-                        .unwrap();
+                    let alloca = self.builder.build_alloca(self.context.i64_type(), name).unwrap();
                     self.builder.build_store(alloca, rest_val).unwrap();
                     self.variables.insert(name.clone(), alloca);
                 }
@@ -3485,12 +3180,7 @@ impl<'ctx> CodegenContext<'ctx> {
         no_match_bb: inkwell::basic_block::BasicBlock<'ctx>,
         name_prefix: &str,
     ) -> Result<inkwell::basic_block::BasicBlock<'ctx>, CompileError> {
-        let current_fn = self
-            .builder
-            .get_insert_block()
-            .unwrap()
-            .get_parent()
-            .unwrap();
+        let current_fn = self.builder.get_insert_block().unwrap().get_parent().unwrap();
 
         let rt_is_list = self.get_or_declare_rt_is_list();
         let is_list_val = self
@@ -3592,19 +3282,11 @@ impl<'ctx> CodegenContext<'ctx> {
                     .unwrap();
                 let tagged_idx = self
                     .builder
-                    .build_left_shift(
-                        idx_from_end,
-                        self.context.i64_type().const_int(3, false),
-                        "shift_idx",
-                    )
+                    .build_left_shift(idx_from_end, self.context.i64_type().const_int(3, false), "shift_idx")
                     .unwrap();
                 let tagged_idx = self
                     .builder
-                    .build_or(
-                        tagged_idx,
-                        self.context.i64_type().const_int(0b001, false),
-                        "tag_idx",
-                    )
+                    .build_or(tagged_idx, self.context.i64_type().const_int(0b001, false), "tag_idx")
                     .unwrap();
                 let elem_result = self
                     .builder
@@ -3643,20 +3325,15 @@ impl<'ctx> CodegenContext<'ctx> {
                     let eq_val = eq_result.try_as_basic_value().left().unwrap();
                     let eq_bool = self.value_to_bool(eq_val);
 
-                    let next_bb = self.context.append_basic_block(
-                        current_fn,
-                        &format!("{name_prefix}_check_elem_{}", elem_idx + 1),
-                    );
+                    let next_bb = self
+                        .context
+                        .append_basic_block(current_fn, &format!("{name_prefix}_check_elem_{}", elem_idx + 1));
                     self.builder
                         .build_conditional_branch(eq_bool, next_bb, no_match_bb)
                         .unwrap();
                     self.builder.position_at_end(next_bb);
                 }
-                Pattern::Range {
-                    start,
-                    end,
-                    inclusive,
-                } => {
+                Pattern::Range { start, end, inclusive } => {
                     // Only match integer elements; non-integers fail to match (no error)
                     let rt_is_integer = self.get_or_declare_rt_is_integer();
                     let is_int = self
@@ -3676,10 +3353,9 @@ impl<'ctx> CodegenContext<'ctx> {
                         )
                         .unwrap();
 
-                    let range_check_bb = self.context.append_basic_block(
-                        current_fn,
-                        &format!("{name_prefix}_range_check_{i}"),
-                    );
+                    let range_check_bb = self
+                        .context
+                        .append_basic_block(current_fn, &format!("{name_prefix}_range_check_{i}"));
                     self.builder
                         .build_conditional_branch(is_int_bool, range_check_bb, no_match_bb)
                         .unwrap();
@@ -3691,12 +3367,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
                     let ge_start = self
                         .builder
-                        .build_int_compare(
-                            IntPredicate::SGE,
-                            elem_int,
-                            start_int,
-                            "elem_ge_start",
-                        )
+                        .build_int_compare(IntPredicate::SGE, elem_int, start_int, "elem_ge_start")
                         .unwrap();
 
                     let in_range = if let Some(e) = end {
@@ -3713,17 +3384,14 @@ impl<'ctx> CodegenContext<'ctx> {
                             .build_int_compare(cmp, elem_int, end_int, "elem_lt_end")
                             .unwrap();
 
-                        self.builder
-                            .build_and(ge_start, lt_end, "in_range")
-                            .unwrap()
+                        self.builder.build_and(ge_start, lt_end, "in_range").unwrap()
                     } else {
                         ge_start
                     };
 
-                    let next_bb = self.context.append_basic_block(
-                        current_fn,
-                        &format!("{name_prefix}_check_elem_{}", elem_idx + 1),
-                    );
+                    let next_bb = self
+                        .context
+                        .append_basic_block(current_fn, &format!("{name_prefix}_check_elem_{}", elem_idx + 1));
                     self.builder
                         .build_conditional_branch(in_range, next_bb, no_match_bb)
                         .unwrap();
@@ -3731,12 +3399,8 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
                 Pattern::List(nested_patterns) => {
                     let nested_prefix = format!("{name_prefix}_nested_{i}");
-                    let nested_success = self.compile_list_pattern_match(
-                        elem_val,
-                        nested_patterns,
-                        no_match_bb,
-                        &nested_prefix,
-                    )?;
+                    let nested_success =
+                        self.compile_list_pattern_match(elem_val, nested_patterns, no_match_bb, &nested_prefix)?;
                     self.builder.position_at_end(nested_success);
                 }
                 _ => {
@@ -3761,11 +3425,7 @@ impl<'ctx> CodegenContext<'ctx> {
     /// This creates:
     /// 1. A new LLVM function for the closure body
     /// 2. A call to rt_make_closure to create the closure object
-    fn compile_function(
-        &mut self,
-        params: &[Param],
-        body: &Expr,
-    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_function(&mut self, params: &[Param], body: &Expr) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Anonymous function - no TCO self-name
         self.compile_function_with_name(params, body, None)
     }
@@ -3781,7 +3441,7 @@ impl<'ctx> CodegenContext<'ctx> {
         self_name: Option<String>,
     ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         for param in params {
-            self.validate_pattern_bindings(&param.pattern)?;
+            Self::validate_pattern_bindings(&param.pattern)?;
         }
         // Generate a unique name for this closure function
         static CLOSURE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -3789,10 +3449,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let closure_name = format!("closure_{}", closure_id);
 
         // Analyze what variables this closure captures from the enclosing scope
-        let captured_vars: Vec<String> = self
-            .find_captured_variables(params, body)
-            .into_iter()
-            .collect();
+        let captured_vars: Vec<String> = self.find_captured_variables(params, body).into_iter().collect();
 
         // Create the closure function type
         // Signature: fn(env: *ClosureObject, argc: u32, argv: *Value) -> Value (i64)
@@ -3800,13 +3457,10 @@ impl<'ctx> CodegenContext<'ctx> {
         let i32_type = self.context.i32_type();
         let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
 
-        let closure_fn_type =
-            i64_type.fn_type(&[ptr_type.into(), i32_type.into(), ptr_type.into()], false);
+        let closure_fn_type = i64_type.fn_type(&[ptr_type.into(), i32_type.into(), ptr_type.into()], false);
 
         // Create the closure function
-        let closure_fn = self
-            .module
-            .add_function(&closure_name, closure_fn_type, None);
+        let closure_fn = self.module.add_function(&closure_name, closure_fn_type, None);
 
         // Add inlining hints to help LLVM optimize closure calls
         // nounwind: closure doesn't throw exceptions
@@ -3878,25 +3532,14 @@ impl<'ctx> CodegenContext<'ctx> {
 
                 // Calculate number of rest args: argc - i
                 let start_idx = self.context.i64_type().const_int(i as u64, false);
-                let argc_i64 = self
-                    .builder
-                    .build_int_z_extend(_argc, i64_type, "argc_ext")
-                    .unwrap();
-                let rest_count = self
-                    .builder
-                    .build_int_sub(argc_i64, start_idx, "rest_count")
-                    .unwrap();
+                let argc_i64 = self.builder.build_int_z_extend(_argc, i64_type, "argc_ext").unwrap();
+                let rest_count = self.builder.build_int_sub(argc_i64, start_idx, "rest_count").unwrap();
 
                 // Use rt_list_from_values to create the list
                 // We pass a pointer to argv[i] and the count
                 let rest_argv = unsafe {
                     self.builder
-                        .build_in_bounds_gep(
-                            i64_type,
-                            argv,
-                            &[start_idx],
-                            "rest_argv",
-                        )
+                        .build_in_bounds_gep(i64_type, argv, &[start_idx], "rest_argv")
                         .unwrap()
                 };
 
@@ -3904,11 +3547,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_list_from_values = self.get_or_declare_rt_list_from_values();
                 let rest_list = self
                     .builder
-                    .build_call(
-                        rt_list_from_values,
-                        &[rest_argv.into(), rest_count.into()],
-                        "rest_args",
-                    )
+                    .build_call(rt_list_from_values, &[rest_argv.into(), rest_count.into()], "rest_args")
                     .unwrap();
 
                 let rest_val = rest_list.try_as_basic_value().left().unwrap();
@@ -4040,28 +3679,18 @@ impl<'ctx> CodegenContext<'ctx> {
         // Calculate arity: count non-rest parameters
         // A rest parameter (|..args| or |a, ..rest|) doesn't count toward arity
         // because it accepts 0+ additional arguments
-        let has_rest = params
-            .iter()
-            .any(|p| matches!(p.pattern, Pattern::RestIdentifier(_)));
+        let has_rest = params.iter().any(|p| matches!(p.pattern, Pattern::RestIdentifier(_)));
         let required_params = params
             .iter()
             .filter(|p| !matches!(p.pattern, Pattern::RestIdentifier(_)))
             .count();
-        let arity = self
-            .context
-            .i32_type()
-            .const_int(required_params as u64, false);
-        let has_rest_val = self
-            .context
-            .i8_type()
-            .const_int(if has_rest { 1 } else { 0 }, false);
+        let arity = self.context.i32_type().const_int(required_params as u64, false);
+        let has_rest_val = self.context.i8_type().const_int(if has_rest { 1 } else { 0 }, false);
 
         // Create array of captured values
         let captures_count = captured_vars.len();
         let captures_ptr = if captures_count == 0 {
-            self.context
-                .ptr_type(inkwell::AddressSpace::from(0))
-                .const_null()
+            self.context.ptr_type(inkwell::AddressSpace::from(0)).const_null()
         } else {
             // Allocate stack space for captures array
             let array_type = i64_type.array_type(captures_count as u32);
@@ -4070,13 +3699,10 @@ impl<'ctx> CodegenContext<'ctx> {
             // Store each captured value
             for (i, var_name) in captured_vars.iter().enumerate() {
                 // Get the captured variable's current value from saved_variables
-                let var_ptr = saved_variables.get(var_name).ok_or_else(|| {
-                    CompileError::UnsupportedExpression(format!("Undefined capture: {}", var_name))
-                })?;
-                let var_val = self
-                    .builder
-                    .build_load(i64_type, *var_ptr, var_name)
-                    .unwrap();
+                let var_ptr = saved_variables
+                    .get(var_name)
+                    .ok_or_else(|| CompileError::UnsupportedExpression(format!("Undefined capture: {}", var_name)))?;
+                let var_val = self.builder.build_load(i64_type, *var_ptr, var_name).unwrap();
 
                 // Store in captures array
                 let index = self.context.i64_type().const_int(i as u64, false);
@@ -4105,10 +3731,7 @@ impl<'ctx> CodegenContext<'ctx> {
         self.mutable_variables = saved_mutable_vars;
         self.function_depth = saved_function_depth;
 
-        let captures_count_val = self
-            .context
-            .i64_type()
-            .const_int(captures_count as u64, false);
+        let captures_count_val = self.context.i64_type().const_int(captures_count as u64, false);
 
         let rt_make_closure = self.get_or_declare_rt_make_closure();
         let closure_result = self
@@ -4133,10 +3756,7 @@ impl<'ctx> CodegenContext<'ctx> {
     ///
     /// When in tail position and we encounter a self-recursive call,
     /// we can optimize it to a jump instead of a call.
-    fn compile_expr_in_tail_position(
-        &mut self,
-        expr: &Expr,
-    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_expr_in_tail_position(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, CompileError> {
         match expr {
             // If expressions: both branches are in tail position
             Expr::If {
@@ -4157,9 +3777,7 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::Call { function, args } => {
                 // Check if this is a self-recursive tail call
                 if let Some(ref tco) = self.tco_state {
-                    if let (Some(ref self_name), Expr::Identifier(name)) =
-                        (&tco.self_name, function.as_ref())
-                    {
+                    if let (Some(ref self_name), Expr::Identifier(name)) = (&tco.self_name, function.as_ref()) {
                         if name == self_name && args.len() == tco.param_allocas.len() {
                             // This is a self-recursive tail call! Optimize it.
                             return self.compile_tail_call(args);
@@ -4214,20 +3832,14 @@ impl<'ctx> CodegenContext<'ctx> {
         }
 
         // Jump to the body block
-        self.builder
-            .build_unconditional_branch(tco.entry_block)
-            .unwrap();
+        self.builder.build_unconditional_branch(tco.entry_block).unwrap();
 
         // Create a new block for any code after this (unreachable, but LLVM needs it)
         let current_fn = self
             .builder
             .get_insert_block()
             .and_then(|bb| bb.get_parent())
-            .ok_or_else(|| {
-                CompileError::UnsupportedExpression(
-                    "tail call requires a function context".to_string(),
-                )
-            })?;
+            .ok_or_else(|| CompileError::UnsupportedExpression("tail call requires a function context".to_string()))?;
         let unreachable_bb = self.context.append_basic_block(current_fn, "unreachable");
         self.builder.position_at_end(unreachable_bb);
 
@@ -4248,9 +3860,7 @@ impl<'ctx> CodegenContext<'ctx> {
             .get_insert_block()
             .and_then(|bb| bb.get_parent())
             .ok_or_else(|| {
-                CompileError::UnsupportedExpression(
-                    "if expression requires a function context".to_string(),
-                )
+                CompileError::UnsupportedExpression("if expression requires a function context".to_string())
             })?;
 
         // Compile the condition
@@ -4331,10 +3941,7 @@ impl<'ctx> CodegenContext<'ctx> {
         self.builder.position_at_end(merge_bb);
 
         // Only add phi incoming if the branch doesn't have a terminator (wasn't a tail call)
-        let phi = self
-            .builder
-            .build_phi(self.context.i64_type(), "if_result")
-            .unwrap();
+        let phi = self.builder.build_phi(self.context.i64_type(), "if_result").unwrap();
         if then_needs_branch {
             phi.add_incoming(&[(&then_val, then_end_bb)]);
         }
@@ -4359,9 +3966,7 @@ impl<'ctx> CodegenContext<'ctx> {
             .get_insert_block()
             .and_then(|bb| bb.get_parent())
             .ok_or_else(|| {
-                CompileError::UnsupportedExpression(
-                    "if-let expression requires a function context".to_string(),
-                )
+                CompileError::UnsupportedExpression("if-let expression requires a function context".to_string())
             })?;
 
         // Compile the value expression
@@ -4462,20 +4067,14 @@ impl<'ctx> CodegenContext<'ctx> {
     /// Compile a match expression with arm bodies in tail position (for TCO)
     ///
     /// Similar to `compile_match` but arm bodies are compiled with tail-position awareness.
-    fn compile_match_tail(
-        &mut self,
-        subject: &Expr,
-        arms: &[MatchArm],
-    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_match_tail(&mut self, subject: &Expr, arms: &[MatchArm]) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Get the current function
         let current_fn = self
             .builder
             .get_insert_block()
             .and_then(|bb| bb.get_parent())
             .ok_or_else(|| {
-                CompileError::UnsupportedExpression(
-                    "match expression requires a function context".to_string(),
-                )
+                CompileError::UnsupportedExpression("match expression requires a function context".to_string())
             })?;
 
         // Compile the subject expression
@@ -4494,23 +4093,17 @@ impl<'ctx> CodegenContext<'ctx> {
         let merge_bb = self.context.append_basic_block(current_fn, "match_merge");
 
         // Track incoming values for the phi node
-        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
-            Vec::new();
+        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
 
         // Create blocks for each arm
         let arm_blocks: Vec<_> = arms
             .iter()
             .enumerate()
-            .map(|(i, _)| {
-                self.context
-                    .append_basic_block(current_fn, &format!("match_arm_{}", i))
-            })
+            .map(|(i, _)| self.context.append_basic_block(current_fn, &format!("match_arm_{}", i)))
             .collect();
 
         // Create a fallthrough block for when no pattern matches (returns nil)
-        let no_match_bb = self
-            .context
-            .append_basic_block(current_fn, "match_no_match");
+        let no_match_bb = self.context.append_basic_block(current_fn, "match_no_match");
 
         // Generate pattern tests
         let test_blocks: Vec<_> = arms
@@ -4523,9 +4116,7 @@ impl<'ctx> CodegenContext<'ctx> {
             .collect();
 
         // Branch from current position to first test block
-        self.builder
-            .build_unconditional_branch(test_blocks[0])
-            .unwrap();
+        self.builder.build_unconditional_branch(test_blocks[0]).unwrap();
 
         // Generate pattern tests and branches for each arm
         for (i, arm) in arms.iter().enumerate() {
@@ -4581,10 +4172,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Merge block with phi
         self.builder.position_at_end(merge_bb);
-        let phi = self
-            .builder
-            .build_phi(self.context.i64_type(), "match_result")
-            .unwrap();
+        let phi = self.builder.build_phi(self.context.i64_type(), "match_result").unwrap();
         for (val, bb) in incoming {
             phi.add_incoming(&[(&val, bb)]);
         }
@@ -4609,9 +4197,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let mut mutable_vars: HashSet<String> = HashSet::new();
         for stmt in stmts {
             if let Stmt::Let {
-                mutable: true,
-                pattern,
-                ..
+                mutable: true, pattern, ..
             } = stmt
             {
                 Self::collect_pattern_variables(pattern, &mut mutable_vars);
@@ -4623,13 +4209,11 @@ impl<'ctx> CodegenContext<'ctx> {
         for stmt in stmts {
             match stmt {
                 Stmt::Let { value, .. } => {
-                    let captures =
-                        self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
+                    let captures = self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
                     self.cell_variables.extend(captures);
                 }
                 Stmt::Expr(expr) | Stmt::Return(expr) | Stmt::Break(expr) => {
-                    let captures =
-                        self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
+                    let captures = self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
                     self.cell_variables.extend(captures);
                 }
             }
@@ -4701,12 +4285,7 @@ impl<'ctx> CodegenContext<'ctx> {
                     self.builder.build_return(Some(&return_val)).unwrap();
 
                     // Create a new basic block for any code after return (unreachable)
-                    let func = self
-                        .builder
-                        .get_insert_block()
-                        .unwrap()
-                        .get_parent()
-                        .unwrap();
+                    let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
                     let unreachable_block = self.context.append_basic_block(func, "after_return");
                     self.builder.position_at_end(unreachable_block);
                 }
@@ -4736,14 +4315,8 @@ impl<'ctx> CodegenContext<'ctx> {
                         .unwrap();
 
                     // Create a new basic block for any code after break (unreachable)
-                    let func = self
-                        .builder
-                        .get_insert_block()
-                        .unwrap()
-                        .get_parent()
-                        .unwrap();
-                    let unreachable_block =
-                        self.context.append_basic_block(func, "after_break_tail");
+                    let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let unreachable_block = self.context.append_basic_block(func, "after_break_tail");
                     self.builder.position_at_end(unreachable_block);
                 }
             }
@@ -4934,11 +4507,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
                 Self::collect_free_variables(value, bound, free);
             }
-            Expr::InfixCall {
-                function,
-                left,
-                right,
-            } => {
+            Expr::InfixCall { function, left, right } => {
                 // a `f` b - collect from function and both operands
                 // The function name is a string, so check if it's a free variable
                 if !bound.contains(function) {
@@ -5008,8 +4577,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
             // Recurse into subexpressions
             Expr::Infix { left, right, .. } => {
-                Self::value_has_self_reference(name, left, bound)
-                    || Self::value_has_self_reference(name, right, bound)
+                Self::value_has_self_reference(name, left, bound) || Self::value_has_self_reference(name, right, bound)
             }
             Expr::Prefix { right, .. } => Self::value_has_self_reference(name, right, bound),
             Expr::If {
@@ -5041,9 +4609,7 @@ impl<'ctx> CodegenContext<'ctx> {
             }
             Expr::Call { function, args } => {
                 Self::value_has_self_reference(name, function, bound)
-                    || args
-                        .iter()
-                        .any(|arg| Self::value_has_self_reference(name, arg, bound))
+                    || args.iter().any(|arg| Self::value_has_self_reference(name, arg, bound))
             }
             Expr::Block(stmts) => {
                 let mut new_bound = bound.clone();
@@ -5066,12 +4632,11 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
                 false
             }
-            Expr::List(elements) | Expr::Set(elements) => elements
-                .iter()
-                .any(|e| Self::value_has_self_reference(name, e, bound)),
+            Expr::List(elements) | Expr::Set(elements) => {
+                elements.iter().any(|e| Self::value_has_self_reference(name, e, bound))
+            }
             Expr::Dict(entries) => entries.iter().any(|(k, v)| {
-                Self::value_has_self_reference(name, k, bound)
-                    || Self::value_has_self_reference(name, v, bound)
+                Self::value_has_self_reference(name, k, bound) || Self::value_has_self_reference(name, v, bound)
             }),
             Expr::Index { collection, index } => {
                 Self::value_has_self_reference(name, collection, bound)
@@ -5110,10 +4675,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
     /// Find let bindings in a block that have self-referencing closures.
     /// These need cell indirection so the closure can access the final value.
-    pub fn find_self_referencing_bindings(
-        stmts: &[Stmt],
-        bound: &HashSet<String>,
-    ) -> HashSet<String> {
+    pub fn find_self_referencing_bindings(stmts: &[Stmt], bound: &HashSet<String>) -> HashSet<String> {
         let mut self_refs = HashSet::new();
         let mut current_bound = bound.clone();
 
@@ -5138,10 +4700,7 @@ impl<'ctx> CodegenContext<'ctx> {
     /// Find bindings that have forward references (reference bindings defined later).
     /// This handles mutual recursion between top-level functions.
     /// Both the referencing binding AND the referenced binding need cell indirection.
-    pub fn find_forward_references(
-        stmts: &[Stmt],
-        bound: &HashSet<String>,
-    ) -> HashSet<String> {
+    pub fn find_forward_references(stmts: &[Stmt], bound: &HashSet<String>) -> HashSet<String> {
         // First, collect all top-level binding names
         let mut all_names: HashSet<String> = HashSet::new();
         for stmt in stmts {
@@ -5242,19 +4801,9 @@ impl<'ctx> CodegenContext<'ctx> {
                 else_branch,
             } => {
                 Self::collect_mutable_captures_recursive(condition, mutable_vars, bound, captured);
-                Self::collect_mutable_captures_recursive(
-                    then_branch,
-                    mutable_vars,
-                    bound,
-                    captured,
-                );
+                Self::collect_mutable_captures_recursive(then_branch, mutable_vars, bound, captured);
                 if let Some(else_br) = else_branch {
-                    Self::collect_mutable_captures_recursive(
-                        else_br,
-                        mutable_vars,
-                        bound,
-                        captured,
-                    );
+                    Self::collect_mutable_captures_recursive(else_br, mutable_vars, bound, captured);
                 }
             }
             Expr::IfLet {
@@ -5266,19 +4815,9 @@ impl<'ctx> CodegenContext<'ctx> {
                 Self::collect_mutable_captures_recursive(value, mutable_vars, bound, captured);
                 let mut new_bound = bound.clone();
                 Self::collect_pattern_variables(pattern, &mut new_bound);
-                Self::collect_mutable_captures_recursive(
-                    then_branch,
-                    mutable_vars,
-                    &new_bound,
-                    captured,
-                );
+                Self::collect_mutable_captures_recursive(then_branch, mutable_vars, &new_bound, captured);
                 if let Some(else_br) = else_branch {
-                    Self::collect_mutable_captures_recursive(
-                        else_br,
-                        mutable_vars,
-                        bound,
-                        captured,
-                    );
+                    Self::collect_mutable_captures_recursive(else_br, mutable_vars, bound, captured);
                 }
             }
             Expr::Call { function, args } => {
@@ -5297,12 +4836,7 @@ impl<'ctx> CodegenContext<'ctx> {
                             pattern,
                             value,
                         } => {
-                            Self::collect_mutable_captures_recursive(
-                                value,
-                                &new_mutable,
-                                &new_bound,
-                                captured,
-                            );
+                            Self::collect_mutable_captures_recursive(value, &new_mutable, &new_bound, captured);
                             if let Pattern::Identifier(name) = pattern {
                                 new_bound.insert(name.clone());
                                 if *mutable {
@@ -5311,12 +4845,7 @@ impl<'ctx> CodegenContext<'ctx> {
                             }
                         }
                         Stmt::Expr(e) | Stmt::Return(e) | Stmt::Break(e) => {
-                            Self::collect_mutable_captures_recursive(
-                                e,
-                                &new_mutable,
-                                &new_bound,
-                                captured,
-                            );
+                            Self::collect_mutable_captures_recursive(e, &new_mutable, &new_bound, captured);
                         }
                     }
                 }
@@ -5348,19 +4877,9 @@ impl<'ctx> CodegenContext<'ctx> {
                     let mut arm_bound = bound.clone();
                     Self::collect_pattern_bindings(&arm.pattern, &mut arm_bound);
                     if let Some(guard) = &arm.guard {
-                        Self::collect_mutable_captures_recursive(
-                            guard,
-                            mutable_vars,
-                            &arm_bound,
-                            captured,
-                        );
+                        Self::collect_mutable_captures_recursive(guard, mutable_vars, &arm_bound, captured);
                     }
-                    Self::collect_mutable_captures_recursive(
-                        &arm.body,
-                        mutable_vars,
-                        &arm_bound,
-                        captured,
-                    );
+                    Self::collect_mutable_captures_recursive(&arm.body, mutable_vars, &arm_bound, captured);
                 }
             }
             Expr::Assignment { name: _, value } => {
@@ -5372,11 +4891,7 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Compile a function call
-    fn compile_call(
-        &mut self,
-        function: &Expr,
-        args: &[Expr],
-    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_call(&mut self, function: &Expr, args: &[Expr]) -> Result<BasicValueEnum<'ctx>, CompileError> {
         // Check if this is a call with a single spread argument: f(..collection)
         if args.len() == 1 {
             if let Expr::Spread(inner) = &args[0] {
@@ -5445,11 +4960,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_apply = self.get_or_declare_rt_apply();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_apply,
-                        &[fn_val.into(), collection_val.into()],
-                        "apply_result",
-                    )
+                    .build_call(rt_apply, &[fn_val.into(), collection_val.into()], "apply_result")
                     .unwrap();
                 return Ok(result.try_as_basic_value().left().unwrap());
             }
@@ -5499,9 +5010,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let argv_ptr = if argc == 0 {
             // No arguments, use null pointer
-            self.context
-                .ptr_type(inkwell::AddressSpace::from(0))
-                .const_null()
+            self.context.ptr_type(inkwell::AddressSpace::from(0)).const_null()
         } else {
             // Allocate stack space for arguments
             let array_type = i64_type.array_type(argc as u32);
@@ -5588,11 +5097,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let result = self
             .builder
-            .build_call(
-                rt_fn,
-                &[coll_val.into()],
-                &format!("{}_spread_result", name),
-            )
+            .build_call(rt_fn, &[coll_val.into()], &format!("{}_spread_result", name))
             .unwrap();
 
         Ok(result.try_as_basic_value().left().unwrap())
@@ -5640,9 +5145,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let argc_val = self.context.i32_type().const_int(argc as u64, false);
 
                 let argv_ptr = if argc == 0 {
-                    self.context
-                        .ptr_type(inkwell::AddressSpace::from(0))
-                        .const_null()
+                    self.context.ptr_type(inkwell::AddressSpace::from(0)).const_null()
                 } else {
                     // Allocate stack space for arguments
                     let array_type = i64_type.array_type(argc as u32);
@@ -5710,10 +5213,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 // __get_args() - get command line arguments (excluding program name)
                 // Takes no arguments, returns list of strings
                 let rt_get_args = self.get_or_declare_rt_get_args();
-                let result = self
-                    .builder
-                    .build_call(rt_get_args, &[], "get_args_result")
-                    .unwrap();
+                let result = self.builder.build_call(rt_get_args, &[], "get_args_result").unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "__print_result" => {
@@ -5729,11 +5229,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let time_nanos = self.compile_arg(&args[2])?;
                 let rt_print_result = self.get_or_declare_rt_print_result();
                 self.builder
-                    .build_call(
-                        rt_print_result,
-                        &[label.into(), value.into(), time_nanos.into()],
-                        "",
-                    )
+                    .build_call(rt_print_result, &[label.into(), value.into(), time_nanos.into()], "")
                     .unwrap();
                 Ok(Some(self.context.i64_type().const_int(0, false).into()))
             }
@@ -5771,12 +5267,7 @@ impl<'ctx> CodegenContext<'ctx> {
                     .builder
                     .build_call(
                         rt_print_test_result,
-                        &[
-                            label.into(),
-                            actual.into(),
-                            expected.into(),
-                            time_nanos.into(),
-                        ],
+                        &[label.into(), actual.into(), expected.into(), time_nanos.into()],
                         "test_result",
                     )
                     .unwrap();
@@ -5888,11 +5379,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_filter = self.get_or_declare_rt_filter();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_filter,
-                        &[predicate.into(), collection.into()],
-                        "filter_result",
-                    )
+                    .build_call(rt_filter, &[predicate.into(), collection.into()], "filter_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -5909,11 +5396,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_reduce = self.get_or_declare_rt_reduce();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_reduce,
-                        &[reducer.into(), collection.into()],
-                        "reduce_result",
-                    )
+                    .build_call(rt_reduce, &[reducer.into(), collection.into()], "reduce_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -6036,10 +5519,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_int = self.get_or_declare_rt_int();
-                let result = self
-                    .builder
-                    .build_call(rt_int, &[value.into()], "int_result")
-                    .unwrap();
+                let result = self.builder.build_call(rt_int, &[value.into()], "int_result").unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "ints" => {
@@ -6084,10 +5564,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_set = self.get_or_declare_rt_set();
-                let result = self
-                    .builder
-                    .build_call(rt_set, &[value.into()], "set_result")
-                    .unwrap();
+                let result = self.builder.build_call(rt_set, &[value.into()], "set_result").unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "dict" => {
@@ -6168,11 +5645,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_find = self.get_or_declare_rt_find();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_find,
-                        &[predicate.into(), collection.into()],
-                        "find_result",
-                    )
+                    .build_call(rt_find, &[predicate.into(), collection.into()], "find_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -6189,11 +5662,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_count = self.get_or_declare_rt_count();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_count,
-                        &[predicate.into(), collection.into()],
-                        "count_result",
-                    )
+                    .build_call(rt_count, &[predicate.into(), collection.into()], "count_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -6210,11 +5679,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_flat_map = self.get_or_declare_rt_flat_map();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_flat_map,
-                        &[mapper.into(), collection.into()],
-                        "flat_map_result",
-                    )
+                    .build_call(rt_flat_map, &[mapper.into(), collection.into()], "flat_map_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -6231,11 +5696,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_filter_map = self.get_or_declare_rt_filter_map();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_filter_map,
-                        &[mapper.into(), collection.into()],
-                        "filter_map_result",
-                    )
+                    .build_call(rt_filter_map, &[mapper.into(), collection.into()], "filter_map_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -6252,11 +5713,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_find_map = self.get_or_declare_rt_find_map();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_find_map,
-                        &[mapper.into(), collection.into()],
-                        "find_map_result",
-                    )
+                    .build_call(rt_find_map, &[mapper.into(), collection.into()], "find_map_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -6453,11 +5910,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_sort = self.get_or_declare_rt_sort();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_sort,
-                        &[comparator.into(), collection.into()],
-                        "sort_result",
-                    )
+                    .build_call(rt_sort, &[comparator.into(), collection.into()], "sort_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -6490,11 +5943,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_rotate = self.get_or_declare_rt_rotate();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_rotate,
-                        &[steps.into(), collection.into()],
-                        "rotate_result",
-                    )
+                    .build_call(rt_rotate, &[steps.into(), collection.into()], "rotate_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -6511,11 +5960,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_chunk = self.get_or_declare_rt_chunk();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_chunk,
-                        &[size_arg.into(), collection.into()],
-                        "chunk_result",
-                    )
+                    .build_call(rt_chunk, &[size_arg.into(), collection.into()], "chunk_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -6562,10 +6007,7 @@ impl<'ctx> CodegenContext<'ctx> {
                     .builder
                     .build_call(
                         rt_list_from_values,
-                        &[
-                            array_alloca.into(),
-                            i64_type.const_int(argc as u64, false).into(),
-                        ],
+                        &[array_alloca.into(), i64_type.const_int(argc as u64, false).into()],
                         "union_list",
                     )
                     .unwrap()
@@ -6600,10 +6042,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let i64_type = self.context.i64_type();
                 let argc = compiled_args.len();
                 let array_type = i64_type.array_type(argc as u32);
-                let array_alloca = self
-                    .builder
-                    .build_alloca(array_type, "intersection_args")
-                    .unwrap();
+                let array_alloca = self.builder.build_alloca(array_type, "intersection_args").unwrap();
 
                 // Store each argument in the array
                 for (i, arg) in compiled_args.iter().enumerate() {
@@ -6627,10 +6066,7 @@ impl<'ctx> CodegenContext<'ctx> {
                     .builder
                     .build_call(
                         rt_list_from_values,
-                        &[
-                            array_alloca.into(),
-                            i64_type.const_int(argc as u64, false).into(),
-                        ],
+                        &[array_alloca.into(), i64_type.const_int(argc as u64, false).into()],
                         "intersection_list",
                     )
                     .unwrap()
@@ -6659,11 +6095,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_includes = self.get_or_declare_rt_includes();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_includes,
-                        &[collection.into(), value.into()],
-                        "includes_result",
-                    )
+                    .build_call(rt_includes, &[collection.into(), value.into()], "includes_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -6680,11 +6112,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_excludes = self.get_or_declare_rt_excludes();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_excludes,
-                        &[collection.into(), value.into()],
-                        "excludes_result",
-                    )
+                    .build_call(rt_excludes, &[collection.into(), value.into()], "excludes_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -6768,11 +6196,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_join = self.get_or_declare_rt_join();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_join,
-                        &[separator.into(), collection.into()],
-                        "join_result",
-                    )
+                    .build_call(rt_join, &[separator.into(), collection.into()], "join_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -6822,11 +6246,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_replace = self.get_or_declare_rt_replace();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_replace,
-                        &[from.into(), to.into(), string.into()],
-                        "replace_result",
-                    )
+                    .build_call(rt_replace, &[from.into(), to.into(), string.into()], "replace_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -6840,10 +6260,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_abs = self.get_or_declare_rt_abs();
-                let result = self
-                    .builder
-                    .build_call(rt_abs, &[value.into()], "abs_result")
-                    .unwrap();
+                let result = self.builder.build_call(rt_abs, &[value.into()], "abs_result").unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "signum" => {
@@ -6888,10 +6305,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_str = self.get_or_declare_rt_str();
-                let result = self
-                    .builder
-                    .build_call(rt_str, &[value.into()], "str_result")
-                    .unwrap();
+                let result = self.builder.build_call(rt_str, &[value.into()], "str_result").unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "or" => {
@@ -6938,10 +6352,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
                 let path = self.compile_arg(&args[0])?;
                 let rt_read = self.get_or_declare_rt_read();
-                let result = self
-                    .builder
-                    .build_call(rt_read, &[path.into()], "read_result")
-                    .unwrap();
+                let result = self.builder.build_call(rt_read, &[path.into()], "read_result").unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             "env" => {
@@ -6987,11 +6398,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_assoc = self.get_or_declare_rt_assoc();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_assoc,
-                        &[key.into(), value.into(), collection.into()],
-                        "assoc_result",
-                    )
+                    .build_call(rt_assoc, &[key.into(), value.into(), collection.into()], "assoc_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -7034,12 +6441,7 @@ impl<'ctx> CodegenContext<'ctx> {
                     .builder
                     .build_call(
                         rt_update_d,
-                        &[
-                            key.into(),
-                            default.into(),
-                            updater.into(),
-                            collection.into(),
-                        ],
+                        &[key.into(), default.into(), updater.into(), collection.into()],
                         "update_d_result",
                     )
                     .unwrap();
@@ -7216,11 +6618,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_iterate = self.get_or_declare_rt_iterate();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_iterate,
-                        &[generator.into(), initial.into()],
-                        "iterate_result",
-                    )
+                    .build_call(rt_iterate, &[generator.into(), initial.into()], "iterate_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -7260,11 +6658,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_range = self.get_or_declare_rt_range();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_range,
-                        &[from.into(), to.into(), step.into()],
-                        "range_result",
-                    )
+                    .build_call(rt_range, &[from.into(), to.into(), step.into()], "range_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -7324,9 +6718,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let argc_val = self.context.i32_type().const_int(argc as u64, false);
 
                 let argv_ptr = if argc == 0 {
-                    self.context
-                        .ptr_type(inkwell::AddressSpace::from(0))
-                        .const_null()
+                    self.context.ptr_type(inkwell::AddressSpace::from(0)).const_null()
                 } else {
                     // Allocate stack space for arguments
                     let array_type = i64_type.array_type(argc as u32);
@@ -7375,11 +6767,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 let rt_regex_match = self.get_or_declare_rt_regex_match();
                 let result = self
                     .builder
-                    .build_call(
-                        rt_regex_match,
-                        &[pattern.into(), string.into()],
-                        "regex_match_result",
-                    )
+                    .build_call(rt_regex_match, &[pattern.into(), string.into()], "regex_match_result")
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
@@ -7414,10 +6802,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 }
                 let value = self.compile_arg(&args[0])?;
                 let rt_md5 = self.get_or_declare_rt_md5();
-                let result = self
-                    .builder
-                    .build_call(rt_md5, &[value.into()], "md5_result")
-                    .unwrap();
+                let result = self.builder.build_call(rt_md5, &[value.into()], "md5_result").unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
             _ => Ok(None), // Not a builtin, let compile_call handle it
@@ -7523,8 +6908,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (label: i64, value: i64, time_nanos: i64) -> void
         let i64_type = self.context.i64_type();
         let void_type = self.context.void_type();
-        let fn_type =
-            void_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
+        let fn_type = void_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
         self.add_runtime_function(fn_name, fn_type)
     }
 
@@ -7552,12 +6936,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (label: i64, actual: i64, expected: i64, time_nanos: i64) -> i64 (bool)
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(
-            &[
-                i64_type.into(),
-                i64_type.into(),
-                i64_type.into(),
-                i64_type.into(),
-            ],
+            &[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()],
             false,
         );
         self.add_runtime_function(fn_name, fn_type)
@@ -8414,12 +7793,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: rt_update_d(key: Value, default: Value, updater: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(
-            &[
-                i64_type.into(),
-                i64_type.into(),
-                i64_type.into(),
-                i64_type.into(),
-            ],
+            &[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()],
             false,
         );
         self.add_runtime_function(fn_name, fn_type)

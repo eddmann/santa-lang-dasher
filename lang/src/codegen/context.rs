@@ -4,9 +4,7 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
-};
+use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine};
 use inkwell::values::PointerValue;
 use inkwell::OptimizationLevel;
 use std::collections::{HashMap, HashSet};
@@ -57,11 +55,7 @@ impl<'ctx> CodegenContext<'ctx> {
     }
 
     /// Create a new codegen context with a specific optimization level
-    pub fn with_optimization(
-        context: &'ctx Context,
-        module_name: &str,
-        opt_level: OptimizationLevel,
-    ) -> Self {
+    pub fn with_optimization(context: &'ctx Context, module_name: &str, opt_level: OptimizationLevel) -> Self {
         let module = context.create_module(module_name);
         let builder = context.create_builder();
 
@@ -113,13 +107,11 @@ impl<'ctx> CodegenContext<'ctx> {
         for stmt in stmts {
             match stmt {
                 Stmt::Let { value, .. } => {
-                    let captures =
-                        self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
+                    let captures = self.find_mutable_captures_in_expr(value, &mutable_vars, &bound_vars);
                     self.cell_variables.extend(captures);
                 }
                 Stmt::Expr(expr) | Stmt::Return(expr) | Stmt::Break(expr) => {
-                    let captures =
-                        self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
+                    let captures = self.find_mutable_captures_in_expr(expr, &mutable_vars, &bound_vars);
                     self.cell_variables.extend(captures);
                 }
             }
@@ -214,8 +206,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let triple = TargetMachine::get_default_triple();
 
         // Get the target
-        let target = Target::from_triple(&triple)
-            .map_err(|e| format!("Failed to get target from triple: {}", e))?;
+        let target = Target::from_triple(&triple).map_err(|e| format!("Failed to get target from triple: {}", e))?;
 
         // Create target machine with the configured optimization level
         // Use native CPU and features for best performance on the host machine
@@ -244,8 +235,7 @@ impl<'ctx> CodegenContext<'ctx> {
             .map_err(|e| format!("Failed to initialize native target: {}", e))?;
 
         let triple = TargetMachine::get_default_triple();
-        let target = Target::from_triple(&triple)
-            .map_err(|e| format!("Failed to get target from triple: {}", e))?;
+        let target = Target::from_triple(&triple).map_err(|e| format!("Failed to get target from triple: {}", e))?;
 
         // Use native CPU and features for best performance on the host machine
         let cpu = TargetMachine::get_host_cpu_name();

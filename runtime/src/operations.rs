@@ -66,9 +66,7 @@ pub(crate) fn is_infinite_lazy_sequence(lazy: &LazySequenceObject) -> bool {
         LazySeqKind::Iterate { .. } => true,
         LazySeqKind::Map { source, .. }
         | LazySeqKind::Filter { source, .. }
-        | LazySeqKind::FilterMap { source, .. } => {
-            is_infinite_lazy_sequence(source)
-        }
+        | LazySeqKind::FilterMap { source, .. } => is_infinite_lazy_sequence(source),
         LazySeqKind::Zip { sources } => sources.iter().all(is_infinite_lazy_sequence),
         LazySeqKind::Range { end: Some(_), .. } => false,
         LazySeqKind::Skip { source, .. } => is_infinite_lazy_sequence(source),
@@ -120,7 +118,7 @@ pub extern "C-unwind" fn rt_add(left: Value, right: Value) -> Value {
         let r_str = value_to_string(&right);
         // Pre-allocate to avoid reallocation during string building
         let mut result = String::with_capacity(l.len() + r_str.len());
-        result.push_str(&l);
+        result.push_str(l);
         result.push_str(&r_str);
         return Value::from_string(result);
     }
@@ -231,11 +229,7 @@ pub extern "C-unwind" fn rt_sub(left: Value, right: Value) -> Value {
     if let Some(set) = left.as_set() {
         if let Some(list) = right.as_list() {
             let to_remove: im::HashSet<Value> = list.iter().copied().collect();
-            let result: im::HashSet<Value> = set
-                .iter()
-                .filter(|v| !to_remove.contains(*v))
-                .copied()
-                .collect();
+            let result: im::HashSet<Value> = set.iter().filter(|v| !to_remove.contains(*v)).copied().collect();
             return Value::from_set(result);
         }
     }
@@ -245,11 +239,7 @@ pub extern "C-unwind" fn rt_sub(left: Value, right: Value) -> Value {
         if let Some(lazy) = right.as_lazy_sequence() {
             let items = crate::builtins::collect_bounded_lazy(lazy);
             let to_remove: im::HashSet<Value> = items.iter().copied().collect();
-            let result: im::HashSet<Value> = set
-                .iter()
-                .filter(|v| !to_remove.contains(*v))
-                .copied()
-                .collect();
+            let result: im::HashSet<Value> = set.iter().filter(|v| !to_remove.contains(*v)).copied().collect();
             return Value::from_set(result);
         }
     }
@@ -462,11 +452,7 @@ pub extern "C" fn rt_is_list(value: Value) -> i64 {
 /// Like blitzen, missing elements are allowed and will be `nil` when indexed
 /// out of bounds (patterns like `[item, ..rest]` can match `[]` with item=nil).
 #[no_mangle]
-pub extern "C-unwind" fn rt_expect_list_len(
-    value: Value,
-    _expected_len: Value,
-    _has_rest: Value,
-) -> Value {
+pub extern "C-unwind" fn rt_expect_list_len(value: Value, _expected_len: Value, _has_rest: Value) -> Value {
     // Just verify it's a list - don't check length
     if value.as_list().is_none() {
         runtime_error("List destructuring requires a List");
@@ -515,10 +501,7 @@ pub extern "C-unwind" fn rt_negate(value: Value) -> Value {
     } else if let Some(f) = value.as_decimal() {
         Value::from_decimal(-f)
     } else {
-        runtime_error(&format!(
-            "Invalid operand for -: {}",
-            type_name(&value)
-        ))
+        runtime_error(&format!("Invalid operand for -: {}", type_name(&value)))
     }
 }
 
@@ -817,11 +800,7 @@ pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -
         }
 
         // Call the inner function with truncated args
-        let result = rt_call(
-            inner_closure,
-            effective_args.len() as u32,
-            effective_args.as_ptr(),
-        );
+        let result = rt_call(inner_closure, effective_args.len() as u32, effective_args.as_ptr());
 
         // Cache the result
         memoized.cache_result(effective_args, result);
@@ -936,11 +915,7 @@ pub extern "C" fn rt_cell_set(cell: Value, value: Value) -> Value {
 /// - captures[1] = second function (g)
 ///
 /// When called with argument x, it returns g(f(x)).
-extern "C" fn composed_closure_impl(
-    env: *const ClosureObject,
-    argc: u32,
-    argv: *const Value,
-) -> Value {
+extern "C" fn composed_closure_impl(env: *const ClosureObject, argc: u32, argv: *const Value) -> Value {
     // Get the two captured functions from the closure environment
     let (f, g) = if env.is_null() {
         runtime_error("composed_closure_impl: null environment");
@@ -967,12 +942,10 @@ extern "C" fn composed_closure_impl(
 #[no_mangle]
 pub extern "C" fn rt_compose(f: Value, g: Value) -> Value {
     // Verify both arguments are callable
-    let f_is_callable = f.as_closure().is_some()
-        || f.as_memoized_closure().is_some()
-        || f.as_partial_application().is_some();
-    let g_is_callable = g.as_closure().is_some()
-        || g.as_memoized_closure().is_some()
-        || g.as_partial_application().is_some();
+    let f_is_callable =
+        f.as_closure().is_some() || f.as_memoized_closure().is_some() || f.as_partial_application().is_some();
+    let g_is_callable =
+        g.as_closure().is_some() || g.as_memoized_closure().is_some() || g.as_partial_application().is_some();
 
     if !f_is_callable {
         runtime_error(&format!(

@@ -1,5 +1,5 @@
-use im;
 use crate::operations::runtime_error;
+use im;
 use std::cell::{OnceCell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::AtomicU32;
@@ -261,12 +261,7 @@ pub struct ClosureObject {
 }
 
 impl ClosureObject {
-    pub fn new(
-        function_ptr: *const (),
-        arity: u32,
-        has_rest: bool,
-        captures: Vec<super::value::Value>,
-    ) -> Box<Self> {
+    pub fn new(function_ptr: *const (), arity: u32, has_rest: bool, captures: Vec<super::value::Value>) -> Box<Self> {
         Box::new(ClosureObject {
             header: ObjectHeader::new(TypeTag::Closure),
             function_ptr,
@@ -295,9 +290,7 @@ pub struct MemoizedClosureObject {
     pub arity: u32,
     /// Cache: arguments -> result
     /// We use RefCell for interior mutability since the cache updates on each call
-    pub cache: std::cell::RefCell<
-        std::collections::HashMap<Vec<super::value::Value>, super::value::Value>,
-    >,
+    pub cache: std::cell::RefCell<std::collections::HashMap<Vec<super::value::Value>, super::value::Value>>,
 }
 
 impl MemoizedClosureObject {
@@ -341,11 +334,7 @@ pub struct PartialApplicationObject {
 }
 
 impl PartialApplicationObject {
-    pub fn new(
-        closure: super::value::Value,
-        args: Vec<super::value::Value>,
-        remaining_arity: u32,
-    ) -> Box<Self> {
+    pub fn new(closure: super::value::Value, args: Vec<super::value::Value>, remaining_arity: u32) -> Box<Self> {
         Box::new(PartialApplicationObject {
             header: ObjectHeader::new(TypeTag::PartialApplication),
             closure,
@@ -374,9 +363,9 @@ pub enum LazySeqKind {
     /// Uses Rc<RefCell<>> for mutable state that persists across clones,
     /// allowing efficient indexed access without recomputing from start.
     Iterate {
-        generator: super::value::Value,                   // Closure
-        current: Rc<RefCell<super::value::Value>>,        // Mutable current value
-        index: Rc<RefCell<usize>>,                        // Current index (for caching)
+        generator: super::value::Value,            // Closure
+        current: Rc<RefCell<super::value::Value>>, // Mutable current value
+        index: Rc<RefCell<usize>>,                 // Current index (for caching)
     },
 
     /// Range-based lazy sequence (from .. syntax)
@@ -464,10 +453,8 @@ impl LazySequenceObject {
             runtime_error("range requires non-zero step");
         }
         if let Some(end_val) = end {
-            if start != end_val {
-                if (end_val > start && step < 0) || (end_val < start && step > 0) {
-                    runtime_error("range step direction does not match range");
-                }
+            if start != end_val && ((end_val > start && step < 0) || (end_val < start && step > 0)) {
+                runtime_error("range step direction does not match range");
             }
         }
         Self::new(LazySeqKind::Range {
@@ -580,8 +567,7 @@ impl LazySequenceObject {
                 }
 
                 // Get current combination
-                let combination: im::Vector<super::value::Value> =
-                    indices.iter().map(|&i| source[i]).collect();
+                let combination: im::Vector<super::value::Value> = indices.iter().map(|&i| source[i]).collect();
                 let value = super::value::Value::from_list(combination);
 
                 // Advance to next combination

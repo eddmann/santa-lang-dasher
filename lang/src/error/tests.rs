@@ -79,14 +79,8 @@ Stack trace:
 #[test]
 fn error_kind() {
     assert_eq!(SantaError::lex("test", pos(1, 1)).kind(), "LexError");
-    assert_eq!(
-        SantaError::parse("test", span(1, 1, 1, 1)).kind(),
-        "ParseError"
-    );
-    assert_eq!(
-        SantaError::compile("test", span(1, 1, 1, 1)).kind(),
-        "CompileError"
-    );
+    assert_eq!(SantaError::parse("test", span(1, 1, 1, 1)).kind(), "ParseError");
+    assert_eq!(SantaError::compile("test", span(1, 1, 1, 1)).kind(), "CompileError");
     assert_eq!(SantaError::runtime("test").kind(), "RuntimeError");
 }
 
@@ -129,9 +123,7 @@ fn from_lex_error_unexpected_char() {
 
 #[test]
 fn from_lex_error_unterminated_string() {
-    let lex_err = LexError::UnterminatedString {
-        position: pos(5, 10),
-    };
+    let lex_err = LexError::UnterminatedString { position: pos(5, 10) };
     let santa_err: SantaError = lex_err.into();
     let display = format!("{}", santa_err);
     expect![[r#"LexError at 5:10: Unterminated string literal"#]].assert_eq(&display);

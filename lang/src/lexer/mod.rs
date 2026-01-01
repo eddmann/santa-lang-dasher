@@ -253,12 +253,7 @@ impl Lexer {
                 self.advance();
                 TokenKind::At
             }
-            _ => {
-                return Err(LexError::UnexpectedCharacter {
-                    ch,
-                    position: start,
-                })
-            }
+            _ => return Err(LexError::UnexpectedCharacter { ch, position: start }),
         };
 
         let end = self.current_position();
@@ -399,17 +394,11 @@ impl Lexer {
         if has_decimal_point {
             text.parse::<f64>()
                 .map(TokenKind::Decimal)
-                .map_err(|_| LexError::InvalidNumber {
-                    text,
-                    position: start,
-                })
+                .map_err(|_| LexError::InvalidNumber { text, position: start })
         } else {
             text.parse::<i64>()
                 .map(TokenKind::Integer)
-                .map_err(|_| LexError::InvalidNumber {
-                    text,
-                    position: start,
-                })
+                .map_err(|_| LexError::InvalidNumber { text, position: start })
         }
     }
 

@@ -36,15 +36,11 @@ fn main() {
     let project_root = PathBuf::from(&manifest_dir).parent().unwrap().to_path_buf();
     println!(
         "cargo:rerun-if-changed={}",
-        project_root
-            .join("target/release/libsanta_lang_runtime.a")
-            .display()
+        project_root.join("target/release/libsanta_lang_runtime.a").display()
     );
     println!(
         "cargo:rerun-if-changed={}",
-        project_root
-            .join("target/debug/libsanta_lang_runtime.a")
-            .display()
+        project_root.join("target/debug/libsanta_lang_runtime.a").display()
     );
 
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());

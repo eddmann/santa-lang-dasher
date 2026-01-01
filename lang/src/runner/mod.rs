@@ -172,16 +172,8 @@ impl Runner {
             } = test
             {
                 // Only run parts that have expected values in this test
-                let run_part_one = if expected_one.is_some() {
-                    part_one_expr
-                } else {
-                    None
-                };
-                let run_part_two = if expected_two.is_some() {
-                    part_two_expr
-                } else {
-                    None
-                };
+                let run_part_one = if expected_one.is_some() { part_one_expr } else { None };
+                let run_part_two = if expected_two.is_some() { part_two_expr } else { None };
 
                 let result = self.execute_single_test(
                     &program.statements,
@@ -212,35 +204,24 @@ impl Runner {
         slow: bool,
     ) -> Result<TestResult, RunnerError> {
         // Generate source for this test: bind input from test section, evaluate parts
-        let source =
-            self.generate_test_source(statements, test_input, part_one_expr, part_two_expr);
+        let source = self.generate_test_source(statements, test_input, part_one_expr, part_two_expr);
 
         // Compile and execute
         let solution_result = self.compile_and_execute(&source)?;
 
         // Evaluate expected values
-        let part_one_expected = expected_one
-            .map(|e| self.eval_expected_value(e))
-            .transpose()?;
-        let part_two_expected = expected_two
-            .map(|e| self.eval_expected_value(e))
-            .transpose()?;
+        let part_one_expected = expected_one.map(|e| self.eval_expected_value(e)).transpose()?;
+        let part_two_expected = expected_two.map(|e| self.eval_expected_value(e)).transpose()?;
 
         // Compare results with expected values
-        let part_one_passed = match (
-            solution_result.part_one.as_ref(),
-            part_one_expected.as_ref(),
-        ) {
+        let part_one_passed = match (solution_result.part_one.as_ref(), part_one_expected.as_ref()) {
             (Some(actual), Some(expected)) => Some(self.values_equal(actual, expected)),
             (None, None) => None,
-            (Some(_), None) => None, // Has actual but no expected - not tested
+            (Some(_), None) => None,        // Has actual but no expected - not tested
             (None, Some(_)) => Some(false), // Expected but didn't produce - failure
         };
 
-        let part_two_passed = match (
-            solution_result.part_two.as_ref(),
-            part_two_expected.as_ref(),
-        ) {
+        let part_two_passed = match (solution_result.part_two.as_ref(), part_two_expected.as_ref()) {
             (Some(actual), Some(expected)) => Some(self.values_equal(actual, expected)),
             (None, None) => None,
             (Some(_), None) => None,
@@ -353,9 +334,9 @@ impl Runner {
                 if let Some(ref script_path) = self.config.script_path {
                     cmd.env("DASHER_SCRIPT_PATH", script_path);
                 }
-                let output = cmd.output().map_err(|e| {
-                    RunnerError::RuntimeError(format!("Eval execution failed: {}", e))
-                })?;
+                let output = cmd
+                    .output()
+                    .map_err(|e| RunnerError::RuntimeError(format!("Eval execution failed: {}", e)))?;
 
                 std::fs::remove_file(&exe_path).ok();
 
@@ -395,12 +376,7 @@ impl Runner {
         let part_two_expr = self.get_part_two_section(program);
 
         // Generate source code for execution
-        let source = self.generate_executable_source(
-            &program.statements,
-            input_expr,
-            part_one_expr,
-            part_two_expr,
-        );
+        let source = self.generate_executable_source(&program.statements, input_expr, part_one_expr, part_two_expr);
 
         // Compile and execute
         self.compile_and_execute(&source)
@@ -408,13 +384,10 @@ impl Runner {
 
     /// Get the input section expression if present
     fn get_input_section<'a>(&self, program: &'a Program) -> Option<&'a Expr> {
-        program.sections.iter().find_map(|s| {
-            if let Section::Input(expr) = s {
-                Some(expr)
-            } else {
-                None
-            }
-        })
+        program
+            .sections
+            .iter()
+            .find_map(|s| if let Section::Input(expr) = s { Some(expr) } else { None })
     }
 
     /// Extract AOC URL from input section if it's a read("aoc://...") call.
@@ -577,11 +550,7 @@ impl Runner {
             Expr::Prefix { op, right } => {
                 // Wrap operand in parentheses to preserve structure during re-parsing
                 // Without this, `!(a `includes?` b)` becomes `(!a) `includes?` b`
-                format!(
-                    "{}({})",
-                    self.prefix_op_to_source(op),
-                    self.expr_to_source(right)
-                )
+                format!("{}({})", self.prefix_op_to_source(op), self.expr_to_source(right))
             }
             Expr::Block(stmts) => {
                 if stmts.is_empty() {
@@ -598,15 +567,11 @@ impl Runner {
                             // Let statement returns the bound value
                             // Output as { let x = ...; x } for simple patterns
                             if let Pattern::Identifier(name) = pattern {
-                                format!(
-                                    "{{ {}; {} }}",
-                                    self.stmt_to_source(&stmts[0]),
-                                    name
-                                )
+                                format!("{{ {}; {} }}", self.stmt_to_source(&stmts[0]), name)
                             } else {
                                 // For complex patterns, use the first identifier from pattern
                                 // or just nil if we can't extract one
-                                let first_binding = self.first_pattern_identifier(pattern);
+                                let first_binding = Self::first_pattern_identifier(pattern);
                                 if let Some(name) = first_binding {
                                     format!("{{ {}; {} }}", self.stmt_to_source(&stmts[0]), name)
                                 } else {
@@ -663,17 +628,10 @@ impl Runner {
                 s
             }
             Expr::Function { params, body } => {
-                let params_str: Vec<String> = params
-                    .iter()
-                    .map(|p| self.pattern_to_source(&p.pattern))
-                    .collect();
+                let params_str: Vec<String> = params.iter().map(|p| self.pattern_to_source(&p.pattern)).collect();
                 format!("|{}| {}", params_str.join(", "), self.expr_to_source(body))
             }
-            Expr::Range {
-                start,
-                end,
-                inclusive,
-            } => {
+            Expr::Range { start, end, inclusive } => {
                 let start_str = self.expr_to_source(start);
                 match end {
                     Some(end_expr) => {
@@ -701,11 +659,7 @@ impl Runner {
                 format!("#{{{}}}", entries_str.join(", "))
             }
             Expr::Index { collection, index } => {
-                format!(
-                    "{}[{}]",
-                    self.expr_to_source(collection),
-                    self.expr_to_source(index)
-                )
+                format!("{}[{}]", self.expr_to_source(collection), self.expr_to_source(index))
             }
             Expr::Match { subject, arms } => {
                 let mut s = format!("match {} {{", self.expr_to_source(subject));
@@ -717,11 +671,7 @@ impl Runner {
                     } else {
                         String::new()
                     };
-                    s.push_str(&format!(
-                        " {}{} ",
-                        self.pattern_to_source(&arm.pattern),
-                        guard_str
-                    ));
+                    s.push_str(&format!(" {}{} ", self.pattern_to_source(&arm.pattern), guard_str));
                     s.push_str(&self.block_or_expr_to_source(&arm.body));
                 }
                 s.push_str(" }");
@@ -733,11 +683,7 @@ impl Runner {
             Expr::Spread(inner) => {
                 format!("..{}", self.expr_to_source(inner))
             }
-            Expr::InfixCall {
-                function,
-                left,
-                right,
-            } => {
+            Expr::InfixCall { function, left, right } => {
                 // Wrap in parentheses to preserve structure during re-parsing
                 // Without this, `a `f` b || c` might not parse correctly
                 format!(
@@ -761,13 +707,12 @@ impl Runner {
                     then_str
                 );
                 if let Some(else_br) = else_branch {
-                    let else_str =
-                        if matches!(else_br.as_ref(), Expr::If { .. } | Expr::IfLet { .. }) {
-                            // else if / else if let chains
-                            self.expr_to_source(else_br)
-                        } else {
-                            self.block_or_expr_to_source(else_br)
-                        };
+                    let else_str = if matches!(else_br.as_ref(), Expr::If { .. } | Expr::IfLet { .. }) {
+                        // else if / else if let chains
+                        self.expr_to_source(else_br)
+                    } else {
+                        self.block_or_expr_to_source(else_br)
+                    };
                     s.push_str(&format!(" else {}", else_str));
                 }
                 s
@@ -846,15 +791,10 @@ impl Runner {
             Pattern::RestIdentifier(name) => format!("..{}", name),
             Pattern::Literal(lit) => self.literal_to_source(lit),
             Pattern::List(patterns) => {
-                let pats: Vec<String> =
-                    patterns.iter().map(|p| self.pattern_to_source(p)).collect();
+                let pats: Vec<String> = patterns.iter().map(|p| self.pattern_to_source(p)).collect();
                 format!("[{}]", pats.join(", "))
             }
-            Pattern::Range {
-                start,
-                end,
-                inclusive,
-            } => {
+            Pattern::Range { start, end, inclusive } => {
                 if let Some(e) = end {
                     if *inclusive {
                         format!("{}..={}", start, e)
@@ -869,13 +809,13 @@ impl Runner {
     }
 
     /// Get the first identifier from a pattern (for returning bound value)
-    fn first_pattern_identifier(&self, pattern: &Pattern) -> Option<String> {
+    fn first_pattern_identifier(pattern: &Pattern) -> Option<String> {
         match pattern {
             Pattern::Identifier(name) => Some(name.clone()),
             Pattern::List(patterns) => {
                 // Return the first non-rest, non-wildcard identifier
                 for p in patterns {
-                    if let Some(name) = self.first_pattern_identifier(p) {
+                    if let Some(name) = Self::first_pattern_identifier(p) {
                         return Some(name);
                     }
                 }
@@ -1147,11 +1087,7 @@ impl Runner {
     /// Generate source code with an optionally pre-resolved input string.
     /// If `resolved_input` is Some, it will be embedded as a string literal
     /// instead of the original input expression (used for baking AOC input).
-    pub fn generate_source_with_resolved_input(
-        &self,
-        program: &Program,
-        resolved_input: Option<&str>,
-    ) -> String {
+    pub fn generate_source_with_resolved_input(&self, program: &Program, resolved_input: Option<&str>) -> String {
         let input_expr = self.get_input_section(program);
         let part_one_expr = self.get_part_one_section(program);
         let part_two_expr = self.get_part_two_section(program);
@@ -1191,7 +1127,9 @@ impl Runner {
 
         // Check for test mode via command line args
         source.push_str("let __args = __get_args();\n");
-        source.push_str("let __test_mode = size(__args) > 0 && (first(__args) == \"-t\" || first(__args) == \"--test\");\n");
+        source.push_str(
+            "let __test_mode = size(__args) > 0 && (first(__args) == \"-t\" || first(__args) == \"--test\");\n",
+        );
         source.push_str("let __include_slow = __test_mode && size(__args) > 1 && (__args[1] == \"-s\" || __args[1] == \"--slow\");\n");
         source.push('\n');
 

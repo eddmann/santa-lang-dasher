@@ -83,14 +83,8 @@ fn builtin_signature_for(name: &'static str) -> BuiltinSignature {
         "dict" => sig!(vec![ParamType::Any], ReturnType::Dynamic),
 
         // ===== 11.2 Collection Access =====
-        "get" => sig!(
-            vec![ParamType::Any, ParamType::Collection],
-            ReturnType::Dynamic
-        ),
-        "size" => sig!(
-            vec![ParamType::Collection],
-            ReturnType::Concrete(Type::Int)
-        ),
+        "get" => sig!(vec![ParamType::Any, ParamType::Collection], ReturnType::Dynamic),
+        "size" => sig!(vec![ParamType::Collection], ReturnType::Concrete(Type::Int)),
         "first" => sig!(vec![ParamType::Collection], ReturnType::ElementOf(0)),
         "second" => sig!(vec![ParamType::Collection], ReturnType::ElementOf(0)),
         "last" => sig!(vec![ParamType::Collection], ReturnType::ElementOf(0)),
@@ -99,10 +93,7 @@ fn builtin_signature_for(name: &'static str) -> BuiltinSignature {
         "values" => sig!(vec![ParamType::Any], ReturnType::Dynamic),
 
         // ===== 11.3 Collection Modification =====
-        "push" => sig!(
-            vec![ParamType::Any, ParamType::Collection],
-            ReturnType::SameAs(1)
-        ),
+        "push" => sig!(vec![ParamType::Any, ParamType::Collection], ReturnType::SameAs(1)),
         "assoc" => sig!(
             vec![ParamType::Any, ParamType::Any, ParamType::Collection],
             ReturnType::SameAs(2)
@@ -130,18 +121,9 @@ fn builtin_signature_for(name: &'static str) -> BuiltinSignature {
             vec![ParamType::Function(1), ParamType::Collection],
             ReturnType::SameAs(1)
         ),
-        "flat_map" => sig!(
-            vec![ParamType::Function(1), ParamType::Collection],
-            ReturnType::Dynamic
-        ),
-        "filter_map" => sig!(
-            vec![ParamType::Function(1), ParamType::Collection],
-            ReturnType::Dynamic
-        ),
-        "find_map" => sig!(
-            vec![ParamType::Function(1), ParamType::Collection],
-            ReturnType::Dynamic
-        ),
+        "flat_map" => sig!(vec![ParamType::Function(1), ParamType::Collection], ReturnType::Dynamic),
+        "filter_map" => sig!(vec![ParamType::Function(1), ParamType::Collection], ReturnType::Dynamic),
+        "find_map" => sig!(vec![ParamType::Function(1), ParamType::Collection], ReturnType::Dynamic),
 
         // ===== 11.5 Reduction =====
         "reduce" => sig!(
@@ -149,27 +131,15 @@ fn builtin_signature_for(name: &'static str) -> BuiltinSignature {
             ReturnType::ElementOf(1)
         ),
         "fold" => sig!(
-            vec![
-                ParamType::Any,
-                ParamType::Function(2),
-                ParamType::Collection
-            ],
+            vec![ParamType::Any, ParamType::Function(2), ParamType::Collection],
             ReturnType::SameAs(0)
         ),
         "fold_s" => sig!(
-            vec![
-                ParamType::Any,
-                ParamType::Function(2),
-                ParamType::Collection
-            ],
+            vec![ParamType::Any, ParamType::Function(2), ParamType::Collection],
             ReturnType::SameAs(0)
         ),
         "scan" => sig!(
-            vec![
-                ParamType::Any,
-                ParamType::Function(2),
-                ParamType::Collection
-            ],
+            vec![ParamType::Any, ParamType::Function(2), ParamType::Collection],
             ReturnType::Dynamic
         ),
 
@@ -203,7 +173,10 @@ fn builtin_signature_for(name: &'static str) -> BuiltinSignature {
             vec![ParamType::Concrete(Type::Int), ParamType::Collection],
             ReturnType::ListOf(1)
         ),
-        "sort" => sig!(vec![ParamType::Function(2), ParamType::Collection], ReturnType::ListOf(1)),
+        "sort" => sig!(
+            vec![ParamType::Function(2), ParamType::Collection],
+            ReturnType::ListOf(1)
+        ),
         "reverse" => sig!(vec![ParamType::Collection], ReturnType::Dynamic),
         "rotate" => sig!(
             vec![ParamType::Concrete(Type::Int), ParamType::Collection],
@@ -275,24 +248,15 @@ fn builtin_signature_for(name: &'static str) -> BuiltinSignature {
             ReturnType::Concrete(Type::List(Box::new(Type::String)))
         ),
         "split" => sig!(
-            vec![
-                ParamType::Concrete(Type::String),
-                ParamType::Concrete(Type::String)
-            ],
+            vec![ParamType::Concrete(Type::String), ParamType::Concrete(Type::String)],
             ReturnType::Concrete(Type::List(Box::new(Type::String)))
         ),
         "regex_match" => sig!(
-            vec![
-                ParamType::Concrete(Type::String),
-                ParamType::Concrete(Type::String)
-            ],
+            vec![ParamType::Concrete(Type::String), ParamType::Concrete(Type::String)],
             ReturnType::Dynamic
         ),
         "regex_match_all" => sig!(
-            vec![
-                ParamType::Concrete(Type::String),
-                ParamType::Concrete(Type::String)
-            ],
+            vec![ParamType::Concrete(Type::String), ParamType::Concrete(Type::String)],
             ReturnType::Dynamic
         ),
         "md5" => sig!(
@@ -322,10 +286,7 @@ fn builtin_signature_for(name: &'static str) -> BuiltinSignature {
 
         // ===== 11.14 Math Functions =====
         "abs" => sig!(vec![ParamType::Any], ReturnType::SameAs(0)),
-        "signum" => sig!(
-            vec![ParamType::Any],
-            ReturnType::Concrete(Type::Int)
-        ),
+        "signum" => sig!(vec![ParamType::Any], ReturnType::Concrete(Type::Int)),
         "vec_add" => sig!(
             vec![ParamType::Collection, ParamType::Collection],
             ReturnType::SameAs(0)
@@ -333,59 +294,32 @@ fn builtin_signature_for(name: &'static str) -> BuiltinSignature {
 
         // ===== 11.15 Bitwise Functions =====
         "bit_and" => sig!(
-            vec![
-                ParamType::Concrete(Type::Int),
-                ParamType::Concrete(Type::Int)
-            ],
+            vec![ParamType::Concrete(Type::Int), ParamType::Concrete(Type::Int)],
             ReturnType::Concrete(Type::Int)
         ),
         "bit_or" => sig!(
-            vec![
-                ParamType::Concrete(Type::Int),
-                ParamType::Concrete(Type::Int)
-            ],
+            vec![ParamType::Concrete(Type::Int), ParamType::Concrete(Type::Int)],
             ReturnType::Concrete(Type::Int)
         ),
         "bit_xor" => sig!(
-            vec![
-                ParamType::Concrete(Type::Int),
-                ParamType::Concrete(Type::Int)
-            ],
+            vec![ParamType::Concrete(Type::Int), ParamType::Concrete(Type::Int)],
             ReturnType::Concrete(Type::Int)
         ),
-        "bit_not" => sig!(
-            vec![ParamType::Concrete(Type::Int)],
-            ReturnType::Concrete(Type::Int)
-        ),
+        "bit_not" => sig!(vec![ParamType::Concrete(Type::Int)], ReturnType::Concrete(Type::Int)),
         "bit_shift_left" => sig!(
-            vec![
-                ParamType::Concrete(Type::Int),
-                ParamType::Concrete(Type::Int)
-            ],
+            vec![ParamType::Concrete(Type::Int), ParamType::Concrete(Type::Int)],
             ReturnType::Concrete(Type::Int)
         ),
         "bit_shift_right" => sig!(
-            vec![
-                ParamType::Concrete(Type::Int),
-                ParamType::Concrete(Type::Int)
-            ],
+            vec![ParamType::Concrete(Type::Int), ParamType::Concrete(Type::Int)],
             ReturnType::Concrete(Type::Int)
         ),
 
         // ===== 11.16 Utility Functions =====
         "id" => sig!(vec![ParamType::Any], ReturnType::SameAs(0)),
-        "type" => sig!(
-            vec![ParamType::Any],
-            ReturnType::Concrete(Type::String)
-        ),
-        "memoize" => sig!(
-            vec![ParamType::Function(1)],
-            ReturnType::SameAs(0)
-        ),
-        "evaluate" => sig!(
-            vec![ParamType::Concrete(Type::String)],
-            ReturnType::Dynamic
-        ),
+        "type" => sig!(vec![ParamType::Any], ReturnType::Concrete(Type::String)),
+        "memoize" => sig!(vec![ParamType::Function(1)], ReturnType::SameAs(0)),
+        "evaluate" => sig!(vec![ParamType::Concrete(Type::String)], ReturnType::Dynamic),
         "or" => sig!(vec![ParamType::Any, ParamType::Any], ReturnType::Dynamic),
         "and" => sig!(vec![ParamType::Any, ParamType::Any], ReturnType::Dynamic),
         // ===== External Functions =====
@@ -405,15 +339,9 @@ pub fn compute_return_type(sig: &BuiltinSignature, arg_types: &[Type]) -> Type {
     match &sig.ret {
         ReturnType::Concrete(ty) => ty.clone(),
         ReturnType::SameAs(idx) => arg_types.get(*idx).cloned().unwrap_or(Type::Unknown),
-        ReturnType::ElementOf(idx) => arg_types
-            .get(*idx)
-            .map(element_type_of)
-            .unwrap_or(Type::Unknown),
+        ReturnType::ElementOf(idx) => arg_types.get(*idx).map(element_type_of).unwrap_or(Type::Unknown),
         ReturnType::ListOf(idx) => {
-            let elem_ty = arg_types
-                .get(*idx)
-                .map(element_type_of)
-                .unwrap_or(Type::Unknown);
+            let elem_ty = arg_types.get(*idx).map(element_type_of).unwrap_or(Type::Unknown);
             Type::List(Box::new(elem_ty))
         }
         ReturnType::ListOfFunctionReturn(idx) => {
@@ -450,11 +378,7 @@ pub fn element_type_of(ty: &Type) -> Type {
 ///
 /// This enables bidirectional type inference: we flow type information "backward"
 /// from how a lambda is used to determine its parameter types.
-pub fn compute_expected_lambda_type(
-    sig: &BuiltinSignature,
-    arg_idx: usize,
-    arg_types: &[Type],
-) -> Option<Type> {
+pub fn compute_expected_lambda_type(sig: &BuiltinSignature, arg_idx: usize, arg_types: &[Type]) -> Option<Type> {
     // Check if this parameter position expects a function
     let param = sig.params.get(arg_idx)?;
 
@@ -485,8 +409,7 @@ fn compute_lambda_param_types(builtin_name: &str, arity: usize, arg_types: &[Typ
         // find(pred, collection) - pred takes element
         // any?(pred, collection) - pred takes element
         // all?(pred, collection) - pred takes element
-        "filter" | "map" | "flat_map" | "filter_map" | "find_map" | "each" | "find" | "count"
-        | "any?" | "all?" => {
+        "filter" | "map" | "flat_map" | "filter_map" | "find_map" | "each" | "find" | "count" | "any?" | "all?" => {
             // Lambda is first arg (idx 0), collection is second arg (idx 1)
             if let Some(collection_ty) = arg_types.get(1) {
                 let elem_ty = element_type_of(collection_ty);
@@ -512,10 +435,7 @@ fn compute_lambda_param_types(builtin_name: &str, arity: usize, arg_types: &[Typ
         "fold" | "fold_s" | "scan" => {
             // init is idx 0, fn is idx 1, collection is idx 2
             let acc_ty = arg_types.first().cloned().unwrap_or(Type::Unknown);
-            let elem_ty = arg_types
-                .get(2)
-                .map(element_type_of)
-                .unwrap_or(Type::Unknown);
+            let elem_ty = arg_types.get(2).map(element_type_of).unwrap_or(Type::Unknown);
             vec![acc_ty, elem_ty]
         }
 
@@ -567,10 +487,7 @@ fn compute_lambda_return_type(builtin_name: &str, arg_types: &[Type]) -> Type {
             // For fold, return type should match initial value type
             // For reduce, return type matches element type
             if builtin_name == "reduce" {
-                arg_types
-                    .get(1)
-                    .map(element_type_of)
-                    .unwrap_or(Type::Unknown)
+                arg_types.get(1).map(element_type_of).unwrap_or(Type::Unknown)
             } else {
                 arg_types.first().cloned().unwrap_or(Type::Unknown)
             }

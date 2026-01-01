@@ -25,10 +25,7 @@ input: "test2"
 "#,
     );
     let runner = Runner::new();
-    assert_eq!(
-        runner.validate_program(&program),
-        Err(RunnerError::DuplicateInput)
-    );
+    assert_eq!(runner.validate_program(&program), Err(RunnerError::DuplicateInput));
 }
 
 #[test]
@@ -40,10 +37,7 @@ part_one: 2
 "#,
     );
     let runner = Runner::new();
-    assert_eq!(
-        runner.validate_program(&program),
-        Err(RunnerError::DuplicatePartOne)
-    );
+    assert_eq!(runner.validate_program(&program), Err(RunnerError::DuplicatePartOne));
 }
 
 #[test]
@@ -55,10 +49,7 @@ part_two: 2
 "#,
     );
     let runner = Runner::new();
-    assert_eq!(
-        runner.validate_program(&program),
-        Err(RunnerError::DuplicatePartTwo)
-    );
+    assert_eq!(runner.validate_program(&program), Err(RunnerError::DuplicatePartTwo));
 }
 
 #[test]
@@ -1330,10 +1321,7 @@ test: {
     let bound: HashSet<String> = HashSet::new();
     let self_refs = CodegenContext::find_self_referencing_bindings(&reparsed.statements, &bound);
 
-    println!(
-        "Self-referencing bindings in generated source: {:?}",
-        self_refs
-    );
+    println!("Self-referencing bindings in generated source: {:?}", self_refs);
     assert!(
         self_refs.contains("fact"),
         "fact should still be detected as self-referencing in generated source"
@@ -1367,11 +1355,7 @@ puts("RESULT:", double(5));
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     println!("Output: {}", stdout);
-    assert!(
-        stdout.contains("RESULT: 10"),
-        "Should output 10, got: {}",
-        stdout
-    );
+    assert!(stdout.contains("RESULT: 10"), "Should output 10, got: {}", stdout);
 }
 
 #[test]
@@ -1402,11 +1386,7 @@ puts("RESULT:", f(5));
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     println!("Output: {}", stdout);
-    assert!(
-        stdout.contains("RESULT: 5"),
-        "Should output 5, got: {}",
-        stdout
-    );
+    assert!(stdout.contains("RESULT: 5"), "Should output 5, got: {}", stdout);
 }
 
 #[test]
@@ -1437,11 +1417,7 @@ puts("RESULT:", f(5));
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     println!("Output: {}", stdout);
-    assert!(
-        stdout.contains("RESULT: 42"),
-        "Should output 42, got: {}",
-        stdout
-    );
+    assert!(stdout.contains("RESULT: 42"), "Should output 42, got: {}", stdout);
 }
 
 #[test]
@@ -1471,11 +1447,7 @@ puts("RESULT:", my_abs(-5));
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     println!("Output: {}", stdout);
-    assert!(
-        stdout.contains("RESULT: 5"),
-        "Should output 5, got: {}",
-        stdout
-    );
+    assert!(stdout.contains("RESULT: 5"), "Should output 5, got: {}", stdout);
 }
 
 #[test]
@@ -1505,11 +1477,7 @@ puts("RESULT:", sum_helper(5, 0));
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     println!("Output: {}", stdout);
-    assert!(
-        stdout.contains("RESULT: 15"),
-        "Should output 15, got: {}",
-        stdout
-    );
+    assert!(stdout.contains("RESULT: 15"), "Should output 15, got: {}", stdout);
 }
 
 #[test]
@@ -1552,11 +1520,7 @@ puts("RESULT:", fact(5));
     println!("Status: {:?}", output.status);
 
     assert!(output.status.success(), "Program should succeed");
-    assert!(
-        stdout.contains("RESULT: 120"),
-        "Should output 120, got: {}",
-        stdout
-    );
+    assert!(stdout.contains("RESULT: 120"), "Should output 120, got: {}", stdout);
 }
 
 // Phase 9: Basic mutable assignment test
@@ -1830,8 +1794,7 @@ C Z"
         }
     });
 
-    let generated =
-        runner.generate_test_source_for_debugging(&program.statements, test, None, part_two);
+    let generated = runner.generate_test_source_for_debugging(&program.statements, test, None, part_two);
 
     println!("Generated source for Day 2 style:\n{}", generated);
 
@@ -1896,13 +1859,9 @@ jqHRNqRjqzjGDLGLrsFMfFZSrLrFZsSL"
         }
     });
 
-    let generated =
-        runner.generate_test_source_for_debugging(&program.statements, test, part_one, None);
+    let generated = runner.generate_test_source_for_debugging(&program.statements, test, part_one, None);
 
-    println!(
-        "=== GENERATED SOURCE FOR DAY 3 ===\n{}\n=== END ===",
-        generated
-    );
+    println!("=== GENERATED SOURCE FOR DAY 3 ===\n{}\n=== END ===", generated);
 
     // Now actually run the test
     let results = runner.execute_tests(&program).unwrap();

@@ -127,10 +127,7 @@ pub extern "C" fn rt_list(value: Value) -> Value {
 
     // String → List of grapheme clusters
     if let Some(s) = value.as_string() {
-        let list: im::Vector<Value> = s
-            .graphemes(true)
-            .map(|g| Value::from_string(g.to_string()))
-            .collect();
+        let list: im::Vector<Value> = s.graphemes(true).map(|g| Value::from_string(g.to_string())).collect();
         return Value::from_list(list);
     }
 
@@ -183,10 +180,7 @@ pub extern "C" fn rt_set(value: Value) -> Value {
 
     // String → Set of grapheme clusters
     if let Some(s) = value.as_string() {
-        let set: im::HashSet<Value> = s
-            .graphemes(true)
-            .map(|g| Value::from_string(g.to_string()))
-            .collect();
+        let set: im::HashSet<Value> = s.graphemes(true).map(|g| Value::from_string(g.to_string())).collect();
         return Value::from_set(set);
     }
 
@@ -278,14 +272,18 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
                 current,
                 end,
                 inclusive,
-                step: _,  // Accept any step - we use start/end for slicing
+                step: _, // Accept any step - we use start/end for slicing
             } = &range.kind
             {
                 let len = list.len() as i64;
                 let start = *current;
 
                 // Normalize start (handle negative indexing)
-                let start_norm = if start < 0 { (len + start).max(0) } else { start.min(len) };
+                let start_norm = if start < 0 {
+                    (len + start).max(0)
+                } else {
+                    start.min(len)
+                };
 
                 // Calculate end index (handle negative indexing)
                 let end_idx = match end {
@@ -348,14 +346,18 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
                 current,
                 end,
                 inclusive,
-                step: _,  // Accept any step - we use start/end for slicing
+                step: _, // Accept any step - we use start/end for slicing
             } = &range.kind
             {
                 let len = collection.grapheme_len() as i64;
                 let start = *current;
 
                 // Normalize start (handle negative indexing)
-                let start_norm = if start < 0 { (len + start).max(0) } else { start.min(len) };
+                let start_norm = if start < 0 {
+                    (len + start).max(0)
+                } else {
+                    start.min(len)
+                };
 
                 // Calculate end index (handle negative indexing)
                 let end_idx = match end {
@@ -466,7 +468,7 @@ fn lazy_nth(lazy: &LazySequenceObject, idx: usize) -> Option<Value> {
             }
 
             let value = *current + (idx as i64) * *step;
-            return Some(Value::from_integer(value));
+            Some(Value::from_integer(value))
         }
 
         // Repeat - infinite, always same value
@@ -555,9 +557,7 @@ fn lazy_nth(lazy: &LazySequenceObject, idx: usize) -> Option<Value> {
 }
 
 /// Get the next value from any lazy sequence, evaluating closures as needed.
-fn lazy_next_with_closures(
-    lazy: &LazySequenceObject,
-) -> Option<(Value, Box<LazySequenceObject>)> {
+fn lazy_next_with_closures(lazy: &LazySequenceObject) -> Option<(Value, Box<LazySequenceObject>)> {
     use crate::heap::LazySeqKind;
 
     match &lazy.kind {
@@ -615,9 +615,7 @@ fn lazy_next_with_closures(
             }
             Some((
                 Value::from_list(values),
-                LazySequenceObject::new(LazySeqKind::Zip {
-                    sources: next_sources,
-                }),
+                LazySequenceObject::new(LazySeqKind::Zip { sources: next_sources }),
             ))
         }
         LazySeqKind::Iterate {
@@ -1095,11 +1093,7 @@ pub fn call_closure(closure: &ClosureObject, args: &[Value]) -> Value {
         unsafe { std::mem::transmute(closure.function_ptr) };
 
     // Call the function with the closure environment and arguments
-    fn_ptr(
-        closure as *const ClosureObject,
-        args.len() as u32,
-        args.as_ptr(),
-    )
+    fn_ptr(closure as *const ClosureObject, args.len() as u32, args.as_ptr())
 }
 
 /// Call any callable value (closure, partial application, memoized closure) with arguments.
@@ -1124,14 +1118,11 @@ pub fn get_callable_arity(callee: &Value) -> Option<u32> {
 
 /// Check if a value is callable (closure, partial application, or memoized closure)
 pub fn is_callable(callee: &Value) -> bool {
-    callee.as_closure().is_some()
-        || callee.as_partial_application().is_some()
-        || callee.as_memoized_closure().is_some()
+    callee.as_closure().is_some() || callee.as_partial_application().is_some() || callee.as_memoized_closure().is_some()
 }
 
 fn expect_callable_arity(name: &str, callee: &Value) -> u32 {
-    get_callable_arity(callee)
-        .unwrap_or_else(|| runtime_error(&format!("{name} expects a function")))
+    get_callable_arity(callee).unwrap_or_else(|| runtime_error(&format!("{name} expects a function")))
 }
 
 /// `update(key, updater, collection)` → Collection
@@ -1214,12 +1205,7 @@ pub extern "C-unwind" fn rt_update(key: Value, updater: Value, collection: Value
 /// - List: update_d(0, 0, _ + 1, [1, 2]) → [2, 2]; fills with nil at missing indices
 /// - Dictionary: update_d(0, 0, _ + 1, #{}) → #{0: 1}
 #[no_mangle]
-pub extern "C-unwind" fn rt_update_d(
-    key: Value,
-    default: Value,
-    updater: Value,
-    collection: Value,
-) -> Value {
+pub extern "C-unwind" fn rt_update_d(key: Value, default: Value, updater: Value, collection: Value) -> Value {
     if !is_callable(&updater) {
         runtime_error("update_d(key, default, updater, collection) expects a function");
     }
@@ -1244,11 +1230,7 @@ pub extern "C-unwind" fn rt_update_d(
 
                 // Get current value, or use default if nil
                 let current_raw = new_list.get(idx).cloned().unwrap_or_else(Value::nil);
-                let current = if current_raw.is_nil() {
-                    default
-                } else {
-                    current_raw
-                };
+                let current = if current_raw.is_nil() { default } else { current_raw };
 
                 // Call updater with current value (or default)
                 let new_value = call_updater(current);
@@ -1643,9 +1625,7 @@ pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
         return Value::from_lazy_sequence(lazy_filter_map);
     }
 
-    runtime_error(
-        "filter_map(mapper, collection) expects List, Set, Dictionary, String, Range, or LazySequence",
-    )
+    runtime_error("filter_map(mapper, collection) expects List, Set, Dictionary, String, Range, or LazySequence")
 }
 
 /// `find_map(mapper, collection)` → Value | Nil
@@ -1763,10 +1743,7 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
 
     // Helper for the common reduction logic
     // Returns None if the collection is empty
-    fn do_reduce(
-        reducer: Value,
-        mut iter: impl Iterator<Item = Value>,
-    ) -> Option<Value> {
+    fn do_reduce(reducer: Value, mut iter: impl Iterator<Item = Value>) -> Option<Value> {
         // Get first element as initial accumulator
         let mut acc = iter.next()?;
 
@@ -2402,10 +2379,7 @@ pub extern "C-unwind" fn rt_sum(collection: Value) -> Value {
             dec_sum += d;
             has_decimal = true;
         } else {
-            runtime_error(&format!(
-                "sum expects numeric elements, got {}",
-                type_name(&v)
-            ));
+            runtime_error(&format!("sum expects numeric elements, got {}", type_name(&v)));
         }
     };
 
@@ -2812,8 +2786,7 @@ pub extern "C-unwind" fn rt_min2(a: Value, b: Value) -> Value {
 pub extern "C-unwind" fn rt_skip(total: Value, collection: Value) -> Value {
     let n = total
         .as_integer()
-        .unwrap_or_else(|| runtime_error("skip(total, collection) expects Integer total"))
-        as usize;
+        .unwrap_or_else(|| runtime_error("skip(total, collection) expects Integer total")) as usize;
 
     // List - use split_off for O(log n) instead of O(n) iterator
     if let Some(list) = collection.as_list() {
@@ -2858,19 +2831,15 @@ pub extern "C-unwind" fn rt_skip(total: Value, collection: Value) -> Value {
                 };
                 if past_end {
                     // Return an empty range (start == end, exclusive)
-                    return Value::from_lazy_sequence(LazySequenceObject::new(
-                        LazySeqKind::Range {
-                            current: 0,
-                            end: Some(0),
-                            inclusive: false,
-                            step: 1,
-                        },
-                    ));
+                    return Value::from_lazy_sequence(LazySequenceObject::new(LazySeqKind::Range {
+                        current: 0,
+                        end: Some(0),
+                        inclusive: false,
+                        step: 1,
+                    }));
                 }
             }
-            return Value::from_lazy_sequence(LazySequenceObject::range(
-                new_start, *end, *inclusive, *step,
-            ));
+            return Value::from_lazy_sequence(LazySequenceObject::range(new_start, *end, *inclusive, *step));
         }
 
         // For other lazy sequences, use Skip wrapper
@@ -2895,8 +2864,7 @@ pub extern "C-unwind" fn rt_skip(total: Value, collection: Value) -> Value {
 pub extern "C-unwind" fn rt_take(total: Value, collection: Value) -> Value {
     let n = total
         .as_integer()
-        .unwrap_or_else(|| runtime_error("take(total, collection) expects Integer total"))
-        as usize;
+        .unwrap_or_else(|| runtime_error("take(total, collection) expects Integer total")) as usize;
 
     // List - use take for O(log n) instead of O(n) iterator
     if let Some(list) = collection.as_list() {
@@ -3152,9 +3120,7 @@ fn collect_elements(v: Value) -> Vec<Value> {
         result
     } else if let Some(s) = v.as_string() {
         use unicode_segmentation::UnicodeSegmentation;
-        s.graphemes(true)
-            .map(|g| Value::from_string(g.to_string()))
-            .collect()
+        s.graphemes(true).map(|g| Value::from_string(g.to_string())).collect()
     } else {
         runtime_error("set operations expect List, Set, String, LazySequence, or Range");
     };
@@ -3227,10 +3193,7 @@ pub extern "C" fn rt_union_all(collections: Value) -> Value {
     // If there's one element and it's a list/set/lazy, treat it as a list of collections
     let collections_to_union: Vec<Value> = if list.len() == 1 {
         let first = list[0];
-        if first.as_list().is_some()
-            || first.as_set().is_some()
-            || first.as_lazy_sequence().is_some()
-        {
+        if first.as_list().is_some() || first.as_set().is_some() || first.as_lazy_sequence().is_some() {
             // Single argument that is a collection - check if it contains collections
             let elements: Vec<Value> = collect_elements(first);
             // Check if first element is itself a collection
@@ -3331,18 +3294,12 @@ pub extern "C" fn rt_intersection_all(collections: Value) -> Value {
     }
 
     // Start with the first collection
-    let mut result: im::HashSet<Value> = collect_elements(collections_to_intersect[0])
-        .into_iter()
-        .collect();
+    let mut result: im::HashSet<Value> = collect_elements(collections_to_intersect[0]).into_iter().collect();
 
     // Intersect with each subsequent collection
     for coll in collections_to_intersect.iter().skip(1) {
         let other: im::HashSet<Value> = collect_elements(*coll).into_iter().collect();
-        result = result
-            .iter()
-            .filter(|v| other.contains(*v))
-            .copied()
-            .collect();
+        result = result.iter().filter(|v| other.contains(*v)).copied().collect();
     }
 
     Value::from_set(result)
@@ -3728,9 +3685,7 @@ pub extern "C-unwind" fn rt_cycle(collection: Value) -> Value {
         list.clone()
     } else if let Some(s) = collection.as_string() {
         use unicode_segmentation::UnicodeSegmentation;
-        s.graphemes(true)
-            .map(|g| Value::from_string(g.to_string()))
-            .collect()
+        s.graphemes(true).map(|g| Value::from_string(g.to_string())).collect()
     } else {
         runtime_error("cycle(collection) expects List or String");
     };
@@ -3762,8 +3717,7 @@ pub extern "C" fn rt_iterate(generator: Value, initial: Value) -> Value {
 pub extern "C-unwind" fn rt_combinations(size: Value, collection: Value) -> Value {
     let k = size
         .as_integer()
-        .unwrap_or_else(|| runtime_error("combinations(size, collection) expects Integer size"))
-        as usize;
+        .unwrap_or_else(|| runtime_error("combinations(size, collection) expects Integer size")) as usize;
 
     // Get elements from collection
     let source: Vec<Value> = if let Some(list) = collection.as_list() {
@@ -3801,9 +3755,9 @@ pub extern "C-unwind" fn rt_combinations(size: Value, collection: Value) -> Valu
 /// - range(0, 10, 2) |> list → [0, 2, 4, 6, 8, 10] (inclusive)
 #[no_mangle]
 pub extern "C" fn rt_range_fn(from: Value, to: Value, step: Value) -> Value {
-    let start = from.as_integer().unwrap_or_else(|| {
-        runtime_error("range(from, to, step) expects Integer for 'from'")
-    });
+    let start = from
+        .as_integer()
+        .unwrap_or_else(|| runtime_error("range(from, to, step) expects Integer for 'from'"));
     let end = to
         .as_integer()
         .unwrap_or_else(|| runtime_error("range(from, to, step) expects Integer for 'to'"));
@@ -3816,10 +3770,8 @@ pub extern "C" fn rt_range_fn(from: Value, to: Value, step: Value) -> Value {
     }
 
     // Validate step direction unless start == end
-    if start != end {
-        if (end > start && step_val < 0) || (end < start && step_val > 0) {
-            runtime_error("range(from, to, step) step direction does not match range");
-        }
+    if start != end && ((end > start && step_val < 0) || (end < start && step_val > 0)) {
+        runtime_error("range(from, to, step) step direction does not match range");
     }
 
     // Per LANG.txt §11.13, range(from, to, step) is inclusive of 'to'
@@ -3841,11 +3793,7 @@ pub extern "C" fn rt_range_exclusive(start: Value, end: Value) -> Value {
         .unwrap_or_else(|| runtime_error("range end expects Integer"));
 
     // Determine step based on direction
-    let step = if end_val < start_val {
-            -1
-        } else {
-            1
-        };
+    let step = if end_val < start_val { -1 } else { 1 };
 
     let lazy = LazySequenceObject::range(start_val, Some(end_val), false, step);
     Value::from_lazy_sequence(lazy)
@@ -3865,11 +3813,7 @@ pub extern "C" fn rt_range_inclusive(start: Value, end: Value) -> Value {
         .unwrap_or_else(|| runtime_error("range end expects Integer"));
 
     // Determine step based on direction
-    let step = if end_val < start_val {
-            -1
-        } else {
-            1
-        };
+    let step = if end_val < start_val { -1 } else { 1 };
 
     let lazy = LazySequenceObject::range(start_val, Some(end_val), true, step);
     Value::from_lazy_sequence(lazy)
@@ -3913,18 +3857,13 @@ pub extern "C" fn rt_zip(argc: u32, argv: *const Value) -> Value {
     let args = unsafe { std::slice::from_raw_parts(argv, argc as usize) };
 
     // Check if all collections are infinite lazy sequences
-    let all_infinite = args.iter().all(|v| {
-        v.as_lazy_sequence()
-            .map(is_infinite_lazy_sequence)
-            .unwrap_or(false)
-    });
+    let all_infinite = args
+        .iter()
+        .all(|v| v.as_lazy_sequence().map(is_infinite_lazy_sequence).unwrap_or(false));
 
     if all_infinite {
         // All infinite → return LazySequence
-        let sources: Vec<LazySequenceObject> = args
-            .iter()
-            .filter_map(|v| v.as_lazy_sequence().cloned())
-            .collect();
+        let sources: Vec<LazySequenceObject> = args.iter().filter_map(|v| v.as_lazy_sequence().cloned()).collect();
 
         return Value::from_lazy_sequence(LazySequenceObject::new(LazySeqKind::Zip { sources }));
     }
@@ -3934,10 +3873,7 @@ pub extern "C" fn rt_zip(argc: u32, argv: *const Value) -> Value {
     let min_finite_len = args.iter().filter_map(get_finite_length).min().unwrap_or(0);
 
     // Second pass: convert each collection to a vector of elements, taking at most min_finite_len
-    let collections: Vec<im::Vector<Value>> = args
-        .iter()
-        .map(|v| collection_to_vector(*v, min_finite_len))
-        .collect();
+    let collections: Vec<im::Vector<Value>> = args.iter().map(|v| collection_to_vector(*v, min_finite_len)).collect();
 
     // Build result list of tuples
     let mut result = im::Vector::new();
@@ -4010,11 +3946,7 @@ fn get_lazy_finite_length(lazy: &LazySequenceObject) -> Option<usize> {
                 if *step == 0 {
                     return Some(0);
                 }
-                let len = if *inclusive {
-                    (diff / step) + 1
-                } else {
-                    diff / step
-                };
+                let len = if *inclusive { (diff / step) + 1 } else { diff / step };
                 Some(len.max(0) as usize)
             } else {
                 None // Unbounded
@@ -4025,9 +3957,7 @@ fn get_lazy_finite_length(lazy: &LazySequenceObject) -> Option<usize> {
         LazySeqKind::Iterate { .. } => None,
         LazySeqKind::Map { source, .. }
         | LazySeqKind::Filter { source, .. }
-        | LazySeqKind::FilterMap { source, .. } => {
-            get_lazy_finite_length(source)
-        }
+        | LazySeqKind::FilterMap { source, .. } => get_lazy_finite_length(source),
         LazySeqKind::Skip { source, remaining } => {
             get_lazy_finite_length(source).map(|len| len.saturating_sub(*remaining))
         }
@@ -4110,11 +4040,7 @@ fn take_from_lazy_full(n: usize, lazy: &LazySequenceObject) -> im::Vector<Value>
 }
 
 /// Recursively take elements from a lazy sequence
-fn take_from_lazy_recursive(
-    result: &mut im::Vector<Value>,
-    remaining: &mut usize,
-    lazy: &LazySequenceObject,
-) {
+fn take_from_lazy_recursive(result: &mut im::Vector<Value>, remaining: &mut usize, lazy: &LazySequenceObject) {
     if *remaining == 0 {
         return;
     }
@@ -4284,8 +4210,7 @@ fn take_from_lazy_recursive(
                 }
 
                 // Get current combination
-                let combination: im::Vector<Value> =
-                    current_indices.iter().map(|&i| source[i]).collect();
+                let combination: im::Vector<Value> = current_indices.iter().map(|&i| source[i]).collect();
                 result.push_back(Value::from_list(combination));
                 *remaining -= 1;
 
@@ -4411,18 +4336,12 @@ pub extern "C-unwind" fn rt_split(separator: Value, string: Value) -> Value {
     // Empty separator: split into grapheme clusters
     if sep.is_empty() {
         use unicode_segmentation::UnicodeSegmentation;
-        let parts: im::Vector<Value> = s
-            .graphemes(true)
-            .map(|g| Value::from_string(g.to_string()))
-            .collect();
+        let parts: im::Vector<Value> = s.graphemes(true).map(|g| Value::from_string(g.to_string())).collect();
         return Value::from_list(parts);
     }
 
     // Normal split
-    let parts: im::Vector<Value> = s
-        .split(sep)
-        .map(|part| Value::from_string(part.to_string()))
-        .collect();
+    let parts: im::Vector<Value> = s.split(sep).map(|part| Value::from_string(part.to_string())).collect();
 
     Value::from_list(parts)
 }
@@ -4526,7 +4445,11 @@ pub extern "C" fn rt_md5(value: Value) -> Value {
     let result = hasher.finalize();
 
     // Convert to lowercase hex string
-    let hex: String = result.iter().map(|b| format!("{:02x}", b)).collect();
+    use std::fmt::Write;
+    let hex: String = result.iter().fold(String::with_capacity(32), |mut acc, b| {
+        write!(acc, "{:02x}", b).unwrap();
+        acc
+    });
 
     Value::from_string(hex)
 }
@@ -4916,9 +4839,7 @@ pub extern "C" fn rt_type(value: Value) -> Value {
             _ => return Value::from_string("LazySequence".to_string()),
         }
     }
-    if value.as_closure().is_some()
-        || value.as_partial_application().is_some()
-        || value.as_memoized_closure().is_some()
+    if value.as_closure().is_some() || value.as_partial_application().is_some() || value.as_memoized_closure().is_some()
     {
         return Value::from_string("Function".to_string());
     }
@@ -5015,18 +4936,12 @@ fn format_value_inner(value: &Value, quote_strings: bool) -> String {
     }
 
     if let Some(list) = value.as_list() {
-        let items: Vec<String> = list
-            .iter()
-            .map(|v| format_value_inner(v, quote_strings))
-            .collect();
+        let items: Vec<String> = list.iter().map(|v| format_value_inner(v, quote_strings)).collect();
         return format!("[{}]", items.join(", "));
     }
 
     if let Some(set) = value.as_set() {
-        let items: Vec<String> = set
-            .iter()
-            .map(|v| format_value_inner(v, quote_strings))
-            .collect();
+        let items: Vec<String> = set.iter().map(|v| format_value_inner(v, quote_strings)).collect();
         return format!("{{{}}}", items.join(", "));
     }
 
@@ -5044,9 +4959,7 @@ fn format_value_inner(value: &Value, quote_strings: bool) -> String {
         return format!("#{{{}}}", items.join(", "));
     }
 
-    if value.as_closure().is_some()
-        || value.as_partial_application().is_some()
-        || value.as_memoized_closure().is_some()
+    if value.as_closure().is_some() || value.as_partial_application().is_some() || value.as_memoized_closure().is_some()
     {
         return "<function>".to_string();
     }
@@ -5180,12 +5093,7 @@ pub extern "C" fn rt_print_test_header(test_num: Value, is_slow: Value) {
 /// expected: the expected value
 /// time_nanos: execution time in nanoseconds
 #[no_mangle]
-pub extern "C" fn rt_print_test_result(
-    label: Value,
-    actual: Value,
-    expected: Value,
-    time_nanos: Value,
-) -> Value {
+pub extern "C" fn rt_print_test_result(label: Value, actual: Value, expected: Value, time_nanos: Value) -> Value {
     let label_str = label.as_string().unwrap_or("Result");
     let time_ms = time_nanos.as_integer().unwrap_or(0) / 1_000_000;
     let passed = rt_eq(actual, expected).as_bool().unwrap_or(false);
@@ -5229,9 +5137,7 @@ fn get_aoc_session() -> Option<String> {
     // Then try config file
     let config_dir = dirs::config_dir()?;
     let session_file = config_dir.join("dasher").join("session.txt");
-    std::fs::read_to_string(session_file)
-        .ok()
-        .map(|s| s.trim().to_string())
+    std::fs::read_to_string(session_file).ok().map(|s| s.trim().to_string())
 }
 
 /// Parse an aoc:// URL and return (year, day) or None if invalid.
@@ -5315,12 +5221,10 @@ fn read_http_url(url: &str) -> Value {
         .output();
 
     match output {
-        Ok(result) if result.status.success() => {
-            match String::from_utf8(result.stdout) {
-                Ok(body) => Value::from_string(&body),
-                Err(_) => Value::nil(),
-            }
-        }
+        Ok(result) if result.status.success() => match String::from_utf8(result.stdout) {
+            Ok(body) => Value::from_string(&body),
+            Err(_) => Value::nil(),
+        },
         _ => Value::nil(),
     }
 }
@@ -5515,7 +5419,7 @@ impl<'a> LiteralParser<'a> {
     }
 
     fn skip_whitespace(&mut self) {
-        while self.chars.peek().map_or(false, |c| c.is_whitespace()) {
+        while self.chars.peek().is_some_and(|c| c.is_whitespace()) {
             self.chars.next();
         }
     }
@@ -5748,7 +5652,7 @@ impl<'a> LiteralParser<'a> {
             }
         }
         // Make sure keyword is not followed by alphanumeric
-        if chars_copy.peek().map_or(false, |c| c.is_alphanumeric()) {
+        if chars_copy.peek().is_some_and(|c| c.is_alphanumeric()) {
             return false;
         }
         // Consume the characters
