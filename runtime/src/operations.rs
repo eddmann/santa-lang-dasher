@@ -118,7 +118,11 @@ pub extern "C-unwind" fn rt_add(left: Value, right: Value) -> Value {
     // Handle String + X (coerce right to string)
     if let Some(l) = left.as_string() {
         let r_str = value_to_string(&right);
-        return Value::from_string(format!("{}{}", l, r_str));
+        // Pre-allocate to avoid reallocation during string building
+        let mut result = String::with_capacity(l.len() + r_str.len());
+        result.push_str(&l);
+        result.push_str(&r_str);
+        return Value::from_string(result);
     }
 
     // Handle List + List (concatenation) per LANG.txt §4
