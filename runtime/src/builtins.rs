@@ -303,12 +303,10 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
                 };
 
                 if start_norm <= len && end_idx >= start_norm && end_idx >= 0 {
-                    let slice: im::Vector<Value> = list
-                        .iter()
-                        .skip(start_norm as usize)
-                        .take((end_idx - start_norm).max(0) as usize)
-                        .copied()
-                        .collect();
+                    // Use im::Vector's native split_off + take for O(log n) performance
+                    // clone() is O(1) for im::Vector due to structural sharing
+                    let slice_len = (end_idx - start_norm) as usize;
+                    let slice = list.clone().split_off(start_norm as usize).take(slice_len);
                     return Value::from_list(slice);
                 }
                 return Value::from_list(im::Vector::new());
