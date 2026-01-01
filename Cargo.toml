@@ -19,9 +19,9 @@ clap = { version = "4.4", features = ["derive"] }  # Phase 19 (CLI) - Argument p
 ureq = { version = "2.9", default-features = false, features = ["native-tls", "gzip"] }  # HTTP client - native-tls avoids bundling rustls
 expect-test = "1.5"
 
-# Optimize release builds for smaller binary size
+# Optimize release builds for performance
 [profile.release]
 lto = true
 codegen-units = 1
 strip = true
-opt-level = "z"  # Optimize for size
+opt-level = 3  # Maximum speed optimization
