@@ -210,11 +210,14 @@ impl<'ctx> CodegenContext<'ctx> {
             .map_err(|e| format!("Failed to get target from triple: {}", e))?;
 
         // Create target machine with the configured optimization level
+        // Use native CPU and features for best performance on the host machine
+        let cpu = TargetMachine::get_host_cpu_name();
+        let features = TargetMachine::get_host_cpu_features();
         let target_machine = target
             .create_target_machine(
                 &triple,
-                "generic",      // CPU
-                "",             // Features
+                cpu.to_str().unwrap_or("generic"),
+                features.to_str().unwrap_or(""),
                 self.opt_level, // Use configured optimization level
                 RelocMode::Default,
                 CodeModel::Default,
@@ -236,11 +239,14 @@ impl<'ctx> CodegenContext<'ctx> {
         let target = Target::from_triple(&triple)
             .map_err(|e| format!("Failed to get target from triple: {}", e))?;
 
+        // Use native CPU and features for best performance on the host machine
+        let cpu = TargetMachine::get_host_cpu_name();
+        let features = TargetMachine::get_host_cpu_features();
         let target_machine = target
             .create_target_machine(
                 &triple,
-                "generic",
-                "",
+                cpu.to_str().unwrap_or("generic"),
+                features.to_str().unwrap_or(""),
                 self.opt_level, // Use configured optimization level
                 RelocMode::Default,
                 CodeModel::Default,
