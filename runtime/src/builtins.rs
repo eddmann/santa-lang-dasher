@@ -4362,7 +4362,8 @@ fn take_from_lazy_recursive(
 /// - lines("a\nb\nc") → ["a", "b", "c"]
 /// - lines("single line") → ["single line"]
 /// - lines("") → []
-/// - lines("a\nb\n") → ["a", "b"] (trailing empty lines filtered)
+/// - lines("a\nb\n") → ["a", "b"] (trailing empty line filtered)
+/// - lines("a\n\nb") → ["a", "", "b"] (internal empty lines preserved)
 #[no_mangle]
 pub extern "C-unwind" fn rt_lines(value: Value) -> Value {
     // Only works on strings
@@ -4371,14 +4372,20 @@ pub extern "C-unwind" fn rt_lines(value: Value) -> Value {
         None => runtime_error("lines(string) expects a String"),
     };
 
-    // Split on newlines, filtering empty trailing lines
-    let parts: im::Vector<Value> = s
-        .split('\n')
-        .filter(|part| !part.is_empty())
+    // Split on newlines, preserving internal empty lines but trimming trailing ones
+    let mut parts: Vec<&str> = s.split('\n').collect();
+
+    // Remove trailing empty strings (from trailing newlines)
+    while parts.last() == Some(&"") {
+        parts.pop();
+    }
+
+    let result: im::Vector<Value> = parts
+        .into_iter()
         .map(|part| Value::from_string(part.to_string()))
         .collect();
 
-    Value::from_list(parts)
+    Value::from_list(result)
 }
 
 /// `split(separator, string)` → List[String]
