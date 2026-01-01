@@ -433,6 +433,62 @@ impl<'ctx> CodegenContext<'ctx> {
                 Ok(self.box_bool(cmp))
             }
 
+            // Int <= Int → native comparison (FAST PATH)
+            (Type::Int, InfixOp::LessThanOrEqual, Type::Int) => {
+                let l = self.unbox_int(left_val);
+                let r = self.unbox_int(right_val);
+                let cmp = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLE, l, r, "le")
+                    .unwrap();
+                Ok(self.box_bool(cmp))
+            }
+
+            // Int > Int → native comparison (FAST PATH)
+            (Type::Int, InfixOp::GreaterThan, Type::Int) => {
+                let l = self.unbox_int(left_val);
+                let r = self.unbox_int(right_val);
+                let cmp = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, l, r, "gt")
+                    .unwrap();
+                Ok(self.box_bool(cmp))
+            }
+
+            // Int >= Int → native comparison (FAST PATH)
+            (Type::Int, InfixOp::GreaterThanOrEqual, Type::Int) => {
+                let l = self.unbox_int(left_val);
+                let r = self.unbox_int(right_val);
+                let cmp = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGE, l, r, "ge")
+                    .unwrap();
+                Ok(self.box_bool(cmp))
+            }
+
+            // Int == Int → native comparison (FAST PATH)
+            // NaN-boxing ensures equal integers have identical bit patterns
+            (Type::Int, InfixOp::Equal, Type::Int) => {
+                let l = self.unbox_int(left_val);
+                let r = self.unbox_int(right_val);
+                let cmp = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, l, r, "eq")
+                    .unwrap();
+                Ok(self.box_bool(cmp))
+            }
+
+            // Int != Int → native comparison (FAST PATH)
+            (Type::Int, InfixOp::NotEqual, Type::Int) => {
+                let l = self.unbox_int(left_val);
+                let r = self.unbox_int(right_val);
+                let cmp = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, l, r, "ne")
+                    .unwrap();
+                Ok(self.box_bool(cmp))
+            }
+
             // Decimal + Decimal → native fadd (FAST PATH)
             (Type::Decimal, InfixOp::Add, Type::Decimal) => {
                 let l = self.unbox_decimal(left_val);
