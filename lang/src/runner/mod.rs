@@ -292,7 +292,7 @@ impl Runner {
             source.push_str(&self.expr_to_source(part_one));
             source.push_str(";\n");
             source.push_str("let end_one = __time_nanos();\n");
-            source.push_str("puts(\"PART_ONE:\", result_part_one);\n");
+            source.push_str("__puts_repr(\"PART_ONE:\", result_part_one);\n");
             source.push_str("puts(\"PART_ONE_TIME:\", end_one - start_one);\n");
         }
 
@@ -303,7 +303,7 @@ impl Runner {
             source.push_str(&self.expr_to_source(part_two));
             source.push_str(";\n");
             source.push_str("let end_two = __time_nanos();\n");
-            source.push_str("puts(\"PART_TWO:\", result_part_two);\n");
+            source.push_str("__puts_repr(\"PART_TWO:\", result_part_two);\n");
             source.push_str("puts(\"PART_TWO_TIME:\", end_two - start_two);\n");
         }
 
@@ -498,7 +498,7 @@ impl Runner {
             source.push_str(&self.expr_to_source(part_one));
             source.push_str(";\n");
             source.push_str("let end_one = __time_nanos();\n");
-            source.push_str("puts(\"PART_ONE:\", result_part_one);\n");
+            source.push_str("__puts_repr(\"PART_ONE:\", result_part_one);\n");
             source.push_str("puts(\"PART_ONE_TIME:\", end_one - start_one);\n");
         }
 
@@ -509,7 +509,7 @@ impl Runner {
             source.push_str(&self.expr_to_source(part_two));
             source.push_str(";\n");
             source.push_str("let end_two = __time_nanos();\n");
-            source.push_str("puts(\"PART_TWO:\", result_part_two);\n");
+            source.push_str("__puts_repr(\"PART_TWO:\", result_part_two);\n");
             source.push_str("puts(\"PART_TWO_TIME:\", end_two - start_two);\n");
         }
 

@@ -5577,6 +5577,24 @@ impl<'ctx> CodegenContext<'ctx> {
                     .unwrap();
                 Ok(Some(result.try_as_basic_value().left().unwrap()))
             }
+            "__puts_repr" => {
+                // __puts_repr(label, value) - print value with type-preserving format
+                // Used by test runner to output results with proper quoting
+                if args.len() != 2 {
+                    return Err(CompileError::UnsupportedExpression(format!(
+                        "__puts_repr expects 2 arguments, got {}",
+                        args.len()
+                    )));
+                }
+                let label = self.compile_arg(&args[0])?;
+                let value = self.compile_arg(&args[1])?;
+                let rt_puts_repr = self.get_or_declare_rt_puts_repr();
+                let result = self
+                    .builder
+                    .build_call(rt_puts_repr, &[label.into(), value.into()], "puts_repr_result")
+                    .unwrap();
+                Ok(Some(result.try_as_basic_value().left().unwrap()))
+            }
             "__get_args" => {
                 // __get_args() - get command line arguments (excluding program name)
                 // Takes no arguments, returns list of strings
@@ -7355,6 +7373,19 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: () -> i64
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[], false);
+        self.module.add_function(fn_name, fn_type, None)
+    }
+
+    /// Get or declare the rt_puts_repr runtime function
+    fn get_or_declare_rt_puts_repr(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "rt_puts_repr";
+        if let Some(func) = self.module.get_function(fn_name) {
+            return func;
+        }
+
+        // Signature: (Value, Value) -> Value
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
         self.module.add_function(fn_name, fn_type, None)
     }
 

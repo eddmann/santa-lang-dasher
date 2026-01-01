@@ -5098,6 +5098,16 @@ pub extern "C" fn rt_puts_two(a: Value, b: Value) -> Value {
     Value::nil()
 }
 
+/// Output a value with type-preserving formatting (for test runner).
+/// Uses format_value which includes quotes for strings, allowing proper parsing.
+#[no_mangle]
+pub extern "C" fn rt_puts_repr(label: Value, value: Value) -> Value {
+    let label_str = print_value(&label);
+    let value_str = format_value(&value);
+    println!("{} {}", label_str, value_str);
+    Value::nil()
+}
+
 /// Get the current time in nanoseconds since program start.
 /// Uses a relative timestamp to avoid large number overflow in NaN-boxing.
 /// Used for timing measurements in the runner.
