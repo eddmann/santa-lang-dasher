@@ -9,6 +9,7 @@
 //! 6. Produce executable
 
 use flate2::read::GzDecoder;
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::context::Context;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -261,6 +262,12 @@ impl Compiler {
         // Create main function: int main()
         let fn_type = i64_type.fn_type(&[], false);
         let main_fn = codegen.module.add_function("main", fn_type, None);
+
+        // Add nounwind attribute - tells LLVM this function doesn't throw exceptions
+        let nounwind_kind = Attribute::get_named_enum_kind_id("nounwind");
+        let nounwind_attr = context.create_enum_attribute(nounwind_kind, 0);
+        main_fn.add_attribute(AttributeLoc::Function, nounwind_attr);
+
         let entry = context.append_basic_block(main_fn, "entry");
         codegen.builder.position_at_end(entry);
         codegen.current_block = Some(entry);
@@ -333,6 +340,12 @@ impl Compiler {
         // Create main function: int main()
         let fn_type = i64_type.fn_type(&[], false);
         let main_fn = codegen.module.add_function("main", fn_type, None);
+
+        // Add nounwind attribute - tells LLVM this function doesn't throw exceptions
+        let nounwind_kind = Attribute::get_named_enum_kind_id("nounwind");
+        let nounwind_attr = context.create_enum_attribute(nounwind_kind, 0);
+        main_fn.add_attribute(AttributeLoc::Function, nounwind_attr);
+
         let entry = context.append_basic_block(main_fn, "entry");
         codegen.builder.position_at_end(entry);
         codegen.current_block = Some(entry);

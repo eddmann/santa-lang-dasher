@@ -1,4 +1,5 @@
 use crate::types::Type;
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -171,7 +172,14 @@ impl<'ctx> CodegenContext<'ctx> {
         // All our runtime functions take i64 and return i64
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        let func = self.module.add_function(fn_name, fn_type, None);
+
+        // Add nounwind attribute - tells LLVM this function doesn't throw exceptions
+        let nounwind_kind = Attribute::get_named_enum_kind_id("nounwind");
+        let nounwind_attr = self.context.create_enum_attribute(nounwind_kind, 0);
+        func.add_attribute(AttributeLoc::Function, nounwind_attr);
+
+        func
     }
 
     /// Get the configured optimization level

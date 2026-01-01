@@ -2,7 +2,9 @@ use super::context::CodegenContext;
 use crate::parser::ast::{Expr, InfixOp, Literal, MatchArm, Param, Pattern, PrefixOp, Stmt};
 use crate::runtime::builtin_registry::builtin_spec;
 use crate::types::{Type, TypedExpr};
-use inkwell::values::{BasicValueEnum, PointerValue};
+use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::types::FunctionType;
+use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::IntPredicate;
 use std::collections::HashSet;
 
@@ -243,7 +245,20 @@ impl<'ctx> CodegenContext<'ctx> {
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
 
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
+    }
+
+    /// Add a runtime function with the nounwind attribute.
+    /// This tells LLVM the function won't throw exceptions, enabling better optimization.
+    fn add_runtime_function(&self, fn_name: &str, fn_type: FunctionType<'ctx>) -> FunctionValue<'ctx> {
+        let func = self.module.add_function(fn_name, fn_type, None);
+
+        // Add nounwind attribute - tells LLVM this function doesn't throw exceptions
+        let nounwind_kind = Attribute::get_named_enum_kind_id("nounwind");
+        let nounwind_attr = self.context.create_enum_attribute(nounwind_kind, 0);
+        func.add_attribute(AttributeLoc::Function, nounwind_attr);
+
+        func
     }
 
     /// Compile a prefix (unary) operation
@@ -877,7 +892,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Declare: extern "C" fn(Value) -> i64 (returns 1 for truthy, 0 for falsy)
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_is_list runtime function
@@ -891,7 +906,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Declare: extern "C" fn(Value) -> i64 (returns 1 for list, 0 otherwise)
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_expect_list_len runtime function
@@ -905,7 +920,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Declare: extern "C-unwind" fn(Value, Value, Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_is_integer runtime function
@@ -919,7 +934,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Declare: extern "C" fn(Value) -> i64 (returns 1 for integer, 0 otherwise)
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_add runtime function
@@ -991,7 +1006,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(name, fn_type, None)
+        self.add_runtime_function(name, fn_type)
     }
 
     /// Get or declare the rt_negate runtime function
@@ -1013,7 +1028,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(name, fn_type, None)
+        self.add_runtime_function(name, fn_type)
     }
 
     /// Type inference for expressions using the type environment from the inference pass
@@ -1330,7 +1345,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Declare: extern "C" fn() -> Value (i64)
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_list_from_values runtime function
@@ -1344,7 +1359,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_list_push runtime function (appends single element)
@@ -1357,7 +1372,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Declare: extern "C" fn(list: Value, elem: Value) -> Value (i64)
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_list_concat runtime function (concatenates two lists)
@@ -1370,7 +1385,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Declare: extern "C" fn(list1: Value, list2: Value) -> Value (i64)
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Compile a set literal
@@ -1459,7 +1474,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_set_from_values runtime function
@@ -1472,7 +1487,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Compile a dict literal
@@ -1601,7 +1616,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_dict_from_entries runtime function
@@ -1614,7 +1629,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let ptr_type = self.context.ptr_type(inkwell::AddressSpace::from(0));
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Compile a range expression
@@ -1685,7 +1700,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_range_exclusive runtime function
@@ -1697,7 +1712,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_range_unbounded runtime function
@@ -1709,7 +1724,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Compile an index expression (collection[index])
@@ -2161,7 +2176,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // rt_get(index: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_size runtime function
@@ -2173,7 +2188,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     fn get_or_declare_rt_skip(&self) -> inkwell::values::FunctionValue<'ctx> {
@@ -2185,7 +2200,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // rt_skip(count: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     fn get_or_declare_rt_take(&self) -> inkwell::values::FunctionValue<'ctx> {
@@ -2197,7 +2212,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // rt_take(count: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     // ===== Phase 16: Pattern Matching =====
@@ -7373,7 +7388,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: () -> i64
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_puts_repr runtime function
@@ -7386,7 +7401,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (Value, Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_get_args runtime function
@@ -7399,7 +7414,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: () -> i64 (returns list of strings)
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_print_result runtime function
@@ -7414,7 +7429,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let void_type = self.context.void_type();
         let fn_type =
             void_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_print_test_header runtime function
@@ -7428,7 +7443,7 @@ impl<'ctx> CodegenContext<'ctx> {
         let i64_type = self.context.i64_type();
         let void_type = self.context.void_type();
         let fn_type = void_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_print_test_result runtime function
@@ -7449,7 +7464,7 @@ impl<'ctx> CodegenContext<'ctx> {
             ],
             false,
         );
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_print_newline runtime function
@@ -7462,7 +7477,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: () -> void
         let void_type = self.context.void_type();
         let fn_type = void_type.fn_type(&[], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_puts runtime function
@@ -7479,7 +7494,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let fn_type = i64_type.fn_type(&[i32_type.into(), ptr_type.into()], false);
 
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_make_closure runtime function
@@ -7506,7 +7521,7 @@ impl<'ctx> CodegenContext<'ctx> {
             false,
         );
 
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_call runtime function
@@ -7523,7 +7538,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let fn_type = i64_type.fn_type(&[i64_type.into(), i32_type.into(), ptr_type.into()], false);
 
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_apply runtime function (for spread arguments)
@@ -7537,7 +7552,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Applies callee to elements of collection as arguments
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_get_capture runtime function
@@ -7553,7 +7568,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let fn_type = i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
 
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Helper to compile an argument expression
@@ -7580,7 +7595,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_fold runtime function
@@ -7593,7 +7608,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (initial: Value, folder: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_break runtime function
@@ -7606,7 +7621,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (value: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_memoize runtime function
@@ -7619,7 +7634,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (func: Value) -> Value (returns memoized closure)
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_evaluate runtime function
@@ -7632,7 +7647,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (source: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_map runtime function
@@ -7645,7 +7660,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (mapper: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_filter runtime function
@@ -7658,7 +7673,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (predicate: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_reduce runtime function
@@ -7671,7 +7686,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (reducer: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_first runtime function
@@ -7684,7 +7699,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_second runtime function
@@ -7697,7 +7712,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_last runtime function
@@ -7710,7 +7725,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_rest runtime function
@@ -7723,7 +7738,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_int runtime function
@@ -7736,7 +7751,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (value: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_ints runtime function
@@ -7749,7 +7764,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (string: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_list runtime function
@@ -7762,7 +7777,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (value: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_set runtime function
@@ -7775,7 +7790,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (value: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_dict runtime function
@@ -7788,7 +7803,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (value: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_keys runtime function
@@ -7801,7 +7816,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_values runtime function
@@ -7814,7 +7829,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_each runtime function
@@ -7827,7 +7842,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (func: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_find runtime function
@@ -7840,7 +7855,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (predicate: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_count runtime function
@@ -7853,7 +7868,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (predicate: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_flat_map runtime function
@@ -7865,7 +7880,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_filter_map runtime function
@@ -7877,7 +7892,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_find_map runtime function
@@ -7889,7 +7904,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_scan runtime function
@@ -7901,7 +7916,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_fold_s runtime function
@@ -7913,7 +7928,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_max runtime function
@@ -7925,7 +7940,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_min runtime function
@@ -7937,7 +7952,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_max2 runtime function (2-argument max)
@@ -7949,7 +7964,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_min2 runtime function (2-argument min)
@@ -7961,7 +7976,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_sort runtime function
@@ -7973,7 +7988,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_reverse runtime function
@@ -7985,7 +8000,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_rotate runtime function
@@ -7997,7 +8012,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_chunk runtime function
@@ -8009,7 +8024,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_union_all runtime function (variadic via list)
@@ -8021,7 +8036,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_intersection_all runtime function (variadic via list)
@@ -8033,7 +8048,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_includes runtime function
@@ -8045,7 +8060,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_excludes runtime function
@@ -8057,7 +8072,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_any runtime function
@@ -8069,7 +8084,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_all runtime function
@@ -8081,7 +8096,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_lines runtime function
@@ -8093,7 +8108,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_split runtime function
@@ -8105,7 +8120,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_join runtime function
@@ -8117,7 +8132,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_upper runtime function
@@ -8129,7 +8144,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_lower runtime function
@@ -8141,7 +8156,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_replace runtime function
@@ -8153,7 +8168,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_abs runtime function
@@ -8165,7 +8180,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_signum runtime function
@@ -8177,7 +8192,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_type runtime function
@@ -8189,7 +8204,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_str runtime function
@@ -8201,7 +8216,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_or runtime function
@@ -8213,7 +8228,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_and runtime function
@@ -8225,7 +8240,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_read runtime function
@@ -8237,7 +8252,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_env runtime function
@@ -8249,7 +8264,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     // ===== Collection Modification Functions =====
@@ -8264,7 +8279,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: rt_push(value: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_assoc runtime function
@@ -8277,7 +8292,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: rt_assoc(key: Value, value: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_update runtime function
@@ -8290,7 +8305,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: rt_update(key: Value, updater: Value, collection: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_update_d runtime function
@@ -8311,7 +8326,7 @@ impl<'ctx> CodegenContext<'ctx> {
             ],
             false,
         );
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_vec_add runtime function
@@ -8324,7 +8339,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: rt_vec_add(a: Value, b: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     // ===== Bitwise Functions =====
@@ -8338,7 +8353,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_bit_or runtime function
@@ -8350,7 +8365,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_bit_xor runtime function
@@ -8362,7 +8377,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_bit_not runtime function
@@ -8374,7 +8389,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_bit_shift_left runtime function
@@ -8386,7 +8401,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_bit_shift_right runtime function
@@ -8398,7 +8413,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     // ===== Sequence Generator Functions =====
@@ -8412,7 +8427,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_cycle runtime function
@@ -8424,7 +8439,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_iterate runtime function
@@ -8436,7 +8451,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_combinations runtime function
@@ -8448,7 +8463,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_range_fn runtime function
@@ -8460,7 +8475,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_zip runtime function
@@ -8477,7 +8492,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let fn_type = i64_type.fn_type(&[i32_type.into(), ptr_type.into()], false);
 
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_zip_spread runtime function (for spread arguments)
@@ -8490,7 +8505,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: (collection: i64) -> i64
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     // ===== String/Regex Functions =====
@@ -8504,7 +8519,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_regex_match_all runtime function
@@ -8516,7 +8531,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_md5 runtime function
@@ -8528,7 +8543,7 @@ impl<'ctx> CodegenContext<'ctx> {
 
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     // ===== Mutable Cell Functions =====
@@ -8543,7 +8558,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: rt_cell_new(value: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_cell_get runtime function
@@ -8556,7 +8571,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: rt_cell_get(cell: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 
     /// Get or declare the rt_cell_set runtime function
@@ -8569,6 +8584,6 @@ impl<'ctx> CodegenContext<'ctx> {
         // Signature: rt_cell_set(cell: Value, value: Value) -> Value
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
-        self.module.add_function(fn_name, fn_type, None)
+        self.add_runtime_function(fn_name, fn_type)
     }
 }
