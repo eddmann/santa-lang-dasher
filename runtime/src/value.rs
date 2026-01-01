@@ -281,6 +281,26 @@ impl Value {
         }
     }
 
+    /// Get grapheme cluster at negative index (from end) - O(1) with cache
+    pub fn grapheme_at_neg(&self, neg_index: i64) -> Option<&str> {
+        if self.heap_type_tag() == Some(TypeTag::String) {
+            let ptr = self.0 as *const StringObject;
+            unsafe { (*ptr).grapheme_at_neg(neg_index) }
+        } else {
+            None
+        }
+    }
+
+    /// Slice string by grapheme indices [start..end) - O(1) with cache
+    pub fn grapheme_slice(&self, start: usize, end: usize) -> Option<&str> {
+        if self.heap_type_tag() == Some(TypeTag::String) {
+            let ptr = self.0 as *const StringObject;
+            unsafe { Some((*ptr).grapheme_slice(start, end)) }
+        } else {
+            None
+        }
+    }
+
     // ===== List Operations =====
 
     pub fn from_list(elements: im::Vector<Value>) -> Self {

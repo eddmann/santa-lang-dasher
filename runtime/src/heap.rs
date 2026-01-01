@@ -1,6 +1,6 @@
 use im;
 use crate::operations::runtime_error;
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::AtomicU32;
 use unicode_segmentation::UnicodeSegmentation;
@@ -49,11 +49,17 @@ impl ObjectHeader {
 }
 
 /// String heap object
-/// Stores UTF-8 data with grapheme-cluster indexing support
+/// Stores UTF-8 data with grapheme-cluster indexing support.
+/// Caches grapheme byte boundaries for O(1) indexing after first access.
 #[repr(C)]
 pub struct StringObject {
     pub header: ObjectHeader,
     pub data: String,
+    /// Cached byte offsets for each grapheme cluster boundary.
+    /// Contains the byte index where each grapheme STARTS, plus the total length at the end.
+    /// Example: "héllo" with graphemes ["h", "é", "l", "l", "o"] might have boundaries [0, 1, 3, 4, 5, 6]
+    /// Lazily initialized on first grapheme access.
+    grapheme_cache: OnceCell<Vec<usize>>,
 }
 
 impl StringObject {
@@ -61,6 +67,7 @@ impl StringObject {
         Box::new(StringObject {
             header: ObjectHeader::new(TypeTag::String),
             data: s.into(),
+            grapheme_cache: OnceCell::new(),
         })
     }
 
@@ -68,14 +75,67 @@ impl StringObject {
         &self.data
     }
 
-    /// Get grapheme cluster at index (LANG.txt §3.3)
-    pub fn grapheme_at(&self, index: usize) -> Option<&str> {
-        self.data.graphemes(true).nth(index)
+    /// Initialize grapheme cache if not already done.
+    /// Returns slice of byte boundaries for each grapheme.
+    fn ensure_grapheme_cache(&self) -> &[usize] {
+        self.grapheme_cache.get_or_init(|| {
+            let mut boundaries = Vec::new();
+            for (byte_idx, _grapheme) in self.data.grapheme_indices(true) {
+                boundaries.push(byte_idx);
+            }
+            // Add final boundary (end of string)
+            boundaries.push(self.data.len());
+            boundaries
+        })
     }
 
-    /// Number of grapheme clusters
+    /// Get grapheme cluster at index (LANG.txt §3.3)
+    /// O(1) after first access (uses cached boundaries)
+    pub fn grapheme_at(&self, index: usize) -> Option<&str> {
+        let boundaries = self.ensure_grapheme_cache();
+        // boundaries has len = grapheme_count + 1 (includes end marker)
+        if index >= boundaries.len().saturating_sub(1) {
+            return None;
+        }
+        let start = boundaries[index];
+        let end = boundaries[index + 1];
+        Some(&self.data[start..end])
+    }
+
+    /// Get grapheme cluster at negative index (from end)
+    /// O(1) after first access
+    pub fn grapheme_at_neg(&self, neg_index: i64) -> Option<&str> {
+        let boundaries = self.ensure_grapheme_cache();
+        let len = boundaries.len().saturating_sub(1);
+        if len == 0 {
+            return None;
+        }
+        let abs_idx = (-neg_index) as usize;
+        if abs_idx > len || abs_idx == 0 {
+            return None;
+        }
+        let index = len - abs_idx;
+        let start = boundaries[index];
+        let end = boundaries[index + 1];
+        Some(&self.data[start..end])
+    }
+
+    /// Slice string by grapheme indices [start..end)
+    /// O(1) after first access
+    pub fn grapheme_slice(&self, start: usize, end: usize) -> &str {
+        let boundaries = self.ensure_grapheme_cache();
+        let len = boundaries.len().saturating_sub(1);
+        let start_clamped = start.min(len);
+        let end_clamped = end.min(len).max(start_clamped);
+        let byte_start = boundaries[start_clamped];
+        let byte_end = boundaries[end_clamped];
+        &self.data[byte_start..byte_end]
+    }
+
+    /// Number of grapheme clusters - O(1) after first access
     pub fn grapheme_len(&self) -> usize {
-        self.data.graphemes(true).count()
+        let boundaries = self.ensure_grapheme_cache();
+        boundaries.len().saturating_sub(1)
     }
 
     /// Check if string is empty (for truthiness)

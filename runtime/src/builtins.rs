@@ -341,9 +341,8 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
     }
 
     // String - index by integer to get grapheme, or slice by range
-    if let Some(s) = collection.as_string() {
-        use unicode_segmentation::UnicodeSegmentation;
-
+    // Uses cached grapheme boundaries for O(1) access after first indexing
+    if collection.as_string().is_some() {
         // Check if index is a range for slicing
         if let Some(range) = index.as_lazy_sequence() {
             use crate::heap::LazySeqKind;
@@ -354,8 +353,7 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
                 step: _,  // Accept any step - we use start/end for slicing
             } = &range.kind
             {
-                let graphemes: Vec<&str> = s.graphemes(true).collect();
-                let len = graphemes.len() as i64;
+                let len = collection.grapheme_len() as i64;
                 let start = *current;
 
                 // Normalize start (handle negative indexing)
@@ -377,13 +375,10 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
                 };
 
                 if start_norm <= len && end_idx >= start_norm && end_idx >= 0 {
-                    let slice: String = graphemes
-                        .iter()
-                        .skip(start_norm as usize)
-                        .take((end_idx - start_norm).max(0) as usize)
-                        .copied()
-                        .collect();
-                    return Value::from_string(slice);
+                    // Use cached grapheme_slice for O(1) slicing
+                    if let Some(slice) = collection.grapheme_slice(start_norm as usize, end_idx as usize) {
+                        return Value::from_string(slice.to_string());
+                    }
                 }
                 return Value::from_string(String::new());
             }
@@ -391,13 +386,19 @@ pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
         // Regular integer index (supports negative indexing)
         // Per LANG.txt: "hello"[-1] → "o"
         if let Some(i) = index.as_integer() {
-            let graphemes: Vec<&str> = s.graphemes(true).collect();
-            let len = graphemes.len() as i64;
-            let idx = if i < 0 { len + i } else { i };
-            if idx >= 0 && idx < len {
-                return Value::from_string(graphemes[idx as usize].to_string());
+            if i < 0 {
+                // Use cached grapheme_at_neg for O(1) negative indexing
+                if let Some(grapheme) = collection.grapheme_at_neg(i) {
+                    return Value::from_string(grapheme.to_string());
+                }
+                return Value::nil();
+            } else {
+                // Use cached grapheme_at for O(1) positive indexing
+                if let Some(grapheme) = collection.grapheme_at(i as usize) {
+                    return Value::from_string(grapheme.to_string());
+                }
+                return Value::nil();
             }
-            return Value::nil();
         }
         runtime_error("get(index, collection) expects Integer or Range index for String");
     }
