@@ -437,6 +437,91 @@ impl<'ctx> CodegenContext<'ctx> {
                 Ok(self.box_int(result))
             }
 
+            // Int / Int → native floored division (FAST PATH)
+            // Uses Python-style floored division: rounds toward negative infinity
+            // -7 / 2 = -4 (not -3 like C's truncated division)
+            (Type::Int, InfixOp::Divide, Type::Int) => {
+                let l = self.unbox_int(left_val);
+                let r = self.unbox_int(right_val);
+                let i64_type = self.context.i64_type();
+                let zero = i64_type.const_zero();
+                let one = i64_type.const_int(1, false);
+
+                // q = a sdiv b (truncated toward zero)
+                let q = self.builder.build_int_signed_div(l, r, "div").unwrap();
+                // r = a srem b (truncated remainder)
+                let rem = self.builder.build_int_signed_rem(l, r, "rem").unwrap();
+
+                // Check if we need to adjust for floored division:
+                // Adjust when remainder is non-zero AND signs of remainder and divisor differ
+                let r_neq_zero = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, rem, zero, "r_neq_zero")
+                    .unwrap();
+                let r_neg = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, rem, zero, "r_neg")
+                    .unwrap();
+                let b_neg = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, r, zero, "b_neg")
+                    .unwrap();
+                let signs_differ = self.builder.build_xor(r_neg, b_neg, "signs_differ").unwrap();
+                let need_adjust = self
+                    .builder
+                    .build_and(r_neq_zero, signs_differ, "need_adjust")
+                    .unwrap();
+
+                // If need_adjust, subtract 1 from quotient
+                let q_minus_one = self.builder.build_int_sub(q, one, "q_minus_one").unwrap();
+                let result = self
+                    .builder
+                    .build_select(need_adjust, q_minus_one, q, "floored_div")
+                    .unwrap();
+                Ok(self.box_int(result.into_int_value()))
+            }
+
+            // Int % Int → native floored modulo (FAST PATH)
+            // Uses Python-style floored modulo: result has same sign as divisor
+            // -7 % 3 = 2 (not -1 like C's truncated modulo)
+            (Type::Int, InfixOp::Modulo, Type::Int) => {
+                let l = self.unbox_int(left_val);
+                let r = self.unbox_int(right_val);
+                let i64_type = self.context.i64_type();
+                let zero = i64_type.const_zero();
+
+                // r = a srem b (truncated remainder)
+                let rem = self.builder.build_int_signed_rem(l, r, "rem").unwrap();
+
+                // Check if we need to adjust for floored modulo:
+                // Adjust when remainder is non-zero AND signs of remainder and divisor differ
+                let r_neq_zero = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, rem, zero, "r_neq_zero")
+                    .unwrap();
+                let r_neg = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, rem, zero, "r_neg")
+                    .unwrap();
+                let b_neg = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, r, zero, "b_neg")
+                    .unwrap();
+                let signs_differ = self.builder.build_xor(r_neg, b_neg, "signs_differ").unwrap();
+                let need_adjust = self
+                    .builder
+                    .build_and(r_neq_zero, signs_differ, "need_adjust")
+                    .unwrap();
+
+                // If need_adjust, add divisor to remainder
+                let rem_plus_b = self.builder.build_int_add(rem, r, "rem_plus_b").unwrap();
+                let result = self
+                    .builder
+                    .build_select(need_adjust, rem_plus_b, rem, "floored_mod")
+                    .unwrap();
+                Ok(self.box_int(result.into_int_value()))
+            }
+
             // Int < Int → native comparison (FAST PATH)
             (Type::Int, InfixOp::LessThan, Type::Int) => {
                 let l = self.unbox_int(left_val);
