@@ -2816,9 +2816,13 @@ pub extern "C-unwind" fn rt_skip(total: Value, collection: Value) -> Value {
         .unwrap_or_else(|| runtime_error("skip(total, collection) expects Integer total"))
         as usize;
 
-    // List
+    // List - use split_off for O(log n) instead of O(n) iterator
     if let Some(list) = collection.as_list() {
-        let result: im::Vector<Value> = list.iter().skip(n).copied().collect();
+        if n >= list.len() {
+            return Value::from_list(im::Vector::new());
+        }
+        // split_off gives us [n..] in O(log n) time
+        let result = list.clone().split_off(n);
         return Value::from_list(result);
     }
 
@@ -2895,9 +2899,13 @@ pub extern "C-unwind" fn rt_take(total: Value, collection: Value) -> Value {
         .unwrap_or_else(|| runtime_error("take(total, collection) expects Integer total"))
         as usize;
 
-    // List
+    // List - use take for O(log n) instead of O(n) iterator
     if let Some(list) = collection.as_list() {
-        let result: im::Vector<Value> = list.iter().take(n).copied().collect();
+        if n >= list.len() {
+            return Value::from_list(list.clone());
+        }
+        // take(n) gives us [0..n] in O(log n) time for im::Vector
+        let result = list.take(n);
         return Value::from_list(result);
     }
 

@@ -1974,3 +1974,19 @@ fn parse_rest_param_with_regular_params() {
     "#]]
     .assert_debug_eq(&expr);
 }
+
+#[test]
+fn parse_dict_identifier_key() {
+    // Test dict with identifier key: #{x: 1} should have Identifier key (not String)
+    // Per LANG.txt: dict_entry ::= expression ":" expression
+    // The identifier should be evaluated as an expression at runtime
+    let expr = parse_expr("#{x: 1}").unwrap();
+    match &expr {
+        crate::parser::ast::Expr::Dict(entries) => {
+            assert_eq!(entries.len(), 1);
+            let (key, _value) = &entries[0];
+            assert!(matches!(key, crate::parser::ast::Expr::Identifier(_)));
+        }
+        _ => panic!("Expected Dict"),
+    }
+}

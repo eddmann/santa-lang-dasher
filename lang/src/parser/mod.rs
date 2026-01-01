@@ -995,12 +995,10 @@ impl Parser {
         if let Ok(token) = self.current_token() {
             if matches!(token.kind, TokenKind::Colon) {
                 // It's a dict with explicit key:value syntax
-                // Convert identifier key to string (#{a: 1} means #{"a": 1})
-                let first_key = if let Expr::Identifier(name) = first_elem {
-                    Expr::String(name)
-                } else {
-                    first_elem
-                };
+                // Per LANG.txt: dict_entry ::= expression ":" expression
+                // The key is an expression that gets evaluated at runtime
+                // So #{x: 1} uses variable x's value as key, not literal string "x"
+                let first_key = first_elem;
                 self.advance(); // consume ':'
                 let first_value = self.parse_pratt_expr(0)?;
                 let mut entries = vec![(first_key, first_value)];
@@ -1127,12 +1125,13 @@ impl Parser {
                     let value = Expr::Identifier(name);
                     return Ok((key, value));
                 } else if matches!(next.kind, TokenKind::Colon) {
-                    // Identifier key: name: value → "name": value
-                    // The identifier becomes a string key, not a variable reference
+                    // Identifier key: name: value → identifier evaluated as expression
+                    // Per LANG.txt: dict_entry ::= expression ":" expression
+                    // The identifier is an expression that gets evaluated at runtime
                     let name = name.clone();
                     self.advance(); // consume identifier
                     self.advance(); // consume ':'
-                    let key = Expr::String(name);
+                    let key = Expr::Identifier(name);
                     let value = self.parse_pratt_expr(0)?;
                     return Ok((key, value));
                 }

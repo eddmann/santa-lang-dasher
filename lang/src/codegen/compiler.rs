@@ -2,7 +2,7 @@ use super::context::CodegenContext;
 use crate::parser::ast::{Expr, InfixOp, Literal, MatchArm, Param, Pattern, PrefixOp, Stmt};
 use crate::runtime::builtin_registry::builtin_spec;
 use crate::types::{Type, TypedExpr};
-use inkwell::values::BasicValueEnum;
+use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::IntPredicate;
 use std::collections::HashSet;
 
@@ -3699,6 +3699,8 @@ impl<'ctx> CodegenContext<'ctx> {
 
         // Track parameter allocas for TCO
         let mut param_allocas = Vec::new();
+        // Track pattern params that need rebinding for TCO
+        let mut pattern_params: Vec<(PointerValue<'ctx>, Pattern)> = Vec::new();
 
         // Load parameters from argv into local variables
         for (i, param) in params.iter().enumerate() {
@@ -3774,10 +3776,19 @@ impl<'ctx> CodegenContext<'ctx> {
                 self.mutable_variables.remove(param_name);
                 param_allocas.push(alloca);
             } else {
-                // Pattern parameter (e.g., [a, b]) - use pattern binding
+                // Pattern parameter (e.g., [a, b]) - create a raw alloca for TCO
+                // The raw alloca stores the undestrcutured value so we can update it for tail calls
+                let raw_alloca = self
+                    .builder
+                    .build_alloca(i64_type, &format!("_raw_param_{}", i))
+                    .unwrap();
+                self.builder.build_store(raw_alloca, arg_val).unwrap();
+                param_allocas.push(raw_alloca);
+                pattern_params.push((raw_alloca, param.pattern.clone()));
+
+                // Destructure from the raw alloca value
                 self.bind_pattern_variables(&param.pattern, arg_val)?;
                 self.set_pattern_mutability(&param.pattern, false);
-                // No single alloca for TCO with pattern params
             }
         }
 
@@ -3805,8 +3816,33 @@ impl<'ctx> CodegenContext<'ctx> {
             self.variables.insert(var_name.clone(), alloca);
         }
 
-        // Jump from entry to body (for TCO, tail calls will jump directly to body_block)
-        self.builder.build_unconditional_branch(body_block).unwrap();
+        // If we have pattern params, create a rebind block for TCO
+        // Tail calls will jump here to re-destructure the raw allocas
+        let tco_entry_block = if pattern_params.is_empty() {
+            // No pattern params - tail calls jump directly to body
+            self.builder.build_unconditional_branch(body_block).unwrap();
+            body_block
+        } else {
+            // Create a rebind block between entry and body
+            let rebind_block = self.context.append_basic_block(closure_fn, "rebind");
+            self.builder.build_unconditional_branch(rebind_block).unwrap();
+
+            // Generate code in rebind block to re-destructure pattern params
+            self.builder.position_at_end(rebind_block);
+            for (raw_alloca, pattern) in &pattern_params {
+                let raw_val = self
+                    .builder
+                    .build_load(self.context.i64_type(), *raw_alloca, "raw_val")
+                    .unwrap();
+                // Re-bind pattern variables from the raw value
+                // Note: bind_pattern_variables will overwrite the existing allocas
+                self.bind_pattern_variables(pattern, raw_val)?;
+            }
+            self.builder.build_unconditional_branch(body_block).unwrap();
+
+            // Tail calls should jump to rebind, not body
+            rebind_block
+        };
 
         // Position at the body block
         self.builder.position_at_end(body_block);
@@ -3814,7 +3850,7 @@ impl<'ctx> CodegenContext<'ctx> {
         // Set up TCO state for compiling the body
         self.tco_state = Some(super::context::TcoState {
             self_name,
-            entry_block: body_block, // Tail calls jump to body_block
+            entry_block: tco_entry_block, // Tail calls jump to rebind (or body if no patterns)
             param_allocas,
         });
 
