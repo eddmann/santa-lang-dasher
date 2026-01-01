@@ -3808,6 +3808,17 @@ impl<'ctx> CodegenContext<'ctx> {
             .module
             .add_function(&closure_name, closure_fn_type, None);
 
+        // Add inlining hints to help LLVM optimize closure calls
+        // nounwind: closure doesn't throw exceptions
+        // inlinehint: suggest LLVM inline this function when beneficial
+        let nounwind_kind = Attribute::get_named_enum_kind_id("nounwind");
+        let nounwind_attr = self.context.create_enum_attribute(nounwind_kind, 0);
+        closure_fn.add_attribute(AttributeLoc::Function, nounwind_attr);
+
+        let inlinehint_kind = Attribute::get_named_enum_kind_id("inlinehint");
+        let inlinehint_attr = self.context.create_enum_attribute(inlinehint_kind, 0);
+        closure_fn.add_attribute(AttributeLoc::Function, inlinehint_attr);
+
         // For TCO: Create a "start" block that loads parameters, then jumps to "body"
         // For tail calls, we jump back to "body" after updating parameter allocas
         let entry_block = self.context.append_basic_block(closure_fn, "entry");
