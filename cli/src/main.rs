@@ -1,12 +1,12 @@
-//! Dasher CLI - Santa-lang LLVM Compiler
+//! Santa-lang CLI - LLVM Compiler (Dasher)
 //!
 //! Usage:
-//!   dasher <SCRIPT>           Run solution file
-//!   dasher -e <CODE>          Evaluate inline script
-//!   dasher -t <SCRIPT>        Run tests (exclude @slow)
-//!   dasher -t -s <SCRIPT>     Run tests (include @slow)
-//!   dasher -c <SCRIPT>        Compile to executable (same name as script)
-//!   <stdin> | dasher          Read source from stdin
+//!   santa-cli <SCRIPT>           Run solution file
+//!   santa-cli -e <CODE>          Evaluate inline script
+//!   santa-cli -t <SCRIPT>        Run tests (exclude @slow)
+//!   santa-cli -t -s <SCRIPT>     Run tests (include @slow)
+//!   santa-cli -c <SCRIPT>        Compile to executable (same name as script)
+//!   cat file | santa-cli         Read source from stdin
 
 use clap::Parser;
 use std::io::Read;
@@ -18,15 +18,51 @@ use santa_lang::lexer::lex;
 use santa_lang::parser::Parser as SantaParser;
 use santa_lang::runner::{Runner, RunnerConfig};
 
-/// Dasher - Santa-lang LLVM Compiler
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn print_help() {
+    println!(
+        r#"santa-lang CLI - Dasher
+
+USAGE:
+    santa-cli <SCRIPT>                Run solution file
+    santa-cli -e <CODE>               Evaluate inline script
+    santa-cli -t <SCRIPT>             Run test suite
+    santa-cli -t -s <SCRIPT>          Run test suite including @slow tests
+    santa-cli -c <SCRIPT>             Compile to native executable
+    santa-cli -h                      Show this help
+    cat file | santa-cli              Read script from stdin
+
+OPTIONS:
+    -e, --eval <CODE>              Evaluate inline script
+    -t, --test                     Run the solution's test suite
+    -s, --slow                     Include @slow tests (use with -t)
+    -c, --compile                  Compile to native executable
+    -h, --help                     Show this help message
+    -v, --version                  Display version information
+
+ENVIRONMENT:
+    SANTA_CLI_SESSION_TOKEN        AOC session token for aoc:// URLs"#
+    );
+}
+
+fn print_version() {
+    println!("santa-cli {}", VERSION);
+}
+
+/// Santa-lang LLVM Compiler (Dasher)
 #[derive(Parser, Debug)]
-#[command(name = "dasher")]
+#[command(name = "santa-cli")]
 #[command(version, about = "Santa-lang LLVM Compiler", long_about = None)]
-#[command(disable_version_flag = true)]
+#[command(disable_version_flag = true, disable_help_flag = true)]
 struct Args {
     /// Print version
-    #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
-    version: (),
+    #[arg(short = 'v', long = "version")]
+    version: bool,
+
+    /// Show help message
+    #[arg(short = 'h', long = "help")]
+    help: bool,
 
     /// The script file to run (optional if using -e or stdin)
     script: Option<PathBuf>,
@@ -58,6 +94,18 @@ enum Source {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+
+    // Handle --help flag
+    if args.help {
+        print_help();
+        return ExitCode::SUCCESS;
+    }
+
+    // Handle --version flag
+    if args.version {
+        print_version();
+        return ExitCode::SUCCESS;
+    }
 
     // Determine source: -e flag > file argument > stdin
     let source = match get_source(&args) {
@@ -127,7 +175,7 @@ fn get_source(args: &Args) -> Result<Source, String> {
         return Ok(Source::Inline { content });
     }
 
-    Err("No input provided. Use: dasher <SCRIPT>, dasher -e <CODE>, or pipe to stdin".to_string())
+    Err("No input provided. Use: santa-cli <SCRIPT>, santa-cli -e <CODE>, or pipe to stdin".to_string())
 }
 
 impl Source {
@@ -365,7 +413,7 @@ mod tests {
 
     #[test]
     fn parse_args_run_mode() {
-        let args = Args::try_parse_from(["dasher", "test.santa"]).unwrap();
+        let args = Args::try_parse_from(["santa-cli", "test.santa"]).unwrap();
         assert!(!args.test_mode);
         assert!(!args.include_slow);
         assert_eq!(args.script, Some(PathBuf::from("test.santa")));
@@ -373,49 +421,49 @@ mod tests {
 
     #[test]
     fn parse_args_test_mode() {
-        let args = Args::try_parse_from(["dasher", "-t", "test.santa"]).unwrap();
+        let args = Args::try_parse_from(["santa-cli", "-t", "test.santa"]).unwrap();
         assert!(args.test_mode);
         assert!(!args.include_slow);
     }
 
     #[test]
     fn parse_args_test_mode_with_slow() {
-        let args = Args::try_parse_from(["dasher", "-t", "-s", "test.santa"]).unwrap();
+        let args = Args::try_parse_from(["santa-cli", "-t", "-s", "test.santa"]).unwrap();
         assert!(args.test_mode);
         assert!(args.include_slow);
     }
 
     #[test]
     fn parse_args_long_flags() {
-        let args = Args::try_parse_from(["dasher", "--test", "--slow", "test.santa"]).unwrap();
+        let args = Args::try_parse_from(["santa-cli", "--test", "--slow", "test.santa"]).unwrap();
         assert!(args.test_mode);
         assert!(args.include_slow);
     }
 
     #[test]
     fn parse_args_compile_mode() {
-        let args = Args::try_parse_from(["dasher", "-c", "test.santa"]).unwrap();
+        let args = Args::try_parse_from(["santa-cli", "-c", "test.santa"]).unwrap();
         assert!(args.compile);
         assert_eq!(args.script, Some(PathBuf::from("test.santa")));
     }
 
     #[test]
     fn parse_args_compile_mode_long() {
-        let args = Args::try_parse_from(["dasher", "--compile", "path/to/script.santa"]).unwrap();
+        let args = Args::try_parse_from(["santa-cli", "--compile", "path/to/script.santa"]).unwrap();
         assert!(args.compile);
         assert_eq!(args.script, Some(PathBuf::from("path/to/script.santa")));
     }
 
     #[test]
     fn parse_args_eval_mode() {
-        let args = Args::try_parse_from(["dasher", "-e", "1 + 2"]).unwrap();
+        let args = Args::try_parse_from(["santa-cli", "-e", "1 + 2"]).unwrap();
         assert_eq!(args.eval, Some("1 + 2".to_string()));
         assert!(args.script.is_none());
     }
 
     #[test]
     fn parse_args_eval_mode_long() {
-        let args = Args::try_parse_from(["dasher", "--eval", "puts(42)"]).unwrap();
+        let args = Args::try_parse_from(["santa-cli", "--eval", "puts(42)"]).unwrap();
         assert_eq!(args.eval, Some("puts(42)".to_string()));
     }
 }
