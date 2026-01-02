@@ -3441,7 +3441,6 @@ keyword          ::= "let" | "mut" | "if" | "else" | "match"
 | `id` | `(value) -> Value` | Identity function |
 | `type` | `(value) -> String` | Get type |
 | `memoize` | `(fn) -> Function` | Memoize function |
-| `evaluate` | `(source) -> Value` | Evaluate code string |
 
 ---
 
