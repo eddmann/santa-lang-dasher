@@ -42,29 +42,29 @@ Download pre-built binaries from [GitHub Releases](https://github.com/eddmann/sa
 Requires Rust 1.85+ and LLVM 18:
 
 ```bash
-cargo build --release -p dasher
+cargo build --release -p santa-cli
 ```
 
 ## Usage
 
 ```bash
 # Run a solution
-dasher solution.santa
+santa-cli solution.santa
 
 # Run tests defined in a solution
-dasher -t solution.santa
+santa-cli -t solution.santa
 
 # Include slow tests (marked with @slow)
-dasher -t -s solution.santa
+santa-cli -t -s solution.santa
 
 # Evaluate inline code
-dasher -e '1 + 2'
+santa-cli -e '1 + 2'
 
 # Read from stdin
-echo 'puts(42)' | dasher
+echo 'puts(42)' | santa-cli
 
 # Compile to standalone executable
-dasher -c solution.santa
+santa-cli -c solution.santa
 ./solution
 ```
 

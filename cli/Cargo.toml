@@ -1,11 +1,11 @@
 [package]
-name = "dasher"
+name = "santa-cli"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "dasher"
+name = "santa-cli"
 path = "src/main.rs"
 
 [dependencies]

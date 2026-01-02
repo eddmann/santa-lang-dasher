@@ -8,19 +8,19 @@ help: ## Display this help message
 
 .PHONY: build
 build: ## Build CLI (debug)
-	cargo build -p dasher
+	cargo build -p santa-cli
 
 .PHONY: release
 release: ## Build CLI (release)
-	cargo build --release -p dasher
+	cargo build --release -p santa-cli
 
 .PHONY: run
 run: ## Run a script (FILE=path/to/script.santa)
-	cargo run -p dasher -- $(FILE)
+	cargo run -p santa-cli -- $(FILE)
 
 .PHONY: run-test
 run-test: ## Run script in test mode (FILE=path/to/script.santa)
-	cargo run -p dasher -- -t $(FILE)
+	cargo run -p santa-cli -- -t $(FILE)
 
 ##@ Testing/Linting
 
@@ -50,7 +50,7 @@ test/runtime: ## Test runtime crate only
 
 .PHONY: test/cli
 test/cli: ## Test CLI only
-	cargo test -p dasher
+	cargo test -p santa-cli
 
 .PHONY: test-examples
 test-examples: release ## Run example test suite

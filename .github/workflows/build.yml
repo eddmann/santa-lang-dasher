@@ -66,12 +66,12 @@ jobs:
       - name: Load cache
         uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release --bin dasher --target ${{ matrix.target }}
+        run: cargo build --release --bin santa-cli --target ${{ matrix.target }}
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: santa-lang-dasher-cli-${{ matrix.platform }}
-          path: target/${{ matrix.target }}/release/dasher
+          path: target/${{ matrix.target }}/release/santa-cli
 
   build-docker:
     name: Build Docker
@@ -91,9 +91,9 @@ jobs:
         run: |
           cat > Dockerfile <<'EOF'
           FROM debian:bookworm-slim
-          COPY linux-amd64/dasher /usr/local/bin/dasher
-          RUN chmod +x /usr/local/bin/dasher
-          ENTRYPOINT ["/usr/local/bin/dasher"]
+          COPY linux-amd64/santa-cli /usr/local/bin/santa-cli
+          RUN chmod +x /usr/local/bin/santa-cli
+          ENTRYPOINT ["/usr/local/bin/santa-cli"]
           EOF
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -129,8 +129,8 @@ jobs:
       - name: Prepare and upload release assets
         run: |
           for platform in linux-amd64 macos-amd64 macos-arm64; do
-            chmod +x artifacts/santa-lang-dasher-cli-${platform}/dasher
-            cp artifacts/santa-lang-dasher-cli-${platform}/dasher santa-lang-dasher-cli-${{ needs.update-draft-release.outputs.tag_name }}-${platform}
+            chmod +x artifacts/santa-lang-dasher-cli-${platform}/santa-cli
+            cp artifacts/santa-lang-dasher-cli-${platform}/santa-cli santa-lang-dasher-cli-${{ needs.update-draft-release.outputs.tag_name }}-${platform}
             gh release upload ${{ needs.update-draft-release.outputs.tag_name }} santa-lang-dasher-cli-${{ needs.update-draft-release.outputs.tag_name }}-${platform} --clobber
           done
         env:

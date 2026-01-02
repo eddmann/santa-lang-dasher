@@ -22,7 +22,12 @@ use santa_lang::runner::{Runner, RunnerConfig};
 #[derive(Parser, Debug)]
 #[command(name = "dasher")]
 #[command(version, about = "Santa-lang LLVM Compiler", long_about = None)]
+#[command(disable_version_flag = true)]
 struct Args {
+    /// Print version
+    #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
+    version: (),
+
     /// The script file to run (optional if using -e or stdin)
     script: Option<PathBuf>,
 
