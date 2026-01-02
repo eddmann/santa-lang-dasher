@@ -35,14 +35,8 @@ jobs:
       - name: Load Rust cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Check formatting
-        run: cargo fmt -- --check
-
-      - name: Clippy
-        run: cargo clippy -- -D warnings
-
-      - name: Run tests
-        run: cargo test
+      - name: Test
+        run: make can-release
 
   update-draft-release-branch:
     needs: test
