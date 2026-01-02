@@ -5374,4 +5374,3 @@ pub extern "C" fn rt_memoize(func: Value) -> Value {
 pub unsafe extern "C" fn rt_call_memoized(callee: Value, argc: u32, argv: *const Value) -> Value {
     crate::operations::rt_call(callee, argc, argv)
 }
-
