@@ -19,6 +19,13 @@ santa-lang is a functional, expression-oriented programming language designed fo
 
 ## Installation
 
+### Docker
+
+```bash
+docker pull ghcr.io/eddmann/santa-lang-dasher:cli-latest
+docker run --rm ghcr.io/eddmann/santa-lang-dasher:cli-latest --help
+```
+
 ### Release Binaries
 
 Download pre-built binaries from [GitHub Releases](https://github.com/eddmann/santa-lang-dasher/releases):
