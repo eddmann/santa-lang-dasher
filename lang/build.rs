@@ -49,38 +49,45 @@ fn main() {
     // Prefer profile-matched staticlib, then a deps-built staticlib for the same profile
     let runtime_lib = profile_dir.join("libsanta_lang_runtime.a");
     let runtime_lib = if runtime_lib.exists() {
-        runtime_lib
-    } else if let Some(dep_lib) = newest_staticlib_in_deps(&profile_dir.join("deps")) {
-        dep_lib
+        Some(runtime_lib)
     } else {
-        // Runtime not built yet - this is fine during initial build
-        // The pipeline will fall back to finding it externally
-        println!(
-            "cargo:warning=Runtime library not found for profile '{}', embedding disabled",
-            profile
-        );
-        return;
+        newest_staticlib_in_deps(&profile_dir.join("deps"))
     };
 
-    // Read and compress the runtime library
-    let mut file = fs::File::open(&runtime_lib).expect("Failed to open runtime library");
-    let mut data = Vec::new();
-    file.read_to_end(&mut data).expect("Failed to read runtime library");
-
-    // Compress using flate2/gzip
-    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
-    encoder.write_all(&data).expect("Failed to compress runtime library");
-    let compressed = encoder.finish().expect("Failed to finish compression");
-
-    println!(
-        "cargo:warning=Runtime library: {} -> {} bytes (compressed)",
-        data.len(),
-        compressed.len()
-    );
-
-    // Write to OUT_DIR
     let out_dir = env::var("OUT_DIR").unwrap();
     let dest_path = PathBuf::from(&out_dir).join("runtime_embedded.gz");
+
+    let compressed = if let Some(runtime_lib) = runtime_lib {
+        // Read and compress the runtime library
+        let mut file = fs::File::open(&runtime_lib).expect("Failed to open runtime library");
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).expect("Failed to read runtime library");
+
+        // Compress using flate2/gzip
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(&data).expect("Failed to compress runtime library");
+        let compressed = encoder.finish().expect("Failed to finish compression");
+
+        println!(
+            "cargo:warning=Runtime library: {} -> {} bytes (compressed)",
+            data.len(),
+            compressed.len()
+        );
+        compressed
+    } else {
+        // Runtime not built yet - write empty placeholder
+        // The pipeline will fall back to finding it externally
+        println!(
+            "cargo:warning=Runtime library not found for profile '{}', using empty placeholder",
+            profile
+        );
+        // Create an empty gzip file
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(&[]).expect("Failed to create empty gzip");
+        encoder.finish().expect("Failed to finish empty gzip")
+    };
+
+    // Write to OUT_DIR
     fs::write(&dest_path, &compressed).expect("Failed to write compressed runtime");
 
     // Export the path for include_bytes!
