@@ -30,7 +30,7 @@ can-release: lint test ## Run all CI checks (lint + test)
 .PHONY: lint
 lint: ## Run rustfmt and clippy checks
 	cargo fmt -- --check
-	cargo clippy -- -D warnings
+	cargo clippy --no-default-features -- -D warnings
 
 .PHONY: fmt
 fmt: ## Format code
