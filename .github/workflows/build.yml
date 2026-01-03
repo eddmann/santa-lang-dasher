@@ -36,7 +36,7 @@ jobs:
             os: ubuntu-24.04
           - platform: macos-amd64
             target: x86_64-apple-darwin
-            os: macos-14
+            os: macos-13
           - platform: macos-arm64
             target: aarch64-apple-darwin
             os: macos-14
