@@ -1,3 +1,5 @@
+<p align="center"><a href="https://eddmann.com/santa-lang/"><img src="./logo.png" alt="santa-lang" width="400px" /></a></p>
+
 # santa-lang Dasher
 
 LLVM-based AOT native compiler implementation of [santa-lang](https://eddmann.com/santa-lang/), written in Rust.
@@ -16,6 +18,25 @@ santa-lang is a functional, expression-oriented programming language designed fo
 - [80+ built-in functions](https://eddmann.com/santa-lang/builtins/)
 - AoC runner with automatic input fetching
 - Self-contained single-binary distribution
+
+## Architecture
+
+```
+Source Code → Lexer → Parser → Type Inference → Codegen → LLVM → Native Binary
+                                                    ↓
+                                          Runtime Library (FFI)
+```
+
+| Component          | Description                                             |
+| ------------------ | ------------------------------------------------------- |
+| **Lexer**          | Tokenizes source into keywords, operators, literals     |
+| **Parser**         | Builds an Abstract Syntax Tree (AST) using Pratt parser |
+| **Type Inference** | Infers and specializes types for native operations      |
+| **Codegen**        | Generates LLVM IR using inkwell                         |
+| **LLVM**           | Compiles IR to native machine code (AOT)                |
+| **Runtime**        | FFI library for type-aware operations and collections   |
+
+For detailed documentation, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Installation
 
@@ -161,7 +182,4 @@ make install       # Install to ~/.cargo/bin
 - [eddmann/santa-lang-prancer](https://github.com/eddmann/santa-lang-prancer) - Tree-walking interpreter in TypeScript (Prancer)
 - [eddmann/santa-lang-comet](https://github.com/eddmann/santa-lang-comet) - Tree-walking interpreter in Rust (Comet)
 - [eddmann/santa-lang-blitzen](https://github.com/eddmann/santa-lang-blitzen) - Bytecode VM in Rust (Blitzen)
-
-## Architecture
-
-For detailed architecture documentation including the compilation pipeline, value representation, and runtime library design, see [ARCHITECTURE.md](ARCHITECTURE.md).
+- [eddmann/santa-lang-dasher](https://github.com/eddmann/santa-lang-dasher) - LLVM native compiler in Rust (Dasher)
