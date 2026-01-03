@@ -30,6 +30,7 @@ can-release: lint test ## Run all CI checks (lint + test)
 .PHONY: lint
 lint: ## Run rustfmt and clippy checks
 	cargo fmt -- --check
+	cargo build -p santa-lang-runtime
 	cargo clippy -- -D warnings
 
 .PHONY: fmt
