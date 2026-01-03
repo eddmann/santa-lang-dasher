@@ -9,7 +9,7 @@ authors = ["Edd Mann"]
 
 [workspace.dependencies]
 inkwell = { version = "0.5", features = ["llvm18-0"] }
-im = { git = "ssh://git@github.com/eddmann/im-rs.git" }
+im = { git = "https://github.com/eddmann/im-rs.git" }
 ordered-float = "4.2"
 unicode-segmentation = "1.10"
 regex = "1.10"

@@ -179,7 +179,7 @@ santa-lang-runtime = { path = "../runtime" }
 crate-type = ["rlib", "staticlib"]  # Produces libsanta_lang_runtime.a
 
 [dependencies]
-im = { git = "ssh://git@github.com/eddmann/im-rs.git" }
+im = { git = "https://github.com/eddmann/im-rs.git" }
 ordered-float = "4.2"
 unicode-segmentation = "1.10"
 regex = "1.10"
