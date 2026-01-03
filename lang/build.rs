@@ -44,14 +44,31 @@ fn main() {
     );
 
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-    let profile_dir = project_root.join("target").join(&profile);
+    let target = env::var("TARGET").ok();
 
-    // Prefer profile-matched staticlib, then a deps-built staticlib for the same profile
-    let runtime_lib = profile_dir.join("libsanta_lang_runtime.a");
-    let runtime_lib = if runtime_lib.exists() {
-        runtime_lib
-    } else if let Some(dep_lib) = newest_staticlib_in_deps(&profile_dir.join("deps")) {
-        dep_lib
+    // Try target-specific directory first (for cross-compilation), then fall back to default
+    let target_profile_dir = target
+        .as_ref()
+        .map(|t| project_root.join("target").join(t).join(&profile));
+    let default_profile_dir = project_root.join("target").join(&profile);
+
+    // Helper to find runtime in a profile directory
+    let find_runtime_in = |dir: &Path| -> Option<PathBuf> {
+        let direct = dir.join("libsanta_lang_runtime.a");
+        if direct.exists() {
+            return Some(direct);
+        }
+        newest_staticlib_in_deps(&dir.join("deps"))
+    };
+
+    // Try target-specific directory first, then default
+    let runtime_lib = target_profile_dir
+        .as_ref()
+        .and_then(|d| find_runtime_in(d))
+        .or_else(|| find_runtime_in(&default_profile_dir));
+
+    let runtime_lib = if let Some(lib) = runtime_lib {
+        lib
     } else {
         // Runtime not built yet - this is fine during initial build
         // The pipeline will fall back to finding it externally
