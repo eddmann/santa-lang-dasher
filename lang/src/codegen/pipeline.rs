@@ -446,28 +446,46 @@ impl Compiler {
         let runtime_lib = self.find_runtime_lib()?;
 
         // Use clang to link
-        let status = Command::new("clang")
-            .arg("-o")
+        let mut cmd = Command::new("clang");
+        cmd.arg("-o")
             .arg(output_path)
             .arg(obj_path)
             .arg(&runtime_lib)
-            // Link system libraries needed by the runtime
-            .arg("-lSystem")
+            // Link common system libraries
             .arg("-lc")
-            .arg("-lm")
-            // Link frameworks required by native-tls on macOS
-            .arg("-framework")
-            .arg("Security")
-            .arg("-framework")
-            .arg("CoreFoundation")
-            // Suppress duplicate library warnings (clang adds -lSystem automatically)
-            .arg("-Wl,-no_warn_duplicate_libraries")
-            // Strip debug symbols and dead code
-            .arg("-Wl,-dead_strip")
-            .arg("-Wl,-x")
-            // Increase stack size to 32MB for deeply recursive programs
-            .arg("-Wl,-stack_size,0x2000000")
-            .status()?;
+            .arg("-lm");
+
+        #[cfg(target_os = "macos")]
+        {
+            cmd.arg("-lSystem")
+                // Link frameworks required by native-tls on macOS
+                .arg("-framework")
+                .arg("Security")
+                .arg("-framework")
+                .arg("CoreFoundation")
+                // Suppress duplicate library warnings (clang adds -lSystem automatically)
+                .arg("-Wl,-no_warn_duplicate_libraries")
+                // Strip debug symbols and dead code
+                .arg("-Wl,-dead_strip")
+                .arg("-Wl,-x")
+                // Increase stack size to 32MB for deeply recursive programs
+                .arg("-Wl,-stack_size,0x2000000");
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            cmd.arg("-lpthread")
+                .arg("-ldl")
+                // Link OpenSSL for native-tls on Linux
+                .arg("-lssl")
+                .arg("-lcrypto")
+                // Strip debug symbols
+                .arg("-Wl,--strip-all")
+                // Garbage collect unused sections
+                .arg("-Wl,--gc-sections");
+        }
+
+        let status = cmd.status()?;
 
         if !status.success() {
             return Err(CompileError::LinkError(format!(
