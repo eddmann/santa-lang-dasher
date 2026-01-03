@@ -22,32 +22,33 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn print_help() {
     println!(
-        r#"santa-lang CLI - Dasher
+        r#"santa-lang CLI - Dasher {}
 
 USAGE:
-    santa-cli <SCRIPT>                Run solution file
-    santa-cli -e <CODE>               Evaluate inline script
-    santa-cli -t <SCRIPT>             Run test suite
-    santa-cli -t -s <SCRIPT>          Run test suite including @slow tests
-    santa-cli -c <SCRIPT>             Compile to native executable
-    santa-cli -h                      Show this help
-    cat file | santa-cli              Read script from stdin
+    santa-cli <SCRIPT>              Run solution file
+    santa-cli -e <CODE>             Evaluate inline script
+    santa-cli -t <SCRIPT>           Run test suite
+    santa-cli -t -s <SCRIPT>        Run tests including @slow
+    santa-cli -c <SCRIPT>           Compile to native executable
+    santa-cli -h                    Show this help
+    cat file | santa-cli            Read from stdin
 
 OPTIONS:
-    -e, --eval <CODE>              Evaluate inline script
-    -t, --test                     Run the solution's test suite
-    -s, --slow                     Include @slow tests (use with -t)
-    -c, --compile                  Compile to native executable
-    -h, --help                     Show this help message
-    -v, --version                  Display version information
+    -e, --eval <CODE>    Evaluate inline script
+    -t, --test           Run the solution's test suite
+    -s, --slow           Include @slow tests (use with -t)
+    -c, --compile        Compile to native executable
+    -h, --help           Show this help message
+    -v, --version        Display version information
 
 ENVIRONMENT:
-    SANTA_CLI_SESSION_TOKEN        AOC session token for aoc:// URLs"#
+    SANTA_CLI_SESSION_TOKEN    AOC session token for aoc:// URLs"#,
+        VERSION
     );
 }
 
 fn print_version() {
-    println!("santa-cli {}", VERSION);
+    println!("santa-lang Dasher {}", VERSION);
 }
 
 /// Santa-lang LLVM Compiler (Dasher)
