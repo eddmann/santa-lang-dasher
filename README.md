@@ -6,18 +6,17 @@ LLVM-based AOT native compiler implementation of [santa-lang](https://eddmann.co
 
 ## Overview
 
-santa-lang is a functional, expression-oriented programming language designed for solving Advent of Code puzzles. This implementation provides:
+santa-lang is a functional, expression-oriented programming language designed for solving Advent of Code puzzles. This implementation compiles to native executables via LLVM, with type inference enabling specialization for native operations.
 
-- LLVM-based ahead-of-time (AOT) compilation to native executables
-- Type inference with specialization for native LLVM operations
-- Tail-call optimization (TCO)
+All santa-lang implementations support the same language features:
+
+- First-class functions and closures with tail-call optimization
+- Pipeline and composition operators for expressive data flow
 - Persistent immutable data structures
-- First-class functions and closures
 - Lazy sequences and infinite ranges
 - Pattern matching with guards
-- [80+ built-in functions](https://eddmann.com/santa-lang/builtins/)
+- [Rich built-in function library](https://eddmann.com/santa-lang/builtins/)
 - AoC runner with automatic input fetching
-- Self-contained single-binary distribution
 
 ## Architecture
 
@@ -36,7 +35,7 @@ Source Code → Lexer → Parser → Type Inference → Codegen → LLVM → Nat
 | **LLVM**           | Compiles IR to native machine code (AOT)                |
 | **Runtime**        | FFI library for type-aware operations and collections   |
 
-For detailed documentation, see [ARCHITECTURE.md](ARCHITECTURE.md).
+For detailed implementation internals, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Installation
 
@@ -51,20 +50,12 @@ docker run --rm ghcr.io/eddmann/santa-lang-dasher:cli-latest --help
 
 Download pre-built binaries from [GitHub Releases](https://github.com/eddmann/santa-lang-dasher/releases):
 
-| Platform              | Artifact                                       |
-| --------------------- | ---------------------------------------------- |
-| Linux (x86_64)        | `santa-lang-dasher-cli-{version}-linux-amd64`  |
-| Linux (ARM64)         | `santa-lang-dasher-cli-{version}-linux-arm64`  |
-| macOS (Intel)         | `santa-lang-dasher-cli-{version}-macos-amd64`  |
-| macOS (Apple Silicon) | `santa-lang-dasher-cli-{version}-macos-arm64`  |
-
-### Build from Source
-
-Requires Rust 1.85+ and LLVM 18:
-
-```bash
-cargo build --release -p santa-cli
-```
+| Platform              | Artifact                                      |
+| --------------------- | --------------------------------------------- |
+| Linux (x86_64)        | `santa-lang-dasher-cli-{version}-linux-amd64` |
+| Linux (ARM64)         | `santa-lang-dasher-cli-{version}-linux-arm64` |
+| macOS (Intel)         | `santa-lang-dasher-cli-{version}-macos-amd64` |
+| macOS (Apple Silicon) | `santa-lang-dasher-cli-{version}-macos-arm64` |
 
 ## Usage
 
@@ -175,11 +166,15 @@ make install       # Install to ~/.cargo/bin
 └── benchmarks/            # Performance benchmarks
 ```
 
-## See Also
+## Other Reindeer
 
-- [eddmann/santa-lang](https://github.com/eddmann/santa-lang) - Language specification/documentation
-- [eddmann/santa-lang-editor](https://github.com/eddmann/santa-lang-editor) - Web-based editor
-- [eddmann/santa-lang-prancer](https://github.com/eddmann/santa-lang-prancer) - Tree-walking interpreter in TypeScript (Prancer)
-- [eddmann/santa-lang-comet](https://github.com/eddmann/santa-lang-comet) - Tree-walking interpreter in Rust (Comet)
-- [eddmann/santa-lang-blitzen](https://github.com/eddmann/santa-lang-blitzen) - Bytecode VM in Rust (Blitzen)
-- [eddmann/santa-lang-dasher](https://github.com/eddmann/santa-lang-dasher) - LLVM native compiler in Rust (Dasher)
+The language has been implemented multiple times to explore different execution models and technologies.
+
+| Codename | Type | Language |
+|----------|------|----------|
+| [Comet](https://github.com/eddmann/santa-lang-comet) | Tree-walking interpreter | Rust |
+| [Blitzen](https://github.com/eddmann/santa-lang-blitzen) | Bytecode VM | Rust |
+| [Dasher](https://github.com/eddmann/santa-lang-dasher) | LLVM native compiler | Rust |
+| [Donner](https://github.com/eddmann/santa-lang-donner) | JVM bytecode compiler | Kotlin |
+| [Vixen](https://github.com/eddmann/santa-lang-vixen) | Embedded bytecode VM | C |
+| [Prancer](https://github.com/eddmann/santa-lang-prancer) | Tree-walking interpreter | TypeScript |
