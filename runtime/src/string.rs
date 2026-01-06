@@ -3,7 +3,7 @@ use std::os::raw::c_char;
 
 /// Create a string Value from a C string pointer
 /// This is called from generated LLVM code to create string literals
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_string_from_cstr(ptr: *const c_char, len: usize) -> Value {
     unsafe {
         let bytes = std::slice::from_raw_parts(ptr as *const u8, len);

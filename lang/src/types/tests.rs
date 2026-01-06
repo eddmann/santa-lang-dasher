@@ -1,6 +1,6 @@
 use crate::lexer::lex;
 use crate::parser::ast::{Expr, Pattern};
-use crate::parser::{parse, Parser};
+use crate::parser::{Parser, parse};
 use crate::types::infer::TypeInference;
 use crate::types::ty::{Type, TypedProgram};
 

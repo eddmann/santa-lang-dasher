@@ -1,8 +1,9 @@
 [package]
-name = "santa-lang-runtime"
+name = "runtime"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+documentation.workspace = true
 
 [lib]
 crate-type = ["rlib", "staticlib"]

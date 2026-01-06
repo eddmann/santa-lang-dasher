@@ -1,6 +1,6 @@
 use crate::lexer::token::{Position, Span};
 use crate::parser::ast::{Expr, InfixOp, MatchArm, Param, Pattern, PrefixOp, Program, Section, Stmt};
-use crate::types::builtins::{builtin_signatures, compute_expected_lambda_type, compute_return_type, BuiltinSignature};
+use crate::types::builtins::{BuiltinSignature, builtin_signatures, compute_expected_lambda_type, compute_return_type};
 use crate::types::ty::{Type, TypedExpr, TypedProgram, TypedSection, TypedStmt};
 use crate::types::unify::Unifier;
 use std::collections::{HashMap, HashSet};

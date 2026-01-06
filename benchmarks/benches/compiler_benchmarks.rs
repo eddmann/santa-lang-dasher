@@ -6,13 +6,13 @@
 //! - Codegen (LLVM IR generation)
 //! - Full compilation pipeline
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use inkwell::context::Context;
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use inkwell::OptimizationLevel;
+use inkwell::context::Context;
 
-use santa_lang::codegen::context::CodegenContext;
-use santa_lang::lexer::lex;
-use santa_lang::parser::Parser;
+use lang::codegen::context::CodegenContext;
+use lang::lexer::lex;
+use lang::parser::Parser;
 
 /// Simple arithmetic expression
 const SIMPLE_EXPR: &str = "1 + 2 * 3";

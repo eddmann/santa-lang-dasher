@@ -5,7 +5,7 @@ use super::value::Value;
 use std::sync::atomic::Ordering;
 
 /// Increment reference count for heap-allocated values
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_incref(value: Value) {
     if let Some(header_ptr) = value.as_heap_ptr::<ObjectHeader>() {
         unsafe {
@@ -16,7 +16,7 @@ pub extern "C" fn rt_incref(value: Value) {
 }
 
 /// Decrement reference count and free if it reaches zero
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_decref(value: Value) {
     if let Some(header_ptr) = value.as_heap_ptr::<ObjectHeader>() {
         unsafe {

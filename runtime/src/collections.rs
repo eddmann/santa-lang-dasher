@@ -5,7 +5,7 @@ use super::value::Value;
 use im;
 
 /// Create an empty list
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_list_new() -> Value {
     let list = ListObject::new(im::Vector::new());
     Value::from_heap_ptr(Box::into_raw(list))
@@ -15,7 +15,7 @@ pub extern "C" fn rt_list_new() -> Value {
 ///
 /// # Safety
 /// The caller must ensure that `values` points to a valid array of `count` Values.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rt_list_from_values(values: *const Value, count: usize) -> Value {
     let values_slice = std::slice::from_raw_parts(values, count);
     let vector = values_slice.iter().copied().collect();
@@ -25,7 +25,7 @@ pub unsafe extern "C" fn rt_list_from_values(values: *const Value, count: usize)
 
 /// Push a single element to the end of a list
 /// Returns a new list with the element appended.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_list_push(list: Value, elem: Value) -> Value {
     if let Some(l) = list.as_list() {
         let mut new_list = l.clone();
@@ -41,7 +41,7 @@ pub extern "C" fn rt_list_push(list: Value, elem: Value) -> Value {
 
 /// Concatenate two lists (or a list with a lazy sequence)
 /// Returns a new list with all elements from both collections.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_list_concat(list1: Value, list2: Value) -> Value {
     let mut result = if let Some(l) = list1.as_list() {
         l.clone()
@@ -64,7 +64,7 @@ pub extern "C" fn rt_list_concat(list1: Value, list2: Value) -> Value {
 }
 
 /// Create an empty set
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_set_new() -> Value {
     let set = SetObject::new(im::HashSet::new());
     Value::from_heap_ptr(Box::into_raw(set))
@@ -74,7 +74,7 @@ pub extern "C" fn rt_set_new() -> Value {
 ///
 /// # Safety
 /// The caller must ensure that `values` points to a valid array of `count` Values.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rt_set_from_values(values: *const Value, count: usize) -> Value {
     let values_slice = std::slice::from_raw_parts(values, count);
     for value in values_slice.iter() {
@@ -94,7 +94,7 @@ pub unsafe extern "C" fn rt_set_from_values(values: *const Value, count: usize) 
 }
 
 /// Create an empty dict
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_dict_new() -> Value {
     let dict = DictObject::new(im::HashMap::new());
     Value::from_heap_ptr(Box::into_raw(dict))
@@ -104,7 +104,7 @@ pub extern "C" fn rt_dict_new() -> Value {
 ///
 /// # Safety
 /// The caller must ensure that `keys` and `values` both point to valid arrays of `count` Values.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rt_dict_from_entries(keys: *const Value, values: *const Value, count: usize) -> Value {
     let keys_slice = std::slice::from_raw_parts(keys, count);
     let values_slice = std::slice::from_raw_parts(values, count);

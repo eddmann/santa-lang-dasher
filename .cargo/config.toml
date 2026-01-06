@@ -1,3 +1,6 @@
+[net]
+git-fetch-with-cli = true
+
 [env]
 LLVM_SYS_180_PREFIX = "/opt/homebrew/opt/llvm@18"
 LIBRARY_PATH = "/opt/homebrew/lib"

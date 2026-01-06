@@ -162,10 +162,10 @@ fn from_codegen_compile_error() {
 
 #[test]
 fn from_pipeline_compile_error() {
-    let pipeline_err = PipelineCompileError::LinkError("libsanta_lang.a not found".to_string());
+    let pipeline_err = PipelineCompileError::LinkError("liblang.a not found".to_string());
     let santa_err: SantaError = pipeline_err.into();
     let display = format!("{}", santa_err);
-    expect![[r#"CompileError: Link error: libsanta_lang.a not found"#]].assert_eq(&display);
+    expect![[r#"CompileError: Link error: liblang.a not found"#]].assert_eq(&display);
 }
 
 #[test]

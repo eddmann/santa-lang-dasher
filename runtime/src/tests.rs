@@ -188,7 +188,7 @@ fn refcount_primitives_ignored() {
     let v = Value::from_integer(42);
     rt_incref(v); // Should do nothing
     rt_decref(v); // Should do nothing
-                  // No assertion - just shouldn't crash
+    // No assertion - just shouldn't crash
 }
 
 #[test]
@@ -5016,7 +5016,7 @@ fn read_aoc_local_input_file() {
     std::fs::write(&input_path, "local input data").unwrap();
 
     // Set the script path env var
-    std::env::set_var("DASHER_SCRIPT_PATH", &script_path);
+    unsafe { std::env::set_var("DASHER_SCRIPT_PATH", &script_path) };
 
     let path = Value::from_string("aoc://2022/1");
     let result = rt_read(path);
@@ -5024,7 +5024,7 @@ fn read_aoc_local_input_file() {
     assert_eq!(result.as_string(), Some("local input data"));
 
     // Cleanup
-    std::env::remove_var("DASHER_SCRIPT_PATH");
+    unsafe { std::env::remove_var("DASHER_SCRIPT_PATH") };
     std::fs::remove_file(&input_path).ok();
     std::fs::remove_dir(&temp_dir).ok();
 }

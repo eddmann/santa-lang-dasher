@@ -1,7 +1,7 @@
 use super::*;
 use crate::lexer::lex;
-use crate::parser::ast::Expr;
 use crate::parser::Parser;
+use crate::parser::ast::Expr;
 
 fn parse_program(source: &str) -> Program {
     let tokens = lex(source).unwrap();
@@ -812,7 +812,7 @@ test: {
     assert_eq!(results[0].part_one_passed, Some(true));
     // With parse_value fix, lists are now properly parsed as Lists, not Strings
     let expected_list = Value::from_list({
-        let mut v = santa_lang_runtime::im::Vector::new();
+        let mut v = runtime::im::Vector::new();
         v.push_back(Value::from_integer(0));
         v.push_back(Value::from_integer(1));
         v.push_back(Value::from_integer(2));

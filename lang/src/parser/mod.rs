@@ -897,7 +897,7 @@ impl Parser {
                         message: format!("Expected ',' or ')' in call arguments, got {:?}", token.kind),
                         line: token.span.start.line as usize,
                         column: token.span.start.column as usize,
-                    })
+                    });
                 }
             }
         }
@@ -988,7 +988,7 @@ impl Parser {
                                 message: format!("Expected ',' or '}}' in dict literal, got {:?}", token.kind),
                                 line: token.span.start.line as usize,
                                 column: token.span.start.column as usize,
-                            })
+                            });
                         }
                     }
                 }
@@ -1140,7 +1140,7 @@ impl Parser {
                         message: format!("Expected ',' or ']', got {:?}", token.kind),
                         line: token.span.start.line as usize,
                         column: token.span.start.column as usize,
-                    })
+                    });
                 }
             }
         }
@@ -1452,7 +1452,7 @@ impl Parser {
                     match next.kind {
                         TokenKind::DotDot => {
                             self.advance(); // consume '..'
-                                            // Check for end value (optional for unbounded range)
+                            // Check for end value (optional for unbounded range)
                             let end = self.parse_range_end_integer(false)?;
                             return Ok(Pattern::Range {
                                 start,
@@ -1462,7 +1462,7 @@ impl Parser {
                         }
                         TokenKind::DotDotEqual => {
                             self.advance(); // consume '..='
-                                            // Inclusive range requires end value
+                            // Inclusive range requires end value
                             let end = self.parse_range_end_integer(true)?.unwrap();
                             return Ok(Pattern::Range {
                                 start,
@@ -1938,7 +1938,7 @@ impl Parser {
                                     message: format!("Expected ',' or '}}' in set literal, got {:?}", token.kind),
                                     line: token.span.start.line as usize,
                                     column: token.span.start.column as usize,
-                                })
+                                });
                             }
                         }
                     }
@@ -2044,7 +2044,7 @@ impl Parser {
             // Check for @slow attribute before test section
             let slow = if matches!(self.current_token()?.kind, TokenKind::At) {
                 self.advance(); // consume '@'
-                                // Expect 'slow' identifier
+                // Expect 'slow' identifier
                 let token = self.current_token()?;
                 if let TokenKind::Identifier(name) = &token.kind {
                     if name == "slow" {

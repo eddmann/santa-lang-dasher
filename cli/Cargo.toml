@@ -1,15 +1,16 @@
 [package]
-name = "santa-cli"
+name = "cli"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+documentation.workspace = true
 
 [[bin]]
 name = "santa-cli"
 path = "src/main.rs"
 
 [dependencies]
-santa-lang = { path = "../lang" }
+lang = { path = "../lang" }
 clap.workspace = true
 atty.workspace = true
 serde = { version = "1.0", features = ["derive"] }

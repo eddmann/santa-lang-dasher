@@ -20,7 +20,7 @@ use regex::Regex;
 /// - Decimal (rounds to nearest, half away from zero): int(3.5) → 4, int(-3.5) → -4
 /// - String: int("42") → 42, int("abc") → 0
 /// - Boolean: int(true) → 1, int(false) → 0
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_int(value: Value) -> Value {
     // Integer (identity)
     if let Some(i) = value.as_integer() {
@@ -70,7 +70,7 @@ fn round_half_away_from_zero(d: f64) -> i64 {
 /// - ints("15a20b35") → [15, 20, 35]
 /// - ints("x: 10, y: -5") → [10, -5]
 /// - ints("no numbers") → []
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_ints(value: Value) -> Value {
     // Only works on strings
     let s = match value.as_string() {
@@ -98,7 +98,7 @@ pub extern "C-unwind" fn rt_ints(value: Value) -> Value {
 /// - Dictionary: list(#{1: 2, 3: 4}) → [[1, 2], [3, 4]] (list of [key, value] tuples)
 /// - String: list("ab") → ["a", "b"] (each grapheme cluster)
 /// - Range/LazySequence: forces evaluation to list (bounded sequences only)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_list(value: Value) -> Value {
     use unicode_segmentation::UnicodeSegmentation;
 
@@ -152,7 +152,7 @@ pub extern "C" fn rt_list(value: Value) -> Value {
 /// - Set (identity): set({1, 2, 3}) → {1, 2, 3}
 /// - String: set("aab") → {"a", "b"} (each grapheme cluster)
 /// - Range/LazySequence: set(1..5) → {1, 2, 3, 4} (bounded sequences only)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_set(value: Value) -> Value {
     use unicode_segmentation::UnicodeSegmentation;
 
@@ -216,7 +216,7 @@ pub extern "C" fn rt_set(value: Value) -> Value {
 /// Per LANG.txt §11.1:
 /// - List of tuples: dict([[1, 2], [3, 4]]) → #{1: 2, 3: 4}
 /// - Dictionary (identity): dict(#{1: 2, 3: 4}) → #{1: 2, 3: 4}
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_dict(value: Value) -> Value {
     // Dictionary (identity)
     if let Some(dict) = value.as_dict() {
@@ -261,7 +261,7 @@ pub extern "C" fn rt_dict(value: Value) -> Value {
 /// - Set: get(1, {1, 2}) → 1 (membership check); get(3, {1, 2}) → nil
 /// - Dictionary: get(1, #{1: 2, 3: 4}) → 2
 /// - String: get(1, "hello") → "e"
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_get(index: Value, collection: Value) -> Value {
     // List - index by integer or slice by range
     if let Some(list) = collection.as_list() {
@@ -666,7 +666,7 @@ fn lazy_next_with_closures(lazy: &LazySequenceObject) -> Option<(Value, Box<Lazy
 /// - Dictionary: size(#{1: 2, 3: 4}) → 2
 /// - String: size("hello") → 5 (grapheme count)
 /// - Range (bounded): size(1..5) → 4
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_size(collection: Value) -> Value {
     // List
     if let Some(list) = collection.as_list() {
@@ -763,7 +763,7 @@ pub extern "C" fn rt_size(collection: Value) -> Value {
 /// - List: first([1, 2]) → 1; first([]) → nil
 /// - Set: first({1, 2}) → 1
 /// - String: first("ab") → "a"
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_first(collection: Value) -> Value {
     // List
     if let Some(list) = collection.as_list() {
@@ -804,7 +804,7 @@ pub extern "C" fn rt_first(collection: Value) -> Value {
 /// - Set: second({1, 2}) → 2
 /// - String: second("ab") → "b"
 /// - Range/LazySequence: second(1..5) → 2
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_second(collection: Value) -> Value {
     // List
     if let Some(list) = collection.as_list() {
@@ -847,7 +847,7 @@ pub extern "C" fn rt_second(collection: Value) -> Value {
 /// - Set: last({1, 2}) → 2
 /// - String: last("ab") → "b"
 /// - Range (bounded): last(1..5) → 4, last(1..=5) → 5
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_last(collection: Value) -> Value {
     // List
     if let Some(list) = collection.as_list() {
@@ -928,7 +928,7 @@ pub extern "C" fn rt_last(collection: Value) -> Value {
 /// - Set: rest({1, 2}) → {2}
 /// - String: rest("ab") → "b"
 /// - Range/LazySequence: rest(1..5) → LazySequence(2..5)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_rest(collection: Value) -> Value {
     // List
     if let Some(list) = collection.as_list() {
@@ -971,7 +971,7 @@ pub extern "C" fn rt_rest(collection: Value) -> Value {
 /// Get dictionary keys as a List.
 /// Per LANG.txt §11.2:
 /// - keys(#{1: 2, 3: 4}) → [1, 3]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_keys(collection: Value) -> Value {
     if let Some(dict) = collection.as_dict() {
         let keys: im::Vector<Value> = dict.keys().copied().collect();
@@ -986,7 +986,7 @@ pub extern "C" fn rt_keys(collection: Value) -> Value {
 /// Get dictionary values as a List.
 /// Per LANG.txt §11.2:
 /// - values(#{1: 2, 3: 4}) → [2, 4]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_values(collection: Value) -> Value {
     if let Some(dict) = collection.as_dict() {
         let values: im::Vector<Value> = dict.values().copied().collect();
@@ -1008,7 +1008,7 @@ pub extern "C" fn rt_values(collection: Value) -> Value {
 /// - Set: push(3, {1, 2}) → {1, 2, 3}; push(1, {1, 2}) → {1, 2}
 ///
 /// Per LANG.txt §3.11: Pushing a non-hashable value to a Set produces RuntimeErr.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_push(value: Value, collection: Value) -> Value {
     // List - append to end
     if let Some(list) = collection.as_list() {
@@ -1041,7 +1041,7 @@ pub extern "C-unwind" fn rt_push(value: Value, collection: Value) -> Value {
 /// - Dictionary: assoc(1, 1, #{1: 2, 3: 4}) → #{1: 1, 3: 4}
 ///
 /// Per LANG.txt §3.11: Using a non-hashable key in a Dictionary produces RuntimeErr.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_assoc(key: Value, value: Value, collection: Value) -> Value {
     // List - replace at index, filling with nil if needed
     if let Some(list) = collection.as_list() {
@@ -1133,7 +1133,7 @@ fn expect_callable_arity(name: &str, callee: &Value) -> u32 {
 /// Per LANG.txt §11.3:
 /// - List: update(0, _ + 1, [1, 2]) → [2, 2]; fills with nil if index beyond current size
 /// - Dictionary: update(0, || 1, #{}) → #{0: 1}; update(1, _ + 1, #{1: 2}) → #{1: 3}
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_update(key: Value, updater: Value, collection: Value) -> Value {
     if !is_callable(&updater) {
         runtime_error("update(key, updater, collection) expects a function");
@@ -1204,7 +1204,7 @@ pub extern "C-unwind" fn rt_update(key: Value, updater: Value, collection: Value
 /// Per LANG.txt §11.3:
 /// - List: update_d(0, 0, _ + 1, [1, 2]) → [2, 2]; fills with nil at missing indices
 /// - Dictionary: update_d(0, 0, _ + 1, #{}) → #{0: 1}
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_update_d(key: Value, default: Value, updater: Value, collection: Value) -> Value {
     if !is_callable(&updater) {
         runtime_error("update_d(key, default, updater, collection) expects a function");
@@ -1284,7 +1284,7 @@ pub extern "C-unwind" fn rt_update_d(key: Value, default: Value, updater: Value,
 ///   - Mapper receives value only (for 1-arg mapper)
 ///   - Mapper receives (value, key) for 2-arg mapper
 /// - String: map(_ * 2, "ab") → ["aa", "bb"] (returns List)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_map(mapper: Value, collection: Value) -> Value {
     // Check if mapper is callable
     let arity = expect_callable_arity("map(mapper, collection)", &mapper);
@@ -1365,7 +1365,7 @@ pub extern "C" fn rt_map(mapper: Value, collection: Value) -> Value {
 ///   - Predicate receives value only (for 1-arg predicate)
 ///   - Predicate receives (value, key) for 2-arg predicate
 /// - String: filter(_ == "a", "ab") → ["a"] (returns List)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_filter(predicate: Value, collection: Value) -> Value {
     // Check if predicate is callable
     let arity = expect_callable_arity("filter(predicate, collection)", &predicate);
@@ -1445,7 +1445,7 @@ pub extern "C" fn rt_filter(predicate: Value, collection: Value) -> Value {
 /// - flat_map(_ * 2, [[1, 2], [3, 4]]) → [2, 4, 6, 8]
 /// - flat_map(|x| [x, x * 2], [1, 2]) → [1, 2, 2, 4]
 /// - flat_map(|x| [x, x * 2], 1..4) → [1, 2, 2, 4, 3, 6]  (Range support)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_flat_map(mapper: Value, collection: Value) -> Value {
     if !is_callable(&mapper) {
         runtime_error("flat_map(mapper, collection) expects a function");
@@ -1536,7 +1536,7 @@ pub extern "C" fn rt_flat_map(mapper: Value, collection: Value) -> Value {
 /// Per LANG.txt §11.4:
 /// - [1, 2, 3, 4] |> filter_map(|v| if v % 2 { v * 2 }) → [2, 6]
 /// - 1..5 |> filter_map(|v| if v % 2 { v * 2 }) → [2, 6]  (Range support)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
     if !is_callable(&mapper) {
         runtime_error("filter_map(mapper, collection) expects a function");
@@ -1549,11 +1549,7 @@ pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
             .iter()
             .filter_map(|v| {
                 let mapped = call_value(mapper, &[*v]);
-                if mapped.is_truthy() {
-                    Some(mapped)
-                } else {
-                    None
-                }
+                if mapped.is_truthy() { Some(mapped) } else { None }
             })
             .collect();
         return Value::from_list(filtered);
@@ -1588,11 +1584,7 @@ pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
                 } else {
                     call_value(mapper, &[*v])
                 };
-                if mapped.is_truthy() {
-                    Some((*k, mapped))
-                } else {
-                    None
-                }
+                if mapped.is_truthy() { Some((*k, mapped)) } else { None }
             })
             .collect();
         return Value::from_dict(filtered);
@@ -1606,11 +1598,7 @@ pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
             .filter_map(|g| {
                 let char_val = Value::from_string(g.to_string());
                 let mapped = call_value(mapper, &[char_val]);
-                if mapped.is_truthy() {
-                    Some(mapped)
-                } else {
-                    None
-                }
+                if mapped.is_truthy() { Some(mapped) } else { None }
             })
             .collect();
         return Value::from_list(filtered);
@@ -1635,7 +1623,7 @@ pub extern "C" fn rt_filter_map(mapper: Value, collection: Value) -> Value {
 /// Per LANG.txt §11.4:
 /// - [1, 2] |> find_map(|v| if v % 2 { v * 2 }) → 2
 /// - 1..5 |> find_map(|v| if v % 2 { v * 2 }) → 2  (Range support)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_find_map(mapper: Value, collection: Value) -> Value {
     if !is_callable(&mapper) {
         runtime_error("find_map(mapper, collection) expects a function");
@@ -1722,7 +1710,7 @@ pub extern "C" fn rt_find_map(mapper: Value, collection: Value) -> Value {
 /// - reduce(+, [1, 2]) → 3
 /// - reduce(+, {1, 2}) → 3
 /// - reduce(+, []) → RuntimeErr
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
     use crate::break_handling::{break_occurred, enter_iteration, exit_iteration, take_break_value};
 
@@ -1865,7 +1853,7 @@ pub extern "C-unwind" fn rt_reduce(reducer: Value, collection: Value) -> Value {
 /// Per LANG.txt §11.5:
 /// - fold(0, +, [1, 2]) → 3
 /// - fold(0, +, []) → 0
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_fold(initial: Value, folder: Value, collection: Value) -> Value {
     use crate::break_handling::{break_occurred, enter_iteration, exit_iteration, take_break_value};
 
@@ -1974,7 +1962,7 @@ pub extern "C" fn rt_fold(initial: Value, folder: Value, collection: Value) -> V
 /// The initial value is included as the first element (matching reference implementations).
 ///
 /// - scan(0, +, [1, 2]) → [0, 1, 3]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_scan(initial: Value, folder: Value, collection: Value) -> Value {
     if !is_callable(&folder) {
         runtime_error("scan(initial, folder, collection) expects a function");
@@ -2063,7 +2051,7 @@ pub extern "C" fn rt_scan(initial: Value, folder: Value, collection: Value) -> V
 ///
 /// Per LANG.txt §11.5:
 /// - fold_s([0, 1], |[a, b], _| [b, a + b], 1..10) → 55 (Fibonacci)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_fold_s(initial: Value, folder: Value, collection: Value) -> Value {
     if !is_callable(&folder) {
         runtime_error("fold_s(initial, folder, collection) expects a function");
@@ -2158,7 +2146,7 @@ pub extern "C" fn rt_fold_s(initial: Value, folder: Value, collection: Value) ->
 /// - find(_ % 2, {1, 2}) → 1
 /// - find(_ == "b", "ab") → "b"
 /// - find(_ > 5, 1..10) → 6  (Range support)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_find(predicate: Value, collection: Value) -> Value {
     if !is_callable(&predicate) {
         runtime_error("find(predicate, collection) expects a function");
@@ -2243,7 +2231,7 @@ fn find_in_lazy(lazy: &LazySequenceObject, predicate: Value) -> Value {
 /// - count(_ % 2, {1, 2, 3, 4}) → 2
 /// - count(_ == "a", "ab") → 1
 /// - count(_ % 2, 1..10) → 5  (Range support)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_count(predicate: Value, collection: Value) -> Value {
     if !is_callable(&predicate) {
         runtime_error("count(predicate, collection) expects a function");
@@ -2327,11 +2315,7 @@ fn count_in_lazy(lazy: &LazySequenceObject, predicate: Value) -> i64 {
             let mut cur = *current;
             loop {
                 let at_end = if *inclusive {
-                    if *step > 0 {
-                        cur > end_val
-                    } else {
-                        cur < end_val
-                    }
+                    if *step > 0 { cur > end_val } else { cur < end_val }
                 } else if *step > 0 {
                     cur >= end_val
                 } else {
@@ -2365,7 +2349,7 @@ fn count_in_lazy(lazy: &LazySequenceObject, predicate: Value) -> i64 {
 /// - sum([]) → 0
 /// - sum(#{1: 2, 3: 4}) → 6 (sums values)
 /// - sum(1..=100) → 5050 (O(1) using arithmetic sequence formula)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_sum(collection: Value) -> Value {
     let mut int_sum: i64 = 0;
     let mut dec_sum: f64 = 0.0;
@@ -2531,7 +2515,7 @@ fn compare_or_error(op: &str, a: Value, b: Value) -> std::cmp::Ordering {
 /// - max([]) → nil
 /// - max(#{1: 2, 3: 4}) → 4 (max of values)
 /// - max(1..5) → 4 (O(1) for bounded ranges)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_max(collection: Value) -> Value {
     use std::cmp::Ordering;
 
@@ -2638,7 +2622,7 @@ pub extern "C-unwind" fn rt_max(collection: Value) -> Value {
 /// - min([]) → nil
 /// - min(#{1: 2, 3: 4}) → 2 (min of values)
 /// - min(1..5) → 1 (O(1) for bounded ranges)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_min(collection: Value) -> Value {
     use std::cmp::Ordering;
 
@@ -2739,7 +2723,7 @@ pub extern "C-unwind" fn rt_min(collection: Value) -> Value {
 /// `max(a, b)` → Maximum of two values
 ///
 /// Returns the larger of two values.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_max2(a: Value, b: Value) -> Value {
     use std::cmp::Ordering;
     match compare_values(a, b) {
@@ -2756,7 +2740,7 @@ pub extern "C-unwind" fn rt_max2(a: Value, b: Value) -> Value {
 /// `min(a, b)` → Minimum of two values
 ///
 /// Returns the smaller of two values.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_min2(a: Value, b: Value) -> Value {
     use std::cmp::Ordering;
     match compare_values(a, b) {
@@ -2782,7 +2766,7 @@ pub extern "C-unwind" fn rt_min2(a: Value, b: Value) -> Value {
 /// - skip(1, [1, 2, 3]) → [2, 3]
 /// - skip(1, {1, 2, 3}) → {2, 3}
 /// - skip(2, 1..5) → LazySequence(3..5)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_skip(total: Value, collection: Value) -> Value {
     let n = total
         .as_integer()
@@ -2860,7 +2844,7 @@ pub extern "C-unwind" fn rt_skip(total: Value, collection: Value) -> Value {
 /// - take(2, [1, 2, 3]) → [1, 2]
 /// - take(2, {1, 2, 3}) → [1, 2]
 /// - take(2, 1..5) → [1, 2]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_take(total: Value, collection: Value) -> Value {
     let n = total
         .as_integer()
@@ -2901,7 +2885,7 @@ pub extern "C-unwind" fn rt_take(total: Value, collection: Value) -> Value {
 /// - sort(>, [3, 2, 1]) → [3, 2, 1]
 /// - sort(-, [3, 2, 1]) → [1, 2, 3]
 /// - sort(|a, b| a % 2 < b % 2, [1, 2, 3, 4]) → [2, 4, 1, 3]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_sort(comparator: Value, collection: Value) -> Value {
     if !is_callable(&comparator) {
         runtime_error("sort(comparator, collection) expects a function");
@@ -2950,7 +2934,7 @@ pub extern "C-unwind" fn rt_sort(comparator: Value, collection: Value) -> Value 
 /// - reverse([1, 2, 3]) → [3, 2, 1]
 /// - reverse("abc") → "cba"
 /// - reverse(1..5) → [4, 3, 2, 1]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_reverse(collection: Value) -> Value {
     // List
     if let Some(list) = collection.as_list() {
@@ -2999,7 +2983,7 @@ pub extern "C-unwind" fn rt_reverse(collection: Value) -> Value {
 /// Per LANG.txt §11.9:
 /// - rotate(1, [1, 2, 3]) → [3, 1, 2]
 /// - rotate(-1, [1, 2, 3]) → [2, 3, 1]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_rotate(steps: Value, collection: Value) -> Value {
     let n = steps
         .as_integer()
@@ -3045,7 +3029,7 @@ pub extern "C-unwind" fn rt_rotate(steps: Value, collection: Value) -> Value {
 /// Per LANG.txt §11.9:
 /// - chunk(2, [1, 2, 3]) → [[1, 2], [3]]
 /// - chunk(2, [1, 2, 3, 4]) → [[1, 2], [3, 4]]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_chunk(size: Value, collection: Value) -> Value {
     let chunk_size = size
         .as_integer()
@@ -3146,7 +3130,7 @@ fn check_hashable(elements: &[Value]) {
 ///
 /// Per LANG.txt §11.10:
 /// - union({1, 2}, {2, 3}) → {1, 2, 3}
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_union(collection1: Value, collection2: Value) -> Value {
     let mut result: im::HashSet<Value> = im::HashSet::new();
 
@@ -3172,7 +3156,7 @@ pub extern "C" fn rt_union(collection1: Value, collection2: Value) -> Value {
 /// Per LANG.txt §11.10:
 /// - union({1, 2}, [2, 3], 1..4) → {1, 2, 3}
 /// - union([{1, 2}, [2, 3], 1..4]) → {1, 2, 3}
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_union_all(collections: Value) -> Value {
     // Get the list of collections
     let list = match collections.as_list() {
@@ -3239,7 +3223,7 @@ pub extern "C" fn rt_union_all(collections: Value) -> Value {
 ///
 /// Per LANG.txt §11.10:
 /// - intersection({1, 2}, {2, 3}) → {2}
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_intersection(collection1: Value, collection2: Value) -> Value {
     let elems1 = collect_elements(collection1);
     check_hashable(&elems1);
@@ -3262,7 +3246,7 @@ pub extern "C" fn rt_intersection(collection1: Value, collection2: Value) -> Val
 /// Per LANG.txt §11.10:
 /// - intersection({1, 2}, [2, 3], 1..4) → {2}
 /// - intersection([{1, 2}, [2, 3], 1..4]) → {2}
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_intersection_all(collections: Value) -> Value {
     // Get the list of collections
     let list = match collections.as_list() {
@@ -3320,7 +3304,7 @@ pub extern "C" fn rt_intersection_all(collections: Value) -> Value {
 /// - includes?(#{"a": 1}, "a") → true
 /// - includes?("ab", "a") → true
 /// - includes?(1..10, 5) → true  (Range support with O(1) optimization)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_includes(collection: Value, value: Value) -> Value {
     // List
     if let Some(list) = collection.as_list() {
@@ -3392,7 +3376,7 @@ pub extern "C" fn rt_includes(collection: Value, value: Value) -> Value {
 ///
 /// Per LANG.txt §11.11:
 /// - excludes?([1, 2], 3) → true
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_excludes(collection: Value, value: Value) -> Value {
     let includes = rt_includes(collection, value);
     if let Some(b) = includes.as_bool() {
@@ -3410,7 +3394,7 @@ pub extern "C" fn rt_excludes(collection: Value, value: Value) -> Value {
 /// - any?(_ == 1, [1, 2]) → true
 /// - any?(_ == 1, [2, 3]) → false
 /// - any?(_ % 2 == 0, 1..5) → true  (Range support)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_any(predicate: Value, collection: Value) -> Value {
     if !is_callable(&predicate) {
         runtime_error("any?(predicate, collection) expects a function");
@@ -3473,7 +3457,7 @@ pub extern "C" fn rt_any(predicate: Value, collection: Value) -> Value {
 /// - all?(_ > 0, [-1, 2]) → false
 /// - all?(_ > 0, []) → true (vacuous truth)
 /// - all?(_ > 0, 1..5) → true  (bounded Range support)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_all(predicate: Value, collection: Value) -> Value {
     if !is_callable(&predicate) {
         runtime_error("all?(predicate, collection) expects a function");
@@ -3554,7 +3538,7 @@ pub extern "C" fn rt_all(predicate: Value, collection: Value) -> Value {
 ///
 /// Per LANG.txt §11.6:
 /// - each(|v| acc = acc + v, [1, 2]) then acc is 3
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_each(side_effect: Value, collection: Value) -> Value {
     use crate::break_handling::{break_occurred, enter_iteration, exit_iteration, take_break_value};
 
@@ -3666,7 +3650,7 @@ pub extern "C" fn rt_each(side_effect: Value, collection: Value) -> Value {
 /// Per LANG.txt §11.12:
 /// - repeat(1) |> take(3) → [1, 1, 1]
 /// - repeat("x") |> take(3) → ["x", "x", "x"]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_repeat(value: Value) -> Value {
     let lazy = LazySequenceObject::repeat(value);
     Value::from_lazy_sequence(lazy)
@@ -3678,7 +3662,7 @@ pub extern "C" fn rt_repeat(value: Value) -> Value {
 ///
 /// Per LANG.txt §11.12:
 /// - cycle([1, 2, 3]) |> take(7) → [1, 2, 3, 1, 2, 3, 1]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_cycle(collection: Value) -> Value {
     // Get elements from collection as a Vector
     let source = if let Some(list) = collection.as_list() {
@@ -3701,7 +3685,7 @@ pub extern "C-unwind" fn rt_cycle(collection: Value) -> Value {
 /// Per LANG.txt §11.12:
 /// - iterate(_ + 1, 0) |> take(5) → [0, 1, 2, 3, 4]
 /// - iterate(_ * 2, 1) |> take(5) → [1, 2, 4, 8, 16]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_iterate(generator: Value, initial: Value) -> Value {
     let lazy = LazySequenceObject::iterate(generator, initial);
     Value::from_lazy_sequence(lazy)
@@ -3713,7 +3697,7 @@ pub extern "C" fn rt_iterate(generator: Value, initial: Value) -> Value {
 ///
 /// Per LANG.txt §11.12:
 /// - combinations(2, [1, 2, 3]) |> list → [[1, 2], [1, 3], [2, 3]]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_combinations(size: Value, collection: Value) -> Value {
     let k = size
         .as_integer()
@@ -3753,7 +3737,7 @@ pub extern "C-unwind" fn rt_combinations(size: Value, collection: Value) -> Valu
 ///
 /// Per LANG.txt §11.13:
 /// - range(0, 10, 2) |> list → [0, 2, 4, 6, 8, 10] (inclusive)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_range_fn(from: Value, to: Value, step: Value) -> Value {
     let start = from
         .as_integer()
@@ -3783,7 +3767,7 @@ pub extern "C" fn rt_range_fn(from: Value, to: Value, step: Value) -> Value {
 ///
 /// Create an exclusive range from start to end (end not included).
 /// Called by codegen for range syntax.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_range_exclusive(start: Value, end: Value) -> Value {
     let start_val = start
         .as_integer()
@@ -3803,7 +3787,7 @@ pub extern "C" fn rt_range_exclusive(start: Value, end: Value) -> Value {
 ///
 /// Create an inclusive range from start to end (end included).
 /// Called by codegen for inclusive range syntax.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_range_inclusive(start: Value, end: Value) -> Value {
     let start_val = start
         .as_integer()
@@ -3823,7 +3807,7 @@ pub extern "C" fn rt_range_inclusive(start: Value, end: Value) -> Value {
 ///
 /// Create an unbounded range starting from start.
 /// Called by codegen for infinite range syntax.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_range_unbounded(start: Value) -> Value {
     let start_val = start
         .as_integer()
@@ -3847,7 +3831,7 @@ pub extern "C" fn rt_range_unbounded(start: Value) -> Value {
 /// # Safety
 /// - argc must be the correct number of elements pointed to by argv
 /// - argv must point to valid Value array or be null if argc is 0
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn rt_zip(argc: u32, argv: *const Value) -> Value {
     if argc == 0 || argv.is_null() {
@@ -3889,7 +3873,7 @@ pub extern "C" fn rt_zip(argc: u32, argv: *const Value) -> Value {
 }
 
 /// zip with spread - takes a collection of collections and zips them
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_zip_spread(collection: Value) -> Value {
     // Extract elements from the collection
     let args: Vec<Value> = if let Some(list) = collection.as_list() {
@@ -4076,11 +4060,7 @@ fn take_from_lazy_recursive(result: &mut im::Vector<Value>, remaining: &mut usiz
                 // Check if exhausted
                 if let Some(end_val) = end {
                     let at_end = if *inclusive {
-                        if *step > 0 {
-                            cur > *end_val
-                        } else {
-                            cur < *end_val
-                        }
+                        if *step > 0 { cur > *end_val } else { cur < *end_val }
                     } else if *step > 0 {
                         cur >= *end_val
                     } else {
@@ -4289,7 +4269,7 @@ fn take_from_lazy_recursive(result: &mut im::Vector<Value>, remaining: &mut usiz
 /// - lines("") → []
 /// - lines("a\nb\n") → ["a", "b"] (trailing empty line filtered)
 /// - lines("a\n\nb") → ["a", "", "b"] (internal empty lines preserved)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_lines(value: Value) -> Value {
     // Only works on strings
     let s = match value.as_string() {
@@ -4321,7 +4301,7 @@ pub extern "C-unwind" fn rt_lines(value: Value) -> Value {
 /// - split(",", "a,b,c") → ["a", "b", "c"]
 /// - split(" ", "hello world") → ["hello", "world"]
 /// - split("", "abc") → ["a", "b", "c"] (split into characters/graphemes)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_split(separator: Value, string: Value) -> Value {
     // Both must be strings
     let sep = match separator.as_string() {
@@ -4355,7 +4335,7 @@ pub extern "C-unwind" fn rt_split(separator: Value, string: Value) -> Value {
 /// - regex_match("(\\w+):(\\d+)", "port:8080") → ["port", "8080"]
 /// - regex_match("\\d+", "abc123") → [] (no capture groups)
 /// - regex_match("(\\d+)", "no numbers") → [] (no match)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_regex_match(pattern: Value, string: Value) -> Value {
     // Both must be strings
     let pat = match pattern.as_string() {
@@ -4395,7 +4375,7 @@ pub extern "C-unwind" fn rt_regex_match(pattern: Value, string: Value) -> Value 
 /// Per LANG.txt §11.14:
 /// - regex_match_all("\\d+", "a1b2c3") → ["1", "2", "3"]
 /// - regex_match_all("\\w+", "hello world") → ["hello", "world"]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_regex_match_all(pattern: Value, string: Value) -> Value {
     // Both must be strings
     let pat = match pattern.as_string() {
@@ -4429,7 +4409,7 @@ pub extern "C-unwind" fn rt_regex_match_all(pattern: Value, string: Value) -> Va
 /// Per LANG.txt §11.14:
 /// - md5("hello") → "5d41402abc4b2a76b9719d911017c592"
 /// - md5("") → "d41d8cd98f00b204e9800998ecf8427e"
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_md5(value: Value) -> Value {
     use md5::{Digest, Md5};
 
@@ -4460,7 +4440,7 @@ pub extern "C" fn rt_md5(value: Value) -> Value {
 ///
 /// Per LANG.txt §11.14:
 /// - upper("hello") → "HELLO"
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_upper(value: Value) -> Value {
     // Only works on strings
     let s = match value.as_string() {
@@ -4477,7 +4457,7 @@ pub extern "C-unwind" fn rt_upper(value: Value) -> Value {
 ///
 /// Per LANG.txt §11.14:
 /// - lower("HELLO") → "hello"
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_lower(value: Value) -> Value {
     // Only works on strings
     let s = match value.as_string() {
@@ -4495,7 +4475,7 @@ pub extern "C-unwind" fn rt_lower(value: Value) -> Value {
 /// Per LANG.txt §11.14:
 /// - replace("a", "x", "banana") → "bxnxnx"
 /// - replace("world", "Santa", "hello world") → "hello Santa"
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_replace(from: Value, to: Value, string: Value) -> Value {
     // All must be strings
     let from_str = match from.as_string() {
@@ -4521,7 +4501,7 @@ pub extern "C-unwind" fn rt_replace(from: Value, to: Value, string: Value) -> Va
 /// Per LANG.txt §11.14:
 /// - join(", ", [1, 2, 3]) → "1, 2, 3"
 /// - join("-", ["a", "b", "c"]) → "a-b-c"
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_join(separator: Value, collection: Value) -> Value {
     // Separator must be a string
     let sep = match separator.as_string() {
@@ -4538,11 +4518,7 @@ pub extern "C-unwind" fn rt_join(separator: Value, collection: Value) -> Value {
         } else if let Some(d) = v.as_decimal() {
             d.to_string()
         } else if let Some(b) = v.as_bool() {
-            if b {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            }
+            if b { "true".to_string() } else { "false".to_string() }
         } else if v.is_nil() {
             "nil".to_string()
         } else {
@@ -4578,7 +4554,7 @@ pub extern "C-unwind" fn rt_join(separator: Value, collection: Value) -> Value {
 /// - abs(-5) → 5
 /// - abs(5) → 5
 /// - abs(-3.7) → 3.7
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_abs(value: Value) -> Value {
     // Integer
     if let Some(i) = value.as_integer() {
@@ -4603,7 +4579,7 @@ pub extern "C-unwind" fn rt_abs(value: Value) -> Value {
 /// - signum(-3) → -1
 /// - signum(5.5) → 1
 /// - signum(-5.5) → -1
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_signum(value: Value) -> Value {
     // Integer
     if let Some(i) = value.as_integer() {
@@ -4632,7 +4608,7 @@ pub extern "C-unwind" fn rt_signum(value: Value) -> Value {
 /// Per LANG.txt §11.15:
 /// - vec_add([1, 2], [3, 4]) → [4, 6]
 /// - vec_add([1, 2, 3], [10, 20]) → [11, 22]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_vec_add(a: Value, b: Value) -> Value {
     // Both must be lists
     let list_a = match a.as_list() {
@@ -4667,7 +4643,7 @@ pub extern "C-unwind" fn rt_vec_add(a: Value, b: Value) -> Value {
 ///
 /// Per LANG.txt §4.5:
 /// - bit_and(12, 10) → 8  (1100 & 1010 = 1000)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_bit_and(a: Value, b: Value) -> Value {
     let ia = a
         .as_integer()
@@ -4684,7 +4660,7 @@ pub extern "C-unwind" fn rt_bit_and(a: Value, b: Value) -> Value {
 ///
 /// Per LANG.txt §4.5:
 /// - bit_or(12, 10) → 14 (1100 | 1010 = 1110)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_bit_or(a: Value, b: Value) -> Value {
     let ia = a
         .as_integer()
@@ -4701,7 +4677,7 @@ pub extern "C-unwind" fn rt_bit_or(a: Value, b: Value) -> Value {
 ///
 /// Per LANG.txt §4.5:
 /// - bit_xor(12, 10) → 6  (1100 ^ 1010 = 0110)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_bit_xor(a: Value, b: Value) -> Value {
     let ia = a
         .as_integer()
@@ -4718,7 +4694,7 @@ pub extern "C-unwind" fn rt_bit_xor(a: Value, b: Value) -> Value {
 ///
 /// Per LANG.txt §4.5:
 /// - bit_not(12) → -13 (bitwise complement)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_bit_not(value: Value) -> Value {
     let i = value
         .as_integer()
@@ -4732,7 +4708,7 @@ pub extern "C-unwind" fn rt_bit_not(value: Value) -> Value {
 ///
 /// Per LANG.txt §4.5:
 /// - bit_shift_left(1, 3) → 8  (1 << 3 = 1000)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_bit_shift_left(value: Value, shift: Value) -> Value {
     let i = value
         .as_integer()
@@ -4753,7 +4729,7 @@ pub extern "C-unwind" fn rt_bit_shift_left(value: Value, shift: Value) -> Value 
 ///
 /// Per LANG.txt §4.5:
 /// - bit_shift_right(8, 2) → 2  (1000 >> 2 = 10)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_bit_shift_right(value: Value, shift: Value) -> Value {
     let i = value
         .as_integer()
@@ -4779,7 +4755,7 @@ pub extern "C-unwind" fn rt_bit_shift_right(value: Value, shift: Value) -> Value
 /// Per LANG.txt §11.16:
 /// - id(42) → 42
 /// - Useful for cases where a function is needed but no transformation required
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_id(value: Value) -> Value {
     value
 }
@@ -4801,7 +4777,7 @@ pub extern "C" fn rt_id(value: Value) -> Value {
 /// - type(1..) → "UnboundedRange"
 /// - type(1.. |> map(_ + 1)) → "LazySequence"
 /// - type(|x| x) → "Function"
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_type(value: Value) -> Value {
     // Check types in a specific order
     if value.is_nil() {
@@ -4855,7 +4831,7 @@ pub extern "C" fn rt_type(value: Value) -> Value {
 /// - str(42) → "42"
 /// - str(3.14) → "3.14"
 /// - str([1, 2, 3]) → "[1, 2, 3]"
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_str(value: Value) -> Value {
     Value::from_string(format_value(&value))
 }
@@ -4868,13 +4844,9 @@ pub extern "C" fn rt_str(value: Value) -> Value {
 /// - or(1, 2) → 1
 /// - or(nil, 2) → 2
 /// - or(0, false) → false
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_or(a: Value, b: Value) -> Value {
-    if a.is_truthy() {
-        a
-    } else {
-        b
-    }
+    if a.is_truthy() { a } else { b }
 }
 
 /// `and(a, b)` → Value
@@ -4885,13 +4857,9 @@ pub extern "C" fn rt_or(a: Value, b: Value) -> Value {
 /// - and(1, 2) → 2
 /// - and(nil, 2) → nil
 /// - and(0, 2) → 0
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_and(a: Value, b: Value) -> Value {
-    if a.is_truthy() {
-        b
-    } else {
-        a
-    }
+    if a.is_truthy() { b } else { a }
 }
 
 // ============================================================================
@@ -5015,7 +4983,7 @@ fn get_capture_timestamp_ms() -> u64 {
 /// The caller must ensure:
 /// - `argv` points to a valid array of `argc` Values
 /// - The pointer remains valid for the duration of the call
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn rt_puts(argc: u32, argv: *const Value) -> Value {
     // Per spec: puts() with no arguments emits no event in capture mode
@@ -5044,7 +5012,7 @@ pub extern "C" fn rt_puts(argc: u32, argv: *const Value) -> Value {
 }
 
 /// Helper for calling rt_puts with two arguments (common case in runner)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_puts_two(a: Value, b: Value) -> Value {
     let formatted = format!("{} {}", print_value(&a), print_value(&b));
     if is_console_capture_mode() {
@@ -5058,7 +5026,7 @@ pub extern "C" fn rt_puts_two(a: Value, b: Value) -> Value {
 
 /// Output a value with type-preserving formatting (for test runner).
 /// Uses format_value which includes quotes for strings, allowing proper parsing.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_puts_repr(label: Value, value: Value) -> Value {
     let label_str = print_value(&label);
     let value_str = format_value(&value);
@@ -5069,7 +5037,7 @@ pub extern "C" fn rt_puts_repr(label: Value, value: Value) -> Value {
 /// Get the current time in nanoseconds since program start.
 /// Uses a relative timestamp to avoid large number overflow in NaN-boxing.
 /// Used for timing measurements in the runner.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_time_nanos() -> Value {
     use std::sync::OnceLock;
     use std::time::Instant;
@@ -5086,7 +5054,7 @@ pub extern "C" fn rt_time_nanos() -> Value {
 
 /// Get command line arguments (excluding program name).
 /// Returns a list of strings.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_get_args() -> Value {
     let args: im::Vector<Value> = std::env::args()
         .skip(1) // Skip program name
@@ -5099,7 +5067,7 @@ pub extern "C" fn rt_get_args() -> Value {
 /// label: "Part 1" or "Part 2"
 /// value: the result value
 /// time_nanos: execution time in nanoseconds
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_print_result(label: Value, value: Value, time_nanos: Value) {
     let label_str = label.as_string().unwrap_or("Result");
     let time_ms = time_nanos.as_integer().unwrap_or(0) / 1_000_000;
@@ -5114,7 +5082,7 @@ pub extern "C" fn rt_print_result(label: Value, value: Value, time_nanos: Value)
 /// Print test case header.
 /// test_num: test number (1-based)
 /// is_slow: whether this test is marked @slow
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_print_test_header(test_num: Value, is_slow: Value) {
     let num = test_num.as_integer().unwrap_or(0);
     if is_slow.as_bool().unwrap_or(false) {
@@ -5130,7 +5098,7 @@ pub extern "C" fn rt_print_test_header(test_num: Value, is_slow: Value) {
 /// actual: the computed value
 /// expected: the expected value
 /// time_nanos: execution time in nanoseconds
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_print_test_result(label: Value, actual: Value, expected: Value, time_nanos: Value) -> Value {
     let label_str = label.as_string().unwrap_or("Result");
     let time_ms = time_nanos.as_integer().unwrap_or(0) / 1_000_000;
@@ -5155,7 +5123,7 @@ pub extern "C" fn rt_print_test_result(label: Value, actual: Value, expected: Va
 }
 
 /// Print a blank line (for separating test cases).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_print_newline() {
     println!();
 }
@@ -5294,7 +5262,9 @@ fn read_aoc_input(url: &str) -> Value {
         let session = match get_aoc_session() {
             Some(s) => s,
             None => {
-                eprintln!("Error: AOC session not found. Set AOC_SESSION environment variable or create ~/.config/dasher/session.txt");
+                eprintln!(
+                    "Error: AOC session not found. Set AOC_SESSION environment variable or create ~/.config/dasher/session.txt"
+                );
                 return Value::nil();
             }
         };
@@ -5329,7 +5299,7 @@ fn read_aoc_input(url: &str) -> Value {
 /// Per LANG.txt §13:
 /// - Returns file contents as a String
 /// - Returns nil on error (file not found, permission denied, network error, etc.)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_read(path: Value) -> Value {
     let path_str = match path.as_string() {
         Some(s) => s,
@@ -5355,7 +5325,7 @@ pub extern "C" fn rt_read(path: Value) -> Value {
 /// `env()` → Nil
 ///
 /// REPL-only in LANG.txt; in AOT/CLI it is a no-op that returns nil.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_env() -> Value {
     Value::nil()
 }
@@ -5382,7 +5352,7 @@ use super::heap::MemoizedClosureObject;
 /// };
 /// fib(50)  // Computed efficiently
 /// ```
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_memoize(func: Value) -> Value {
     if !is_callable(&func) {
         runtime_error("memoize(function) expects a function");
@@ -5408,7 +5378,7 @@ pub extern "C" fn rt_memoize(func: Value) -> Value {
 ///
 /// - `argv` must be a valid pointer to an array of `argc` Values, or null if `argc` is 0
 /// - The caller must ensure the Values in argv are valid for the duration of the call
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rt_call_memoized(callee: Value, argc: u32, argv: *const Value) -> Value {
     crate::operations::rt_call(callee, argc, argv)
 }

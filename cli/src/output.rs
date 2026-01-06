@@ -4,8 +4,8 @@
 //! It provides machine-readable output formats for integration with editors, CI systems,
 //! and other tools.
 
-use santa_lang::error::SantaError;
-use santa_lang::runner::{SolutionResult, TestResult};
+use lang::error::SantaError;
+use lang::runner::{SolutionResult, TestResult};
 use serde::Serialize;
 use std::io::{self, Write};
 
@@ -178,7 +178,7 @@ pub fn format_solution_json(
         part_one: if has_part_one {
             result.part_one.as_ref().map(|v| JsonPartResult {
                 status: "complete",
-                value: santa_lang::runtime::builtins::format_value(v),
+                value: lang::runtime::builtins::format_value(v),
                 duration_ms: result.part_one_time.map(|d| d.as_millis() as u64).unwrap_or(0),
             })
         } else {
@@ -187,7 +187,7 @@ pub fn format_solution_json(
         part_two: if has_part_two {
             result.part_two.as_ref().map(|v| JsonPartResult {
                 status: "complete",
-                value: santa_lang::runtime::builtins::format_value(v),
+                value: lang::runtime::builtins::format_value(v),
                 duration_ms: result.part_two_time.map(|d| d.as_millis() as u64).unwrap_or(0),
             })
         } else {
@@ -250,12 +250,12 @@ pub fn format_test_json(
                     expected: tr
                         .part_one_expected
                         .as_ref()
-                        .map(santa_lang::runtime::builtins::format_value)
+                        .map(lang::runtime::builtins::format_value)
                         .unwrap_or_else(|| "nil".to_string()),
                     actual: tr
                         .part_one_actual
                         .as_ref()
-                        .map(santa_lang::runtime::builtins::format_value)
+                        .map(lang::runtime::builtins::format_value)
                         .unwrap_or_else(|| "nil".to_string()),
                 })
             } else {
@@ -267,12 +267,12 @@ pub fn format_test_json(
                     expected: tr
                         .part_two_expected
                         .as_ref()
-                        .map(santa_lang::runtime::builtins::format_value)
+                        .map(lang::runtime::builtins::format_value)
                         .unwrap_or_else(|| "nil".to_string()),
                     actual: tr
                         .part_two_actual
                         .as_ref()
-                        .map(santa_lang::runtime::builtins::format_value)
+                        .map(lang::runtime::builtins::format_value)
                         .unwrap_or_else(|| "nil".to_string()),
                 })
             } else {

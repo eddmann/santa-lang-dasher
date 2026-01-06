@@ -20,8 +20,8 @@ use std::process::Command;
 use super::context::CodegenContext;
 use crate::lexer::lex;
 use crate::lexer::token::{Position, Span};
-use crate::parser::ast::{Expr, Pattern, Program, Stmt};
 use crate::parser::Parser;
+use crate::parser::ast::{Expr, Pattern, Program, Stmt};
 use crate::types::{Type, TypeInference, TypedExpr, TypedProgram};
 
 /// Embedded runtime library (compressed with gzip)
@@ -50,7 +50,7 @@ impl From<std::io::Error> for CompileError {
 
 /// The compilation pipeline
 pub struct Compiler {
-    /// Path to the runtime library (libsanta_lang.a)
+    /// Path to the runtime library (liblang.a)
     runtime_lib_path: Option<PathBuf>,
 }
 
@@ -76,7 +76,7 @@ impl Compiler {
         let cache_dir = std::env::temp_dir().join("santa-lang-runtime");
         std::fs::create_dir_all(&cache_dir)?;
 
-        let runtime_path = cache_dir.join("libsanta_lang_runtime.a");
+        let runtime_path = cache_dir.join("libruntime.a");
 
         // Check if already extracted and matches current embedded version
         // We store the compressed size in a separate file to validate the cache
@@ -108,11 +108,7 @@ impl Compiler {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let temp_path = cache_dir.join(format!(
-            "libsanta_lang_runtime.a.tmp.{}_{}",
-            std::process::id(),
-            unique_id
-        ));
+        let temp_path = cache_dir.join(format!("libruntime.a.tmp.{}_{}", std::process::id(), unique_id));
         std::fs::write(&temp_path, &decompressed)?;
         std::fs::rename(&temp_path, &runtime_path).or_else(|_| {
             let _ = std::fs::remove_file(&runtime_path);
@@ -152,13 +148,13 @@ impl Compiler {
         // Try common locations for the runtime library
         let candidates = [
             // In release build directory (relative to project root)
-            project_root.join("target/release/libsanta_lang_runtime.a"),
+            project_root.join("target/release/libruntime.a"),
             // In debug build directory
-            project_root.join("target/debug/libsanta_lang_runtime.a"),
+            project_root.join("target/debug/libruntime.a"),
             // Relative to current directory
-            PathBuf::from("target/release/libsanta_lang_runtime.a"),
-            PathBuf::from("target/debug/libsanta_lang_runtime.a"),
-            PathBuf::from("libsanta_lang_runtime.a"),
+            PathBuf::from("target/release/libruntime.a"),
+            PathBuf::from("target/debug/libruntime.a"),
+            PathBuf::from("libruntime.a"),
         ];
 
         for candidate in &candidates {
@@ -168,7 +164,7 @@ impl Compiler {
         }
 
         Err(CompileError::LinkError(
-            "Runtime library (libsanta_lang_runtime.a) not found. Run `cargo build --release` first.".to_string(),
+            "Runtime library (libruntime.a) not found. Run `cargo build --release` first.".to_string(),
         ))
     }
 

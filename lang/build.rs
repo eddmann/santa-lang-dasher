@@ -14,7 +14,7 @@ fn newest_staticlib_in_deps(dir: &Path) -> Option<PathBuf> {
     for entry in entries.flatten() {
         let path = entry.path();
         let file_name = path.file_name()?.to_string_lossy();
-        if !file_name.starts_with("libsanta_lang_runtime-") || !file_name.ends_with(".a") {
+        if !file_name.starts_with("libruntime-") || !file_name.ends_with(".a") {
             continue;
         }
         let modified = entry.metadata().and_then(|m| m.modified()).ok()?;
@@ -36,11 +36,11 @@ fn main() {
     let project_root = PathBuf::from(&manifest_dir).parent().unwrap().to_path_buf();
     println!(
         "cargo:rerun-if-changed={}",
-        project_root.join("target/release/libsanta_lang_runtime.a").display()
+        project_root.join("target/release/libruntime.a").display()
     );
     println!(
         "cargo:rerun-if-changed={}",
-        project_root.join("target/debug/libsanta_lang_runtime.a").display()
+        project_root.join("target/debug/libruntime.a").display()
     );
 
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
@@ -54,7 +54,7 @@ fn main() {
 
     // Helper to find runtime in a profile directory
     let find_runtime_in = |dir: &Path| -> Option<PathBuf> {
-        let direct = dir.join("libsanta_lang_runtime.a");
+        let direct = dir.join("libruntime.a");
         if direct.exists() {
             return Some(direct);
         }
@@ -70,12 +70,18 @@ fn main() {
     let runtime_lib = if let Some(lib) = runtime_lib {
         lib
     } else {
-        // Runtime not built yet - this is fine during initial build
+        // Runtime not built yet - create an empty placeholder
         // The pipeline will fall back to finding it externally
         println!(
             "cargo:warning=Runtime library not found for profile '{}', embedding disabled",
             profile
         );
+
+        // Create an empty placeholder so the build can complete
+        let out_dir = env::var("OUT_DIR").unwrap();
+        let dest_path = PathBuf::from(&out_dir).join("runtime_embedded.gz");
+        fs::write(&dest_path, []).expect("Failed to write placeholder");
+        println!("cargo:rustc-env=RUNTIME_EMBEDDED_PATH={}", dest_path.display());
         return;
     };
 

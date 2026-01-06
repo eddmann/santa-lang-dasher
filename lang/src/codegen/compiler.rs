@@ -2,10 +2,10 @@ use super::context::CodegenContext;
 use crate::parser::ast::{Expr, InfixOp, Literal, MatchArm, Param, Pattern, PrefixOp, Stmt};
 use crate::runtime::builtin_registry::builtin_spec;
 use crate::types::{Type, TypedExpr};
+use inkwell::IntPredicate;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::FunctionType;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
-use inkwell::IntPredicate;
 use std::collections::HashSet;
 
 #[derive(Debug)]
@@ -593,7 +593,7 @@ impl<'ctx> CodegenContext<'ctx> {
                         return Err(CompileError::UnsupportedExpression(format!(
                             "Binary operation {:?} not yet supported in runtime fallback",
                             op
-                        )))
+                        )));
                     }
                 };
 
@@ -3777,7 +3777,7 @@ impl<'ctx> CodegenContext<'ctx> {
             Expr::Call { function, args } => {
                 // Check if this is a self-recursive tail call
                 if let Some(ref tco) = self.tco_state {
-                    if let (Some(ref self_name), Expr::Identifier(name)) = (&tco.self_name, function.as_ref()) {
+                    if let (Some(self_name), Expr::Identifier(name)) = (&tco.self_name, function.as_ref()) {
                         if name == self_name && args.len() == tco.param_allocas.len() {
                             // This is a self-recursive tail call! Optimize it.
                             return self.compile_tail_call(args);
@@ -5091,7 +5091,7 @@ impl<'ctx> CodegenContext<'ctx> {
                 return Err(CompileError::UnsupportedExpression(format!(
                     "Builtin {} does not support spread",
                     name
-                )))
+                )));
             }
         };
 

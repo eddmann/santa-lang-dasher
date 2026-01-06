@@ -1,8 +1,9 @@
 [package]
-name = "santa-lang"
+name = "lang"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+documentation.workspace = true
 
 [lib]
 crate-type = ["rlib"]
@@ -13,7 +14,7 @@ embedded-runtime = []  # Embed the runtime library in the binary
 
 [dependencies]
 inkwell.workspace = true  # Phase 6 (Codegen)
-santa-lang-runtime = { path = "../runtime" }  # Runtime library (re-exported)
+runtime = { path = "../runtime" }  # Runtime library (re-exported)
 flate2 = "1.0"  # For decompressing embedded runtime
 
 [build-dependencies]

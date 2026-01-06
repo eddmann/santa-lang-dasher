@@ -18,7 +18,7 @@ thread_local! {
 
 /// Signal a break with the given value.
 /// Called from compiled code when a `break value` statement executes.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_break(value: Value) -> Value {
     if !in_iteration() {
         runtime_error("break outside iteration");

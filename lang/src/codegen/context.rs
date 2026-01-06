@@ -1,4 +1,5 @@
 use crate::types::Type;
+use inkwell::OptimizationLevel;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -6,7 +7,6 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine};
 use inkwell::values::PointerValue;
-use inkwell::OptimizationLevel;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 

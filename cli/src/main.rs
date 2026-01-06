@@ -13,19 +13,19 @@ mod output;
 
 use clap::Parser;
 use output::{
-    format_error_json, format_script_json, format_solution_json, format_test_json, is_solution_source,
-    parse_console_entries, JsonlPartInitial, JsonlScriptInitial, JsonlSolutionInitial, JsonlTestCaseInitial,
-    JsonlTestInitial, JsonlWriter, OutputMode, TestSummary,
+    JsonlPartInitial, JsonlScriptInitial, JsonlSolutionInitial, JsonlTestCaseInitial, JsonlTestInitial, JsonlWriter,
+    OutputMode, TestSummary, format_error_json, format_script_json, format_solution_json, format_test_json,
+    is_solution_source, parse_console_entries,
 };
 use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use santa_lang::codegen::pipeline::Compiler;
-use santa_lang::lexer::lex;
-use santa_lang::parser::Parser as SantaParser;
-use santa_lang::runner::{Runner, RunnerConfig};
+use lang::codegen::pipeline::Compiler;
+use lang::lexer::lex;
+use lang::parser::Parser as SantaParser;
+use lang::runner::{Runner, RunnerConfig};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -158,7 +158,8 @@ fn main() -> ExitCode {
 
     // Set console capture env var for JSON/JSONL modes
     if output_mode != OutputMode::Text {
-        std::env::set_var("DASHER_CONSOLE_CAPTURE", "1");
+        // SAFETY: This is single-threaded CLI startup code, before any other threads exist
+        unsafe { std::env::set_var("DASHER_CONSOLE_CAPTURE", "1") };
     }
 
     // Dispatch based on output mode
@@ -244,7 +245,7 @@ impl Source {
     }
 }
 
-fn parse_source(source: &Source) -> Result<(santa_lang::parser::ast::Program, &str), ExitCode> {
+fn parse_source(source: &Source) -> Result<(lang::parser::ast::Program, &str), ExitCode> {
     let content = source.content();
 
     let tokens = match lex(content) {
@@ -308,7 +309,7 @@ fn compile_to_executable(source: &Source) -> ExitCode {
         // If input is an AOC read, resolve it and bake into the binary
         let resolved_input = runner
             .get_aoc_url_from_input(&program)
-            .and_then(|url| santa_lang::runtime::builtins::resolve_aoc_input(&url, path));
+            .and_then(|url| lang::runtime::builtins::resolve_aoc_input(&url, path));
         runner.generate_source_with_resolved_input(&program, resolved_input.as_deref())
     };
 
@@ -380,14 +381,14 @@ fn run_script(source: &Source, content: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_solution(runner: &Runner, program: &santa_lang::parser::ast::Program) -> ExitCode {
+fn run_solution(runner: &Runner, program: &lang::parser::ast::Program) -> ExitCode {
     match runner.execute_solution(program) {
         Ok(result) => {
             if let Some(ref part_one) = result.part_one {
                 let time_ms = result.part_one_time.map(|d| d.as_millis()).unwrap_or(0);
                 println!(
                     "Part 1: \x1b[32m{}\x1b[0m \x1b[90m{}ms\x1b[0m",
-                    santa_lang::runtime::builtins::format_value(part_one),
+                    lang::runtime::builtins::format_value(part_one),
                     time_ms
                 );
             }
@@ -395,7 +396,7 @@ fn run_solution(runner: &Runner, program: &santa_lang::parser::ast::Program) -> 
                 let time_ms = result.part_two_time.map(|d| d.as_millis()).unwrap_or(0);
                 println!(
                     "Part 2: \x1b[32m{}\x1b[0m \x1b[90m{}ms\x1b[0m",
-                    santa_lang::runtime::builtins::format_value(part_two),
+                    lang::runtime::builtins::format_value(part_two),
                     time_ms
                 );
             }
@@ -408,7 +409,7 @@ fn run_solution(runner: &Runner, program: &santa_lang::parser::ast::Program) -> 
     }
 }
 
-fn run_tests(runner: &Runner, program: &santa_lang::parser::ast::Program) -> ExitCode {
+fn run_tests(runner: &Runner, program: &lang::parser::ast::Program) -> ExitCode {
     match runner.execute_tests(program) {
         Ok(results) => {
             let mut exit_code = 0;
@@ -439,7 +440,7 @@ fn run_tests(runner: &Runner, program: &santa_lang::parser::ast::Program) -> Exi
                     let actual = result
                         .part_one_actual
                         .as_ref()
-                        .map(santa_lang::runtime::builtins::format_value)
+                        .map(lang::runtime::builtins::format_value)
                         .unwrap_or_else(|| "nil".to_string());
                     if passed {
                         println!("Part 1: {} \x1b[32m✔\x1b[0m", actual);
@@ -447,7 +448,7 @@ fn run_tests(runner: &Runner, program: &santa_lang::parser::ast::Program) -> Exi
                         let expected = result
                             .part_one_expected
                             .as_ref()
-                            .map(santa_lang::runtime::builtins::format_value)
+                            .map(lang::runtime::builtins::format_value)
                             .unwrap_or_else(|| "nil".to_string());
                         println!("Part 1: {} \x1b[31m✘ (Expected: {})\x1b[0m", actual, expected);
                         exit_code = 3;
@@ -459,7 +460,7 @@ fn run_tests(runner: &Runner, program: &santa_lang::parser::ast::Program) -> Exi
                     let actual = result
                         .part_two_actual
                         .as_ref()
-                        .map(santa_lang::runtime::builtins::format_value)
+                        .map(lang::runtime::builtins::format_value)
                         .unwrap_or_else(|| "nil".to_string());
                     if passed {
                         println!("Part 2: {} \x1b[32m✔\x1b[0m", actual);
@@ -467,7 +468,7 @@ fn run_tests(runner: &Runner, program: &santa_lang::parser::ast::Program) -> Exi
                         let expected = result
                             .part_two_expected
                             .as_ref()
-                            .map(santa_lang::runtime::builtins::format_value)
+                            .map(lang::runtime::builtins::format_value)
                             .unwrap_or_else(|| "nil".to_string());
                         println!("Part 2: {} \x1b[31m✘ (Expected: {})\x1b[0m", actual, expected);
                         exit_code = 3;
@@ -517,7 +518,7 @@ fn run_json_mode(args: &Args, source: &Source) -> ExitCode {
 
     // Validate the program
     if let Err(e) = runner.validate_program(&program) {
-        let error = santa_lang::error::SantaError::from(e);
+        let error = lang::error::SantaError::from(e);
         println!("{}", format_error_json(&error));
         return ExitCode::from(2);
     }
@@ -532,13 +533,13 @@ fn run_json_mode(args: &Args, source: &Source) -> ExitCode {
 }
 
 /// Parse source for JSON mode, returning JSON error on failure.
-fn parse_source_json(source: &Source) -> Result<(santa_lang::parser::ast::Program, &str), (ExitCode, String)> {
+fn parse_source_json(source: &Source) -> Result<(lang::parser::ast::Program, &str), (ExitCode, String)> {
     let content = source.content();
 
     let tokens = match lex(content) {
         Ok(t) => t,
         Err(e) => {
-            let error = santa_lang::error::SantaError::from(e);
+            let error = lang::error::SantaError::from(e);
             return Err((ExitCode::from(2), format_error_json(&error)));
         }
     };
@@ -547,7 +548,7 @@ fn parse_source_json(source: &Source) -> Result<(santa_lang::parser::ast::Progra
     let program = match parser.parse_program() {
         Ok(p) => p,
         Err(e) => {
-            let error = santa_lang::error::SantaError::from(e);
+            let error = lang::error::SantaError::from(e);
             return Err((ExitCode::from(2), format_error_json(&error)));
         }
     };
@@ -573,7 +574,7 @@ fn run_json_script(source: &Source, content: &str) -> ExitCode {
 
     let compiler = Compiler::new();
     if let Err(e) = compiler.compile_to_executable(&wrapped_content, &exe_path) {
-        let error = santa_lang::error::SantaError::from(e);
+        let error = lang::error::SantaError::from(e);
         println!("{}", format_error_json(&error));
         return ExitCode::from(2);
     }
@@ -588,7 +589,7 @@ fn run_json_script(source: &Source, content: &str) -> ExitCode {
     let output = match cmd.output() {
         Ok(o) => o,
         Err(e) => {
-            let error = santa_lang::error::SantaError::runtime(format!("Failed to run: {}", e));
+            let error = lang::error::SantaError::runtime(format!("Failed to run: {}", e));
             println!("{}", format_error_json(&error));
             std::fs::remove_file(&exe_path).ok();
             return ExitCode::from(2);
@@ -612,7 +613,7 @@ fn run_json_script(source: &Source, content: &str) -> ExitCode {
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !stderr.is_empty() {
         // Actual error occurred
-        let error = santa_lang::error::SantaError::runtime(stderr.trim().to_string());
+        let error = lang::error::SantaError::runtime(stderr.trim().to_string());
         println!("{}", format_error_json(&error));
         return ExitCode::from(2);
     }
@@ -625,7 +626,7 @@ fn run_json_script(source: &Source, content: &str) -> ExitCode {
 /// Run solution in JSON mode.
 fn run_json_solution(
     runner: &Runner,
-    program: &santa_lang::parser::ast::Program,
+    program: &lang::parser::ast::Program,
     has_part_one: bool,
     has_part_two: bool,
 ) -> ExitCode {
@@ -637,7 +638,7 @@ fn run_json_solution(
             ExitCode::SUCCESS
         }
         Err(e) => {
-            let error = santa_lang::error::SantaError::from(e);
+            let error = lang::error::SantaError::from(e);
             println!("{}", format_error_json(&error));
             ExitCode::from(2)
         }
@@ -647,7 +648,7 @@ fn run_json_solution(
 /// Run tests in JSON mode.
 fn run_json_tests(
     runner: &Runner,
-    program: &santa_lang::parser::ast::Program,
+    program: &lang::parser::ast::Program,
     has_part_one: bool,
     has_part_two: bool,
 ) -> ExitCode {
@@ -658,7 +659,7 @@ fn run_json_tests(
     // Determine skipped tests - compare by position in the all_tests list
     let mut skipped_tests = Vec::new();
     for (i, test) in all_tests.iter().enumerate() {
-        let is_slow = matches!(test, santa_lang::parser::ast::Section::Test { slow: true, .. });
+        let is_slow = matches!(test, lang::parser::ast::Section::Test { slow: true, .. });
         // Check if this test (by index) is in the filtered list
         let is_in_filtered = filtered_tests.iter().any(|t| {
             // Compare if they point to the same section
@@ -686,7 +687,7 @@ fn run_json_tests(
             }
         }
         Err(e) => {
-            let error = santa_lang::error::SantaError::from(e);
+            let error = lang::error::SantaError::from(e);
             println!("{}", format_error_json(&error));
             ExitCode::from(2)
         }
@@ -717,7 +718,7 @@ fn run_jsonl_mode(args: &Args, source: &Source) -> ExitCode {
 
     // Validate the program
     if let Err(e) = runner.validate_program(&program) {
-        let error = santa_lang::error::SantaError::from(e);
+        let error = lang::error::SantaError::from(e);
         output_jsonl_error(&error);
         return ExitCode::from(2);
     }
@@ -732,13 +733,13 @@ fn run_jsonl_mode(args: &Args, source: &Source) -> ExitCode {
 }
 
 /// Parse source for JSONL mode, outputting error state on failure.
-fn parse_source_jsonl(source: &Source) -> Result<(santa_lang::parser::ast::Program, &str), ExitCode> {
+fn parse_source_jsonl(source: &Source) -> Result<(lang::parser::ast::Program, &str), ExitCode> {
     let content = source.content();
 
     let tokens = match lex(content) {
         Ok(t) => t,
         Err(e) => {
-            let error = santa_lang::error::SantaError::from(e);
+            let error = lang::error::SantaError::from(e);
             output_jsonl_error(&error);
             return Err(ExitCode::from(2));
         }
@@ -748,7 +749,7 @@ fn parse_source_jsonl(source: &Source) -> Result<(santa_lang::parser::ast::Progr
     let program = match parser.parse_program() {
         Ok(p) => p,
         Err(e) => {
-            let error = santa_lang::error::SantaError::from(e);
+            let error = lang::error::SantaError::from(e);
             output_jsonl_error(&error);
             return Err(ExitCode::from(2));
         }
@@ -758,7 +759,7 @@ fn parse_source_jsonl(source: &Source) -> Result<(santa_lang::parser::ast::Progr
 }
 
 /// Output error in JSONL format (initial state + error patch).
-fn output_jsonl_error(error: &santa_lang::error::SantaError) {
+fn output_jsonl_error(error: &lang::error::SantaError) {
     let mut writer = JsonlWriter::new(io::stdout());
 
     // Initial state with error
@@ -817,7 +818,7 @@ fn run_jsonl_script(source: &Source, content: &str) -> ExitCode {
 
     let compiler = Compiler::new();
     if let Err(e) = compiler.compile_to_executable(&wrapped_content, &exe_path) {
-        let error = santa_lang::error::SantaError::from(e);
+        let error = lang::error::SantaError::from(e);
         let error_json = serde_json::json!({
             "message": error.message(),
             "location": {"line": 1, "column": 1},
@@ -904,7 +905,7 @@ fn run_jsonl_script(source: &Source, content: &str) -> ExitCode {
 /// Run solution in JSONL mode.
 fn run_jsonl_solution(
     runner: &Runner,
-    program: &santa_lang::parser::ast::Program,
+    program: &lang::parser::ast::Program,
     has_part_one: bool,
     has_part_two: bool,
 ) -> ExitCode {
@@ -952,7 +953,7 @@ fn run_jsonl_solution(
                         JsonlWriter::<io::Stdout>::replace_patch("/part_one/status", "complete"),
                         JsonlWriter::<io::Stdout>::replace_patch(
                             "/part_one/value",
-                            santa_lang::runtime::builtins::format_value(value),
+                            lang::runtime::builtins::format_value(value),
                         ),
                         JsonlWriter::<io::Stdout>::replace_patch(
                             "/part_one/duration_ms",
@@ -973,7 +974,7 @@ fn run_jsonl_solution(
                         JsonlWriter::<io::Stdout>::replace_patch("/part_two/status", "complete"),
                         JsonlWriter::<io::Stdout>::replace_patch(
                             "/part_two/value",
-                            santa_lang::runtime::builtins::format_value(value),
+                            lang::runtime::builtins::format_value(value),
                         ),
                         JsonlWriter::<io::Stdout>::replace_patch(
                             "/part_two/duration_ms",
@@ -991,7 +992,7 @@ fn run_jsonl_solution(
             ExitCode::SUCCESS
         }
         Err(e) => {
-            let error = santa_lang::error::SantaError::from(e);
+            let error = lang::error::SantaError::from(e);
             let error_json = serde_json::json!({
                 "message": error.message(),
                 "location": {"line": 1, "column": 1},
@@ -1010,7 +1011,7 @@ fn run_jsonl_solution(
 /// Run tests in JSONL mode.
 fn run_jsonl_tests(
     runner: &Runner,
-    program: &santa_lang::parser::ast::Program,
+    program: &lang::parser::ast::Program,
     has_part_one: bool,
     has_part_two: bool,
 ) -> ExitCode {
@@ -1027,7 +1028,7 @@ fn run_jsonl_tests(
         .iter()
         .enumerate()
         .map(|(i, test)| {
-            let is_slow = matches!(test, santa_lang::parser::ast::Section::Test { slow: true, .. });
+            let is_slow = matches!(test, lang::parser::ast::Section::Test { slow: true, .. });
             let is_in_filtered = filtered_tests
                 .iter()
                 .any(|t| std::ptr::eq(*t as *const _, *test as *const _));
@@ -1093,8 +1094,8 @@ fn run_jsonl_tests(
                 if has_part_one && result.part_one_passed.is_some() {
                     let part_result = serde_json::json!({
                         "passed": result.part_one_passed.unwrap_or(false),
-                        "expected": result.part_one_expected.as_ref().map(santa_lang::runtime::builtins::format_value).unwrap_or_else(|| "nil".to_string()),
-                        "actual": result.part_one_actual.as_ref().map(santa_lang::runtime::builtins::format_value).unwrap_or_else(|| "nil".to_string())
+                        "expected": result.part_one_expected.as_ref().map(lang::runtime::builtins::format_value).unwrap_or_else(|| "nil".to_string()),
+                        "actual": result.part_one_actual.as_ref().map(lang::runtime::builtins::format_value).unwrap_or_else(|| "nil".to_string())
                     });
                     patches.push(JsonlWriter::<io::Stdout>::replace_patch(
                         &format!("/tests/{}/part_one", i),
@@ -1105,8 +1106,8 @@ fn run_jsonl_tests(
                 if has_part_two && result.part_two_passed.is_some() {
                     let part_result = serde_json::json!({
                         "passed": result.part_two_passed.unwrap_or(false),
-                        "expected": result.part_two_expected.as_ref().map(santa_lang::runtime::builtins::format_value).unwrap_or_else(|| "nil".to_string()),
-                        "actual": result.part_two_actual.as_ref().map(santa_lang::runtime::builtins::format_value).unwrap_or_else(|| "nil".to_string())
+                        "expected": result.part_two_expected.as_ref().map(lang::runtime::builtins::format_value).unwrap_or_else(|| "nil".to_string()),
+                        "actual": result.part_two_actual.as_ref().map(lang::runtime::builtins::format_value).unwrap_or_else(|| "nil".to_string())
                     });
                     patches.push(JsonlWriter::<io::Stdout>::replace_patch(
                         &format!("/tests/{}/part_two", i),
@@ -1133,7 +1134,7 @@ fn run_jsonl_tests(
             }
         }
         Err(e) => {
-            let error = santa_lang::error::SantaError::from(e);
+            let error = lang::error::SantaError::from(e);
             let error_json = serde_json::json!({
                 "message": error.message(),
                 "location": {"line": 1, "column": 1},

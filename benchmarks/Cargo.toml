@@ -1,16 +1,17 @@
 [package]
-name = "santa-lang-benchmarks"
+name = "benchmarks"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+documentation.workspace = true
 
 [[bench]]
 name = "compiler_benchmarks"
 harness = false
 
 [dependencies]
-santa-lang = { path = "../lang" }
-santa-lang-runtime = { path = "../runtime" }
+lang = { path = "../lang" }
+runtime = { path = "../runtime" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

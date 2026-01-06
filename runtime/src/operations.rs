@@ -85,7 +85,7 @@ pub(crate) fn is_infinite_lazy_sequence(lazy: &LazySequenceObject) -> bool {
 /// - List + List → List (concatenation)
 /// - Set + Set → Set (union)
 /// - Dict + Dict → Dict (merge)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_add(left: Value, right: Value) -> Value {
     // Handle integers
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
@@ -192,7 +192,7 @@ pub extern "C-unwind" fn rt_add(left: Value, right: Value) -> Value {
 }
 
 /// Subtract two values
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_sub(left: Value, right: Value) -> Value {
     // Handle integers
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
@@ -252,7 +252,7 @@ pub extern "C-unwind" fn rt_sub(left: Value, right: Value) -> Value {
 }
 
 /// Multiply two values
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_mul(left: Value, right: Value) -> Value {
     // Handle integers
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
@@ -317,7 +317,7 @@ pub extern "C-unwind" fn rt_mul(left: Value, right: Value) -> Value {
 /// - Integer / Integer uses floored division (rounds toward negative infinity)
 /// - -7 / 2 = -4 (NOT -3 like Rust's default)
 /// - 7 / -2 = -4 (NOT -3)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_div(left: Value, right: Value) -> Value {
     // Handle integers with floored division
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
@@ -368,7 +368,7 @@ pub extern "C-unwind" fn rt_div(left: Value, right: Value) -> Value {
 /// - Result has same sign as divisor (NOT same sign as dividend like Rust)
 /// - -7 % 3 = 2 (NOT -1 like Rust)
 /// - 7 % -3 = -2 (NOT 1 like Rust)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_mod(left: Value, right: Value) -> Value {
     // Handle integers with floored modulo
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
@@ -394,11 +394,7 @@ fn floored_div(a: i64, b: i64) -> i64 {
     let q = a / b;
     let r = a % b;
     // Adjust if remainder has different sign than divisor
-    if (r != 0) && ((r < 0) != (b < 0)) {
-        q - 1
-    } else {
-        q
-    }
+    if (r != 0) && ((r < 0) != (b < 0)) { q - 1 } else { q }
 }
 
 /// Python-style floored modulo
@@ -411,14 +407,14 @@ fn floored_mod(a: i64, b: i64) -> i64 {
 // ===== Comparison Operations =====
 
 /// Equality comparison
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_eq(left: Value, right: Value) -> Value {
     // Use Value's PartialEq implementation
     Value::from_bool(left == right)
 }
 
 /// Not-equal comparison
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_ne(left: Value, right: Value) -> Value {
     Value::from_bool(left != right)
 }
@@ -426,24 +422,16 @@ pub extern "C" fn rt_ne(left: Value, right: Value) -> Value {
 /// Check if a value is truthy
 /// Returns 1 for truthy values, 0 for falsy values.
 /// Per LANG.txt §6.2: false, nil, 0, 0.0, "", [], #{}, #{} are falsy; all other values are truthy.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_is_truthy(value: Value) -> i64 {
-    if value.is_truthy() {
-        1
-    } else {
-        0
-    }
+    if value.is_truthy() { 1 } else { 0 }
 }
 
 /// Check if a value is a list.
 /// Returns 1 if list, 0 otherwise.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_is_list(value: Value) -> i64 {
-    if value.as_list().is_some() {
-        1
-    } else {
-        0
-    }
+    if value.as_list().is_some() { 1 } else { 0 }
 }
 
 /// Ensure a value is a list for pattern binding.
@@ -451,7 +439,7 @@ pub extern "C" fn rt_is_list(value: Value) -> i64 {
 /// This function only verifies the value is a list - it does NOT check length.
 /// Like blitzen, missing elements are allowed and will be `nil` when indexed
 /// out of bounds (patterns like `[item, ..rest]` can match `[]` with item=nil).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_expect_list_len(value: Value, _expected_len: Value, _has_rest: Value) -> Value {
     // Just verify it's a list - don't check length
     if value.as_list().is_none() {
@@ -462,17 +450,13 @@ pub extern "C-unwind" fn rt_expect_list_len(value: Value, _expected_len: Value, 
 
 /// Check if a value is an integer.
 /// Returns 1 if integer, 0 otherwise.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_is_integer(value: Value) -> i64 {
-    if value.as_integer().is_some() {
-        1
-    } else {
-        0
-    }
+    if value.as_integer().is_some() { 1 } else { 0 }
 }
 
 /// Ensure a value is an integer or raise a RuntimeErr.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_expect_integer(value: Value) -> Value {
     if value.as_integer().is_some() {
         value
@@ -485,7 +469,7 @@ pub extern "C-unwind" fn rt_expect_integer(value: Value) -> Value {
 ///
 /// Per LANG.txt §4.2: `!x` returns the logical negation of x's truthiness.
 /// Returns true if x is falsy, false if x is truthy.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_not(value: Value) -> Value {
     Value::from_bool(!value.is_truthy())
 }
@@ -494,7 +478,7 @@ pub extern "C" fn rt_not(value: Value) -> Value {
 ///
 /// Per LANG.txt §4.1: `-x` returns the arithmetic negation of x.
 /// Works on integers and decimals.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_negate(value: Value) -> Value {
     if let Some(n) = value.as_integer() {
         Value::from_integer(-n)
@@ -510,7 +494,7 @@ pub extern "C-unwind" fn rt_negate(value: Value) -> Value {
 /// Per LANG.txt §4.4:
 /// Only Integer, Decimal, and String support comparison operators.
 /// Comparing other types (List, Set, Dict, Function, LazySequence) produces RuntimeErr.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_lt(left: Value, right: Value) -> Value {
     // Integer comparison
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
@@ -552,7 +536,7 @@ pub extern "C-unwind" fn rt_lt(left: Value, right: Value) -> Value {
 ///
 /// Per LANG.txt §4.4:
 /// Only Integer, Decimal, and String support comparison operators.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_le(left: Value, right: Value) -> Value {
     // Integer comparison
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
@@ -594,7 +578,7 @@ pub extern "C-unwind" fn rt_le(left: Value, right: Value) -> Value {
 ///
 /// Per LANG.txt §4.4:
 /// Only Integer, Decimal, and String support comparison operators.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_gt(left: Value, right: Value) -> Value {
     // Integer comparison
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
@@ -636,7 +620,7 @@ pub extern "C-unwind" fn rt_gt(left: Value, right: Value) -> Value {
 ///
 /// Per LANG.txt §4.4:
 /// Only Integer, Decimal, and String support comparison operators.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_ge(left: Value, right: Value) -> Value {
     // Integer comparison
     if let (Some(l), Some(r)) = (left.as_integer(), right.as_integer()) {
@@ -700,7 +684,7 @@ use super::heap::{ClosureObject, PartialApplicationObject};
 /// - has_rest: Whether the function has a rest parameter (..args) - 0 or 1
 /// - captures_ptr: Pointer to an array of captured values
 /// - captures_count: Number of captured values
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rt_make_closure(
     function_ptr: *const (),
     arity: u32,
@@ -728,7 +712,7 @@ pub unsafe extern "C" fn rt_make_closure(
 ///
 /// # Safety
 /// The caller must ensure `argv` points to a valid array of `argc` Values.
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -> Value {
     // Collect arguments into a vector
@@ -815,7 +799,7 @@ pub extern "C-unwind" fn rt_call(callee: Value, argc: u32, argv: *const Value) -
 /// Apply a function to a collection, spreading the collection elements as arguments.
 ///
 /// This is used for `f(..collection)` syntax where collection elements become function arguments.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn rt_apply(callee: Value, collection: Value) -> Value {
     // Collect elements from the collection into a Vec
     let args: Vec<Value> = if let Some(list) = collection.as_list() {
@@ -843,7 +827,7 @@ pub extern "C-unwind" fn rt_apply(callee: Value, collection: Value) -> Value {
 ///
 /// - `env_ptr` must be a valid pointer to a ClosureObject, or null
 /// - The caller must ensure the closure object is valid for the duration of this call
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rt_get_capture(env_ptr: *const ClosureObject, index: usize) -> Value {
     if env_ptr.is_null() {
         // No closure environment - shouldn't happen if codegen is correct
@@ -864,7 +848,7 @@ pub unsafe extern "C" fn rt_get_capture(env_ptr: *const ClosureObject, index: us
 ///
 /// Allocates a heap object that can be shared between closures to enable
 /// mutable captures (LANG.txt §8.3 counter pattern).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_cell_new(value: Value) -> Value {
     Value::from_cell(value)
 }
@@ -874,7 +858,7 @@ pub extern "C" fn rt_cell_new(value: Value) -> Value {
 /// # Safety
 ///
 /// The `cell` argument must be a valid mutable cell Value, or this will panic.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_cell_get(cell: Value) -> Value {
     if let Some(cell_ptr) = cell.as_cell() {
         unsafe { (*cell_ptr).value }
@@ -890,7 +874,7 @@ pub extern "C" fn rt_cell_get(cell: Value) -> Value {
 /// The `cell` argument must be a valid mutable cell Value, or this will panic.
 /// This function mutates the cell in place - the old value is not decremented
 /// (caller should handle reference counting if needed).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_cell_set(cell: Value, value: Value) -> Value {
     if let Some(cell_ptr) = cell.as_cell() {
         unsafe {
@@ -939,7 +923,7 @@ extern "C" fn composed_closure_impl(env: *const ClosureObject, argc: u32, argv: 
 /// Per LANG.txt §4.8, the composition operator applies functions left-to-right:
 /// - `f >> g` means "apply f first, then g to the result"
 /// - `lines >> map(int) >> sum` means: apply lines, then map(int), then sum
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rt_compose(f: Value, g: Value) -> Value {
     // Verify both arguments are callable
     let f_is_callable =

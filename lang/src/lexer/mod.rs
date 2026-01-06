@@ -342,7 +342,7 @@ impl Lexer {
                         return Err(LexError::UnexpectedCharacter {
                             ch: self.peek(),
                             position: self.current_position(),
-                        })
+                        });
                     }
                 };
 

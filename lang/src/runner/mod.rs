@@ -1002,10 +1002,10 @@ impl Runner {
         if s.starts_with('[') && s.ends_with(']') {
             let inner = &s[1..s.len() - 1].trim();
             if inner.is_empty() {
-                return Ok(Value::from_list(santa_lang_runtime::im::Vector::new()));
+                return Ok(Value::from_list(runtime::im::Vector::new()));
             }
             let elements = self.split_collection_elements(inner);
-            let mut list = santa_lang_runtime::im::Vector::new();
+            let mut list = runtime::im::Vector::new();
             for elem in elements {
                 list.push_back(self.parse_value_recursive(elem.trim())?);
             }
@@ -1016,13 +1016,13 @@ impl Runner {
         if s.starts_with('{') && s.ends_with('}') {
             let inner = &s[1..s.len() - 1].trim();
             if inner.is_empty() {
-                return Ok(Value::from_set(santa_lang_runtime::im::HashSet::new()));
+                return Ok(Value::from_set(runtime::im::HashSet::new()));
             }
             let elements = self.split_collection_elements(inner);
             // Check if it's a Dict (has colons) or Set (no colons)
             if elements.iter().any(|e| e.contains(':')) {
                 // Dict
-                let mut dict = santa_lang_runtime::im::HashMap::new();
+                let mut dict = runtime::im::HashMap::new();
                 for elem in elements {
                     if let Some(colon_pos) = elem.find(':') {
                         let key = elem[..colon_pos].trim();
@@ -1035,7 +1035,7 @@ impl Runner {
                 return Ok(Value::from_dict(dict));
             } else {
                 // Set
-                let mut set = santa_lang_runtime::im::HashSet::new();
+                let mut set = runtime::im::HashSet::new();
                 for elem in elements {
                     set.insert(self.parse_value_recursive(elem.trim())?);
                 }
