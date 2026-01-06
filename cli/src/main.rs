@@ -1028,9 +1028,9 @@ fn run_jsonl_tests(
         .enumerate()
         .map(|(i, test)| {
             let is_slow = matches!(test, santa_lang::parser::ast::Section::Test { slow: true, .. });
-            let is_in_filtered = filtered_tests.iter().any(|t| {
-                std::ptr::eq(*t as *const _, *test as *const _)
-            });
+            let is_in_filtered = filtered_tests
+                .iter()
+                .any(|t| std::ptr::eq(*t as *const _, *test as *const _));
             JsonlTestCaseInitial {
                 index: (i + 1) as u32,
                 slow: is_slow,

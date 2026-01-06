@@ -130,9 +130,7 @@ pub fn format_error_json(error: &SantaError) -> String {
     let (line, column) = match error {
         SantaError::LexError { position, .. } => (position.line, position.column),
         SantaError::ParseError { span, .. } => (span.start.line, span.start.column),
-        SantaError::CompileError { span, .. } => {
-            span.map(|s| (s.start.line, s.start.column)).unwrap_or((1, 1))
-        }
+        SantaError::CompileError { span, .. } => span.map(|s| (s.start.line, s.start.column)).unwrap_or((1, 1)),
         SantaError::RuntimeError { stack_trace, .. } => {
             // Use first stack frame if available
             stack_trace
@@ -146,10 +144,7 @@ pub fn format_error_json(error: &SantaError) -> String {
         SantaError::RuntimeError { stack_trace, .. } => stack_trace
             .iter()
             .map(|f| {
-                let (frame_line, frame_column) = f
-                    .span
-                    .map(|s| (s.start.line, s.start.column))
-                    .unwrap_or((1, 1));
+                let (frame_line, frame_column) = f.span.map(|s| (s.start.line, s.start.column)).unwrap_or((1, 1));
                 StackFrame {
                     function: f.function.clone(),
                     line: frame_line,

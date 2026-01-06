@@ -108,12 +108,7 @@ fn json_script_simple() {
 #[test]
 fn json_script_with_console() {
     let mut cmd = Command::cargo_bin("santa-cli").unwrap();
-    let assert = cmd
-        .arg("-o")
-        .arg("json")
-        .arg("-e")
-        .arg(r#"puts("hello"); 42"#)
-        .assert();
+    let assert = cmd.arg("-o").arg("json").arg("-e").arg(r#"puts("hello"); 42"#).assert();
     assert
         .success()
         .stdout(predicate::str::contains(r#""type":"script""#))
@@ -144,12 +139,7 @@ fn json_solution() {
 #[test]
 fn json_solution_single_part() {
     let mut cmd = Command::cargo_bin("santa-cli").unwrap();
-    let assert = cmd
-        .arg("-o")
-        .arg("json")
-        .arg("-e")
-        .arg("part_one: { 42 }")
-        .assert();
+    let assert = cmd.arg("-o").arg("json").arg("-e").arg("part_one: { 42 }").assert();
     assert
         .success()
         .stdout(predicate::str::contains(r#""type":"solution""#))
@@ -293,12 +283,7 @@ fn jsonl_script_simple() {
 #[test]
 fn jsonl_solution() {
     let mut cmd = Command::cargo_bin("santa-cli").unwrap();
-    let assert = cmd
-        .arg("-o")
-        .arg("jsonl")
-        .arg("-e")
-        .arg("part_one: { 42 }")
-        .assert();
+    let assert = cmd.arg("-o").arg("jsonl").arg("-e").arg("part_one: { 42 }").assert();
     assert
         .success()
         .stdout(predicate::str::contains(r#""type":"solution""#))
@@ -309,12 +294,7 @@ fn jsonl_solution() {
 #[test]
 fn jsonl_error() {
     let mut cmd = Command::cargo_bin("santa-cli").unwrap();
-    let assert = cmd
-        .arg("-o")
-        .arg("jsonl")
-        .arg("-e")
-        .arg(r#"1 * "x""#)
-        .assert();
+    let assert = cmd.arg("-o").arg("jsonl").arg("-e").arg(r#"1 * "x""#).assert();
     assert
         .code(2)
         .stdout(predicate::str::contains(r#""type":"script""#))
@@ -346,7 +326,5 @@ fn jsonl_test() {
 fn invalid_output_mode() {
     let mut cmd = Command::cargo_bin("santa-cli").unwrap();
     let assert = cmd.arg("-o").arg("xml").arg("-e").arg("1").assert();
-    assert
-        .code(1)
-        .stderr(predicate::str::contains("Invalid output format"));
+    assert.code(1).stderr(predicate::str::contains("Invalid output format"));
 }
