@@ -327,8 +327,14 @@ fn run_script(source: &Source, content: &str) -> ExitCode {
     let temp_dir = std::env::temp_dir();
     let exe_path = temp_dir.join(format!("santa_script_{}", std::process::id()));
 
+    // Wrap script to print result to stdout (like Comet does)
+    let wrapped_content = format!(
+        "let __script_fn__ = || {{ {} }};\nlet __result__ = __script_fn__();\n__puts_repr(\"SCRIPT_RESULT:\", __result__);\n0",
+        content.trim_end().trim_end_matches(';')
+    );
+
     let compiler = Compiler::new();
-    if let Err(e) = compiler.compile_to_executable(content, &exe_path) {
+    if let Err(e) = compiler.compile_to_executable(&wrapped_content, &exe_path) {
         eprintln!("Compilation error: {:?}", e);
         return ExitCode::from(2);
     }
@@ -338,15 +344,40 @@ fn run_script(source: &Source, content: &str) -> ExitCode {
     if let Some(path) = source.path() {
         cmd.env("DASHER_SCRIPT_PATH", path);
     }
-    let status = cmd.status().expect("Failed to run compiled program");
+
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("Failed to run: {}", e);
+            std::fs::remove_file(&exe_path).ok();
+            return ExitCode::from(2);
+        }
+    };
 
     std::fs::remove_file(&exe_path).ok();
 
-    if status.success() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(status.code().unwrap_or(1) as u8)
+    // Check for runtime errors
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stderr.is_empty() {
+        eprintln!("{}", stderr);
+        return ExitCode::from(2);
     }
+
+    // Print puts output first (all lines except SCRIPT_RESULT:)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if !line.starts_with("SCRIPT_RESULT: ") {
+            println!("{}", line);
+        }
+    }
+
+    // Then print the result value
+    if let Some(line) = stdout.lines().find(|l| l.starts_with("SCRIPT_RESULT: ")) {
+        let value = line.strip_prefix("SCRIPT_RESULT: ").unwrap_or("");
+        println!("{}", value);
+    }
+
+    ExitCode::SUCCESS
 }
 
 fn run_solution(runner: &Runner, program: &santa_lang::parser::ast::Program) -> ExitCode {

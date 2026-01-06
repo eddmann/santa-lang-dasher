@@ -1,16 +1,20 @@
-// Simple solution file with both parts and a test
-input: "10"
+input: read("aoc://2015/1")
 
 part_one: {
-  int(input) + 1
+  input |> fold(0) |floor, direction| {
+    if direction == "(" { floor + 1 } else { floor - 1 };
+  }
 }
 
 part_two: {
-  int(input) * 2
+  zip(1.., input) |> fold(0) |floor, [index, direction]| {
+    let next_floor = if direction == "(" { floor + 1 } else { floor - 1 };
+    if next_floor < 0 { break index } else { next_floor };
+  }
 }
 
 test: {
-  input: "5"
-  part_one: 6
-  part_two: 10
+  input: "()())"
+  part_one: -1
+  part_two: 5
 }

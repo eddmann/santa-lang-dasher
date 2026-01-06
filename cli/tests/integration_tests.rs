@@ -1,9 +1,94 @@
-//! Integration tests for CLI JSON/JSONL output modes.
+//! Integration tests for CLI output modes.
 //!
 //! These tests follow the CLI Output Format Specification (Section 16 of lang.txt).
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+
+// ============================================================================
+// Basic CLI Tests (Text Mode)
+// ============================================================================
+
+#[test]
+fn script() {
+    let mut cmd = Command::cargo_bin("santa-cli").unwrap();
+    let assert = cmd
+        .arg(format!("{}/fixtures/script.santa", env!("CARGO_MANIFEST_DIR")))
+        .assert();
+    assert.success().stdout("14\n");
+}
+
+#[test]
+fn solution() {
+    let mut cmd = Command::cargo_bin("santa-cli").unwrap();
+    let assert = cmd
+        .arg(format!("{}/fixtures/solution.santa", env!("CARGO_MANIFEST_DIR")))
+        .assert();
+    assert
+        .success()
+        .stdout(predicate::str::contains("Part 1: \x1b[32m232\x1b[0m"))
+        .stdout(predicate::str::contains("Part 2: \x1b[32m1783\x1b[0m"));
+}
+
+#[test]
+fn test_solution() {
+    let mut cmd = Command::cargo_bin("santa-cli").unwrap();
+    let assert = cmd
+        .arg("-t")
+        .arg(format!("{}/fixtures/solution.santa", env!("CARGO_MANIFEST_DIR")))
+        .assert();
+    assert
+        .success()
+        .stdout(predicate::str::contains("Testcase #1"))
+        .stdout(predicate::str::contains("Part 1: -1 \x1b[32m✔\x1b[0m"))
+        .stdout(predicate::str::contains("Part 2: 5 \x1b[32m✔\x1b[0m"));
+}
+
+#[test]
+fn eval_simple_expression() {
+    let mut cmd = Command::cargo_bin("santa-cli").unwrap();
+    let assert = cmd.arg("-e").arg("1 + 2").assert();
+    assert.success().stdout("3\n");
+}
+
+#[test]
+fn eval_complex_expression() {
+    let mut cmd = Command::cargo_bin("santa-cli").unwrap();
+    let assert = cmd.arg("-e").arg("map(|x| x * 2, [1, 2, 3])").assert();
+    assert.success().stdout("[2, 4, 6]\n");
+}
+
+#[test]
+fn eval_aoc_solution() {
+    let mut cmd = Command::cargo_bin("santa-cli").unwrap();
+    let assert = cmd.arg("-e").arg("part_one: { 42 }").assert();
+    assert
+        .success()
+        .stdout(predicate::str::contains("Part 1: \x1b[32m42\x1b[0m"));
+}
+
+#[test]
+fn stdin_simple_expression() {
+    let mut cmd = Command::cargo_bin("santa-cli").unwrap();
+    let assert = cmd.write_stdin("1 + 2").assert();
+    assert.success().stdout("3\n");
+}
+
+#[test]
+fn stdin_aoc_solution() {
+    let mut cmd = Command::cargo_bin("santa-cli").unwrap();
+    let assert = cmd.write_stdin("part_one: { 42 }").assert();
+    assert
+        .success()
+        .stdout(predicate::str::contains("Part 1: \x1b[32m42\x1b[0m"));
+}
+
+#[test]
+fn stdin_empty() {
+    let mut cmd = Command::cargo_bin("santa-cli").unwrap();
+    let assert = cmd.write_stdin("").assert();
+    assert.success();
+}
 
 // ============================================================================
 // JSON Script Tests

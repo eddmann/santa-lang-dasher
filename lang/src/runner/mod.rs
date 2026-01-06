@@ -317,7 +317,8 @@ impl Runner {
             Expr::Nil => Ok(Value::nil()),
             _ => {
                 // For complex expressions, compile and execute them
-                let source = format!("puts(\"RESULT:\", {}); 0", self.expr_to_source(expr));
+                // Use __puts_repr to bypass DASHER_CONSOLE_CAPTURE in JSON modes
+                let source = format!("__puts_repr(\"RESULT:\", {}); 0", self.expr_to_source(expr));
                 let temp_dir = std::env::temp_dir();
                 let unique_id = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
