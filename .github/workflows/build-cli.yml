@@ -1,0 +1,120 @@
+name: Build CLI
+
+on:
+  workflow_call:
+    inputs:
+      release-tag:
+        required: true
+        type: string
+
+jobs:
+  binary:
+    name: Binary
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    env:
+      CARGO_TERM_COLOR: always
+    strategy:
+      matrix:
+        include:
+          - platform: linux-amd64
+            target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+          - platform: macos-amd64
+            target: x86_64-apple-darwin
+            os: macos-15-intel
+          - platform: macos-arm64
+            target: aarch64-apple-darwin
+            os: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set release version
+        run: |
+          sed -i.bak 's/version = "[0-9.]*"$/version = "${{ inputs.release-tag }}"/' Cargo.toml
+      - name: Install LLVM 18 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 18
+          sudo apt-get install -y libpolly-18-dev
+          echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
+      - name: Install LLVM 18 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm@18
+          echo "LLVM_SYS_180_PREFIX=$(brew --prefix llvm@18)" >> $GITHUB_ENV
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+          targets: ${{ matrix.target }}
+      - name: Load cache
+        uses: Swatinem/rust-cache@v2
+      - name: Build runtime
+        run: cargo build --release -p runtime --target ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --bin santa-cli --target ${{ matrix.target }}
+      - name: Upload
+        run: |
+          cp target/${{ matrix.target }}/release/santa-cli santa-lang-dasher-cli-${{ inputs.release-tag }}-${{ matrix.platform }}
+          gh release upload ${{ inputs.release-tag }} santa-lang-dasher-cli-${{ inputs.release-tag }}-${{ matrix.platform }} --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker:
+    name: Docker
+    runs-on: ubuntu-24.04
+    needs: binary
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set release version
+        run: |
+          sed -i.bak 's/version = "[0-9.]*"$/version = "${{ inputs.release-tag }}"/' Cargo.toml
+      - name: Install LLVM 18
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 18
+          sudo apt-get install -y libpolly-18-dev
+          echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+          targets: x86_64-unknown-linux-gnu
+      - name: Load cache
+        uses: Swatinem/rust-cache@v2
+      - name: Build runtime
+        run: cargo build --release -p runtime --target x86_64-unknown-linux-gnu
+      - name: Build
+        run: cargo build --release --bin santa-cli --target x86_64-unknown-linux-gnu
+      - name: Create Dockerfile
+        run: |
+          cat > Dockerfile <<'EOF'
+          FROM debian:bookworm-slim
+          COPY target/x86_64-unknown-linux-gnu/release/santa-cli /usr/local/bin/santa-cli
+          RUN chmod +x /usr/local/bin/santa-cli
+          ENTRYPOINT ["/usr/local/bin/santa-cli"]
+          EOF
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          tags: ghcr.io/eddmann/santa-lang-dasher:cli-latest
+          labels: org.opencontainers.image.source=https://github.com/eddmann/santa-lang-dasher
+          outputs: type=docker,dest=/tmp/santa-lang-dasher-cli-docker.tar
+      - name: Upload to release
+        run: |
+          mv /tmp/santa-lang-dasher-cli-docker.tar santa-lang-dasher-cli-${{ inputs.release-tag }}-docker.tar
+          gh release upload ${{ inputs.release-tag }} santa-lang-dasher-cli-${{ inputs.release-tag }}-docker.tar --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
