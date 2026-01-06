@@ -8,7 +8,7 @@ LLVM-based AOT native compiler implementation of [santa-lang](https://eddmann.co
 
 santa-lang is a functional, expression-oriented programming language designed for solving Advent of Code puzzles. This implementation compiles to native executables via LLVM, with type inference enabling specialization for native operations.
 
-All santa-lang implementations support the same language features:
+Key language features:
 
 - First-class functions and closures with tail-call optimization
 - Pipeline and composition operators for expressive data flow
