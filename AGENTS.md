@@ -8,6 +8,17 @@ This is **Dasher**, a santa-lang reindeer implementation. santa-lang is a functi
 - Compiles to native executables via LLVM IR generation
 - Batteries-included standard library for AoC patterns
 
+## Makefile
+
+**Always use Makefile targets.** Never run build tools directly.
+
+- Run `make help` to see all available targets
+- `make fmt` for code formatting
+- `make test` for running tests
+- `make can-release` before submitting a PR (runs lint + all tests)
+
+This ensures consistent, reproducible builds across all environments.
+
 ## Setup
 
 Requires Rust 1.85+ and **LLVM 18**:
@@ -22,23 +33,23 @@ export LLVM_SYS_180_PREFIX=/usr/lib/llvm-18
 brew install llvm@18
 export LLVM_SYS_180_PREFIX=$(brew --prefix llvm@18)
 
-# Build
-cargo build --release -p santa-cli
+make build              # Debug build
+make release            # Release build
 ```
 
 ## Common Commands
 
 ```bash
-make help               # Show all targets
+make help               # Show available targets
 make build              # Debug build
 make release            # Release build
-make fmt                # Format code
+make fmt                # Format code (rustfmt)
 make lint               # rustfmt check + clippy -D warnings
 make test               # Run all tests
 make test/lang          # Lang crate only
 make test/runtime       # Runtime crate only
 make test/cli           # CLI crate only
-make can-release        # Full CI: lint + test
+make can-release        # Run before submitting PR (lint + all tests)
 make bench              # Criterion benchmarks
 make run FILE=<path>    # Execute script
 make test-examples      # Run example AoC solutions
@@ -54,13 +65,6 @@ make test-examples      # Run example AoC solutions
 - **Structure**: `lang/` (compiler) + `runtime/` (FFI) + `cli/` + `benchmarks/`
 
 ## Tests & CI
-
-```bash
-cargo test              # All tests
-cargo test -p santa-lang        # Lang crate
-cargo test -p santa-lang-runtime # Runtime crate
-cargo test -p santa-cli         # CLI crate
-```
 
 - **CI** (`test.yml`): Installs LLVM 18, runs `make can-release`
 - **Build** (`build.yml`): linux-amd64, macos-amd64, macos-arm64, Docker
