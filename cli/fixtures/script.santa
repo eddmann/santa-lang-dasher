@@ -1,0 +1,4 @@
+// Simple script for testing
+let x = 7
+let y = x * 2
+y

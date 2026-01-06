@@ -12,6 +12,10 @@ path = "src/main.rs"
 santa-lang = { path = "../lang" }
 clap.workspace = true
 atty.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [dev-dependencies]
 expect-test.workspace = true
+assert_cmd = "2.0"
+predicates = "3.0"

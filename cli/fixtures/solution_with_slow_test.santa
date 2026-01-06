@@ -1,0 +1,19 @@
+// Solution with @slow test for testing skip behavior
+input: "10"
+
+part_one: int(input) + 1
+
+part_two: int(input) * 2
+
+test: {
+  input: "5"
+  part_one: 6
+  part_two: 10
+}
+
+@slow
+test: {
+  input: "100"
+  part_one: 101
+  part_two: 200
+}

@@ -4980,6 +4980,24 @@ fn format_decimal(value: f64) -> String {
     }
 }
 
+/// Check if console capture mode is enabled via environment variable.
+/// Used for JSON/JSONL CLI output modes.
+fn is_console_capture_mode() -> bool {
+    use std::sync::OnceLock;
+    static CAPTURE_MODE: OnceLock<bool> = OnceLock::new();
+    *CAPTURE_MODE.get_or_init(|| std::env::var("DASHER_CONSOLE_CAPTURE").is_ok())
+}
+
+/// Get timestamp in milliseconds since program start (for console capture).
+fn get_capture_timestamp_ms() -> u64 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+
+    static START_TIME: OnceLock<Instant> = OnceLock::new();
+    let start = START_TIME.get_or_init(Instant::now);
+    start.elapsed().as_millis() as u64
+}
+
 /// `puts(..values)` → Nil
 ///
 /// Print values to stdout, separated by spaces, followed by newline.
@@ -4989,6 +5007,10 @@ fn format_decimal(value: f64) -> String {
 /// - puts("Hello", "World") prints "Hello World\n"
 /// - puts(42) prints "42\n"
 ///
+/// When DASHER_CONSOLE_CAPTURE env var is set, outputs in format:
+/// CONSOLE:timestamp_ms:message
+/// This allows the CLI to capture console output for JSON/JSONL modes.
+///
 /// # Safety
 /// The caller must ensure:
 /// - `argv` points to a valid array of `argc` Values
@@ -4996,8 +5018,11 @@ fn format_decimal(value: f64) -> String {
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn rt_puts(argc: u32, argv: *const Value) -> Value {
+    // Per spec: puts() with no arguments emits no event in capture mode
     if argc == 0 {
-        println!();
+        if !is_console_capture_mode() {
+            println!();
+        }
         return Value::nil();
     }
 
@@ -5005,7 +5030,15 @@ pub extern "C" fn rt_puts(argc: u32, argv: *const Value) -> Value {
     let args: &[Value] = unsafe { std::slice::from_raw_parts(argv, argc as usize) };
 
     let formatted: Vec<String> = args.iter().map(print_value).collect();
-    println!("{}", formatted.join(" "));
+    let message = formatted.join(" ");
+
+    if is_console_capture_mode() {
+        // Output in capture format for JSON/JSONL modes
+        let timestamp = get_capture_timestamp_ms();
+        println!("CONSOLE:{}:{}", timestamp, message);
+    } else {
+        println!("{}", message);
+    }
 
     Value::nil()
 }
@@ -5014,7 +5047,12 @@ pub extern "C" fn rt_puts(argc: u32, argv: *const Value) -> Value {
 #[no_mangle]
 pub extern "C" fn rt_puts_two(a: Value, b: Value) -> Value {
     let formatted = format!("{} {}", print_value(&a), print_value(&b));
-    println!("{}", formatted);
+    if is_console_capture_mode() {
+        let timestamp = get_capture_timestamp_ms();
+        println!("CONSOLE:{}:{}", timestamp, formatted);
+    } else {
+        println!("{}", formatted);
+    }
     Value::nil()
 }
 
