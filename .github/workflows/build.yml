@@ -67,7 +67,7 @@ jobs:
       - name: Load cache
         uses: Swatinem/rust-cache@v2
       - name: Build runtime
-        run: cargo build --release -p santa-lang-runtime --target ${{ matrix.target }}
+        run: cargo build --release -p runtime --target ${{ matrix.target }}
       - name: Build
         run: cargo build --release --bin santa-cli --target ${{ matrix.target }}
       - name: Upload artifact
