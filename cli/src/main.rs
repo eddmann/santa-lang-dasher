@@ -13,9 +13,9 @@ mod output;
 
 use clap::Parser;
 use output::{
-    JsonlPartInitial, JsonlScriptInitial, JsonlSolutionInitial, JsonlTestCaseInitial, JsonlTestInitial, JsonlWriter,
-    OutputMode, TestSummary, format_error_json, format_script_json, format_solution_json, format_test_json,
-    is_solution_source, parse_console_entries,
+    JsonVersionOutput, JsonlPartInitial, JsonlScriptInitial, JsonlSolutionInitial, JsonlTestCaseInitial,
+    JsonlTestInitial, JsonlWriter, OutputMode, TestSummary, format_error_json, format_script_json,
+    format_solution_json, format_test_json, is_solution_source, parse_console_entries,
 };
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -58,8 +58,19 @@ ENVIRONMENT:
     );
 }
 
-fn print_version() {
-    println!("santa-lang Dasher {}", VERSION);
+fn print_version(output_mode: OutputMode) {
+    match output_mode {
+        OutputMode::Text => {
+            println!("santa-lang Dasher {}", VERSION);
+        }
+        OutputMode::Json | OutputMode::Jsonl => {
+            let output = JsonVersionOutput {
+                reindeer: "Dasher",
+                version: VERSION,
+            };
+            println!("{}", serde_json::to_string(&output).unwrap());
+        }
+    }
 }
 
 /// Santa-lang LLVM Compiler (Dasher)
@@ -127,13 +138,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // Handle --version flag
-    if args.version {
-        print_version();
-        return ExitCode::SUCCESS;
-    }
-
-    // Parse output mode early
+    // Parse output mode early (before version check to support JSON version output)
     let output_mode = match parse_output_mode(&args) {
         Ok(mode) => mode,
         Err(e) => {
@@ -141,6 +146,12 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+
+    // Handle --version flag
+    if args.version {
+        print_version(output_mode);
+        return ExitCode::SUCCESS;
+    }
 
     // Determine source: -e flag > file argument > stdin
     let source = match get_source(&args) {

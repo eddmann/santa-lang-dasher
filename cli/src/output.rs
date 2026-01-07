@@ -125,6 +125,13 @@ pub struct JsonErrorOutput {
     pub stack: Vec<StackFrame>,
 }
 
+/// JSON output for version information.
+#[derive(Debug, Clone, Serialize)]
+pub struct JsonVersionOutput {
+    pub reindeer: &'static str,
+    pub version: &'static str,
+}
+
 /// Format a SantaError as JSON error output.
 pub fn format_error_json(error: &SantaError) -> String {
     let (line, column) = match error {

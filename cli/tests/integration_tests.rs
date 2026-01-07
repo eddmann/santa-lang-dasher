@@ -319,6 +319,40 @@ fn jsonl_test() {
 }
 
 // ============================================================================
+// JSON Version Output Tests
+// ============================================================================
+
+#[test]
+fn json_version_output() {
+    let mut cmd = Command::cargo_bin("santa-cli").unwrap();
+    let assert = cmd.arg("-o").arg("json").arg("--version").assert();
+    assert
+        .success()
+        .stdout(predicate::str::contains(r#""reindeer":"Dasher""#))
+        .stdout(predicate::str::contains(r#""version":"#));
+}
+
+#[test]
+fn jsonl_version_output() {
+    let mut cmd = Command::cargo_bin("santa-cli").unwrap();
+    let assert = cmd.arg("-o").arg("jsonl").arg("--version").assert();
+    assert
+        .success()
+        .stdout(predicate::str::contains(r#""reindeer":"Dasher""#))
+        .stdout(predicate::str::contains(r#""version":"#));
+}
+
+#[test]
+fn json_version_output_flag_order_reversed() {
+    let mut cmd = Command::cargo_bin("santa-cli").unwrap();
+    let assert = cmd.arg("--version").arg("-o").arg("json").assert();
+    assert
+        .success()
+        .stdout(predicate::str::contains(r#""reindeer":"Dasher""#))
+        .stdout(predicate::str::contains(r#""version":"#));
+}
+
+// ============================================================================
 // Output Mode Validation Tests
 // ============================================================================
 
