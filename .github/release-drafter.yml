@@ -1,5 +1,5 @@
-name-template: $RESOLVED_VERSION
-tag-template: $RESOLVED_VERSION
+name-template: 1.0.0
+tag-template: 1.0.0
 commitish: draft-release
 
 version-resolver:
