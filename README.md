@@ -179,10 +179,6 @@ The language has been implemented multiple times to explore different execution 
 | [Vixen](https://github.com/eddmann/santa-lang-vixen) | Embedded bytecode VM | C |
 | [Prancer](https://github.com/eddmann/santa-lang-prancer) | Tree-walking interpreter | TypeScript |
 
-## Dependencies
-
-This project uses a [fork of the `im` crate](https://github.com/eddmann/im-rs) to enable compilation with newer Rust toolchains.
-
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
