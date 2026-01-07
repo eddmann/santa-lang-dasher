@@ -57,7 +57,7 @@ make test-examples      # Run example AoC solutions
 
 ## Code Conventions
 
-- **Edition**: Rust 2021
+- **Edition**: Rust 2024
 - **Toolchain**: 1.85.0 (rust-toolchain.toml)
 - **Formatting**: `max_width = 120` (rustfmt.toml)
 - **Linting**: `clippy -D warnings`
@@ -95,5 +95,6 @@ Other santa-lang reindeer (for cross-reference and consistency checks):
 | **Dasher** | LLVM native compiler | Rust | `~/Projects/santa-lang-dasher` | `github.com/eddmann/santa-lang-dasher` |
 | **Donner** | JVM bytecode compiler | Kotlin | `~/Projects/santa-lang-donner` | `github.com/eddmann/santa-lang-donner` |
 | **Prancer** | Tree-walking interpreter | TypeScript | `~/Projects/santa-lang-prancer` | `github.com/eddmann/santa-lang-prancer` |
+| **Vixen** | Embedded bytecode VM | C | `~/Projects/santa-lang-vixen` | `github.com/eddmann/santa-lang-vixen` |
 
 Language specification and documentation: `~/Projects/santa-lang` or `github.com/eddmann/santa-lang`
