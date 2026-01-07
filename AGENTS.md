@@ -30,8 +30,9 @@ sudo apt-get install -y libpolly-18-dev
 export LLVM_SYS_180_PREFIX=/usr/lib/llvm-18
 
 # macOS
-brew install llvm@18
+brew install llvm@18 zstd
 export LLVM_SYS_180_PREFIX=$(brew --prefix llvm@18)
+export LIBRARY_PATH=$(brew --prefix)/lib
 
 make build              # Debug build
 make release            # Release build

@@ -1,10 +1,22 @@
 [net]
 git-fetch-with-cli = true
 
-[env]
-LLVM_SYS_180_PREFIX = "/opt/homebrew/opt/llvm@18"
-LIBRARY_PATH = "/opt/homebrew/lib"
-MACOSX_DEPLOYMENT_TARGET = "15.0"
-
 [target.aarch64-apple-darwin]
-rustflags = ["-C", "link-args=-Wl,-no_warn_duplicate_libraries"]
+rustflags = [
+    "-C", "link-args=-Wl,-no_warn_duplicate_libraries",
+    # Statically link zstd and libunwind to avoid Homebrew runtime dependencies
+    "-C", "link-args=-Wl,-force_load,/opt/homebrew/opt/zstd/lib/libzstd.a",
+    "-C", "link-args=-Wl,-force_load,/opt/homebrew/opt/llvm@18/lib/libunwind.a",
+    # Remove unused dylibs after static linking
+    "-C", "link-args=-Wl,-dead_strip_dylibs",
+]
+
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C", "link-args=-Wl,-no_warn_duplicate_libraries",
+    # Statically link zstd and libunwind to avoid Homebrew runtime dependencies
+    "-C", "link-args=-Wl,-force_load,/usr/local/opt/zstd/lib/libzstd.a",
+    "-C", "link-args=-Wl,-force_load,/usr/local/opt/llvm@18/lib/libunwind.a",
+    # Remove unused dylibs after static linking
+    "-C", "link-args=-Wl,-dead_strip_dylibs",
+]
