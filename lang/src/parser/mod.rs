@@ -772,6 +772,32 @@ impl Parser {
                                 }
                             }
                         }
+                        TokenKind::Underscore => {
+                            // Wildcard parameter: |_| or |x, _|
+                            params.push(Param {
+                                pattern: Pattern::Wildcard,
+                            });
+                            self.advance();
+
+                            let next = self.current_token()?;
+                            match &next.kind {
+                                TokenKind::Comma => {
+                                    self.advance();
+                                    continue;
+                                }
+                                TokenKind::VerticalBar => {
+                                    self.advance(); // consume closing '|'
+                                    break;
+                                }
+                                _ => {
+                                    return Err(ParseError {
+                                        message: format!("Expected ',' or '|' after wildcard parameter, got {:?}", next.kind),
+                                        line: next.span.start.line as usize,
+                                        column: next.span.start.column as usize,
+                                    });
+                                }
+                            }
+                        }
                         TokenKind::DotDot => {
                             // Rest parameter: |..rest|
                             self.advance();

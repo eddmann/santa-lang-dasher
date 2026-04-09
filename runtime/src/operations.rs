@@ -177,10 +177,11 @@ pub extern "C-unwind" fn rt_add(left: Value, right: Value) -> Value {
 
     // Handle Dict + Dict (merge, right precedence) per LANG.txt §4
     if let (Some(l), Some(r)) = (left.as_dict(), right.as_dict()) {
-        // Union with right entries overwriting left entries when keys clash
-        // im::HashMap::union keeps left values on collision, so we need r.union(l)
-        // then the right values win when there are conflicts
-        let result = r.clone().union(l.clone());
+        // Merge with right entries overwriting left entries when keys clash
+        let mut result = l.clone();
+        for (k, v) in r.iter() {
+            result = result.update(k.clone(), v.clone());
+        }
         return Value::from_dict(result);
     }
 
