@@ -41,7 +41,16 @@ impl<'ctx> CodegenContext<'ctx> {
                         Ok(load)
                     }
                 } else if let Some(arity) = Self::builtin_value_arity(name) {
-                    // Builtin function referenced without being called - create a function value
+                    // Builtin function referenced without being called - create a function value.
+                    //
+                    // Special case: `min` and `max` support two overloads
+                    // (collection-only and (a, b)). When referenced as first-class
+                    // values they must preserve BOTH overloads, so we build a
+                    // rest-arg dispatch wrapper instead of the single-arity wrapper
+                    // that compile_partial_builtin would produce.
+                    if name == "min" || name == "max" {
+                        return self.compile_variadic_minmax_value(name);
+                    }
                     if let Some(result) = self.compile_partial_builtin(name, &[], arity)? {
                         Ok(result)
                     } else {
@@ -6791,6 +6800,87 @@ impl<'ctx> CodegenContext<'ctx> {
             }
             _ => Ok(None), // Not a builtin, let compile_call handle it
         }
+    }
+
+    /// Compile a first-class function value for `min` / `max` that preserves
+    /// both the collection-only overload and the two-argument overload.
+    ///
+    /// Generates a wrapper of the form:
+    ///   |..__args| if size(__args) == 1 { min(__args[0]) } else { min(__args[0], __args[1]) }
+    ///
+    /// This way both `acc_fn([1,2,3])` and `acc_fn(3, 5)` dispatch correctly
+    /// to the underlying builtin overloads.
+    fn compile_variadic_minmax_value(
+        &mut self,
+        name: &str,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+        use crate::parser::ast::{Param, Pattern};
+
+        let args_name = "__minmax_args".to_string();
+
+        // __args[0]
+        let first = Expr::Index {
+            collection: Box::new(Expr::Identifier(args_name.clone())),
+            index: Box::new(Expr::Integer(0)),
+        };
+        // __args[1]
+        let second = Expr::Index {
+            collection: Box::new(Expr::Identifier(args_name.clone())),
+            index: Box::new(Expr::Integer(1)),
+        };
+        // size(__args)
+        let size_call = Expr::Call {
+            function: Box::new(Expr::Identifier("size".to_string())),
+            args: vec![Expr::Identifier(args_name.clone())],
+        };
+        // size(__args) == 1
+        let is_single = Expr::Infix {
+            left: Box::new(size_call),
+            op: InfixOp::Equal,
+            right: Box::new(Expr::Integer(1)),
+        };
+        // min(__args[0])
+        let collection_call = Expr::Call {
+            function: Box::new(Expr::Identifier(name.to_string())),
+            args: vec![first],
+        };
+        // min(__args[0], __args[1])
+        let pair_call = Expr::Call {
+            function: Box::new(Expr::Identifier(name.to_string())),
+            args: vec![
+                Expr::Index {
+                    collection: Box::new(Expr::Identifier(args_name.clone())),
+                    index: Box::new(Expr::Integer(0)),
+                },
+                second,
+            ],
+        };
+        // if size(__args) == 1 { min(__args[0]) } else { min(__args[0], __args[1]) }
+        let body = Expr::If {
+            condition: Box::new(is_single),
+            then_branch: Box::new(collection_call),
+            else_branch: Some(Box::new(pair_call)),
+        };
+
+        let params = vec![Param {
+            pattern: Pattern::RestIdentifier(args_name),
+        }];
+
+        let func = Expr::Function {
+            params,
+            body: Box::new(body),
+        };
+
+        let func_ty = self.infer_expr_type(&func);
+        let func_typed = TypedExpr {
+            expr: func,
+            ty: func_ty,
+            span: crate::lexer::token::Span::new(
+                crate::lexer::token::Position::new(0, 0),
+                crate::lexer::token::Position::new(0, 0),
+            ),
+        };
+        self.compile_expr(&func_typed)
     }
 
     /// Compile a partial application of a builtin function.

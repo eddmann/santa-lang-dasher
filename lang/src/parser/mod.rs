@@ -27,6 +27,13 @@ pub struct ParseError {
 pub struct Parser {
     tokens: Vec<Token>,
     current: usize,
+    /// Non-zero when parsing a non-block trailing lambda body. In this mode
+    /// the `|>` (Pipe) operator must never be consumed by the pratt loop so
+    /// that it binds to the enclosing pipeline expression. Bounded
+    /// subexpressions (`(...)`, `[...]`, `{...}`, `#{...}`, function call
+    /// argument lists, etc.) temporarily clear this flag so that nested
+    /// pipelines inside them parse normally.
+    suppress_pipeline: u32,
 }
 
 impl Parser {
@@ -39,7 +46,21 @@ impl Parser {
         Self {
             tokens: filtered_tokens,
             current: 0,
+            suppress_pipeline: 0,
         }
+    }
+
+    /// Temporarily clear pipeline suppression (for bounded subexpressions).
+    /// Returns the previous value to be restored via
+    /// `restore_pipeline_suppression`.
+    fn enter_bounded(&mut self) -> u32 {
+        let prev = self.suppress_pipeline;
+        self.suppress_pipeline = 0;
+        prev
+    }
+
+    fn restore_pipeline_suppression(&mut self, prev: u32) {
+        self.suppress_pipeline = prev;
     }
 
     /// Create a binary operator lambda: |__op_0, __op_1| __op_0 OP __op_1
@@ -269,15 +290,13 @@ impl Parser {
 
             // Check for trailing lambda syntax: expr identifier lambda
             // e.g., [1, 2, 3] map |x| x * 2
-            // For OrOr (||), only treat as trailing lambda if it can't be the OR operator
+            // NOTE: Only match VerticalBar (|), NOT OrOr (||). `||` should always
+            // be parsed as the OR operator in this position so that expressions
+            // like `a |> f(x) || b |> g` are parsed as `(a |> f(x)) || (b |> g)`.
             if let TokenKind::Identifier(func_name) = &token.kind {
                 // Look ahead to see if there's a lambda following
                 if let Some(next) = self.tokens.get(self.current + 1) {
-                    let is_lambda_start = match &next.kind {
-                        TokenKind::VerticalBar => true,
-                        TokenKind::OrOr => min_precedence > PREC_OR, // Only if || can't be OR operator
-                        _ => false,
-                    };
+                    let is_lambda_start = matches!(next.kind, TokenKind::VerticalBar);
                     if is_lambda_start {
                         // This is a trailing lambda
                         let func_name = func_name.clone();
@@ -301,17 +320,10 @@ impl Parser {
 
             // Check for trailing lambda after a call: call(...) |params| body
             // e.g., fold(init) |acc, x| acc + x  ->  fold(init, |acc, x| acc + x)
-            // For OrOr (||), only treat as trailing lambda if it can't be the OR operator
-            // at this precedence level (i.e., OrOr precedence 1 < min_precedence)
-            let is_trailing_lambda = match &token.kind {
-                TokenKind::VerticalBar => true,
-                TokenKind::OrOr => {
-                    // Only treat || as trailing lambda if OR operator doesn't apply here
-                    // OR has lower precedence than this context
-                    min_precedence > PREC_OR
-                }
-                _ => false,
-            };
+            // NOTE: Only match VerticalBar (|), NOT OrOr (||). `||` should always
+            // be parsed as the OR operator after a call expression, so
+            // `a |> f(x) || b |> g` becomes `(a |> f(x)) || (b |> g)`.
+            let is_trailing_lambda = matches!(token.kind, TokenKind::VerticalBar);
             if is_trailing_lambda {
                 if let Expr::Call { function, mut args } = left {
                     // Parse the lambda with limited body precedence
@@ -326,6 +338,12 @@ impl Parser {
             let precedence = self.get_infix_precedence();
             // Stop if precedence is 0 (not an infix op) or less than minimum
             if precedence == 0 || precedence < min_precedence {
+                break;
+            }
+
+            // Inside a non-block trailing lambda body, don't consume `|>`.
+            // It belongs to the enclosing pipeline expression.
+            if self.suppress_pipeline > 0 && matches!(token.kind, TokenKind::Pipe) {
                 break;
             }
 
@@ -397,8 +415,18 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Placeholder)
             }
-            TokenKind::LeftBracket => self.parse_list(),
-            TokenKind::HashBrace => self.parse_set_or_dict(),
+            TokenKind::LeftBracket => {
+                let prev = self.enter_bounded();
+                let res = self.parse_list();
+                self.restore_pipeline_suppression(prev);
+                res
+            }
+            TokenKind::HashBrace => {
+                let prev = self.enter_bounded();
+                let res = self.parse_set_or_dict();
+                self.restore_pipeline_suppression(prev);
+                res
+            }
             TokenKind::Bang => {
                 self.advance();
                 let right = self.parse_pratt_expr(PREC_PREFIX)?; // Prefix has high precedence
@@ -430,19 +458,41 @@ impl Parser {
                 let expr = self.parse_pratt_expr(PREC_PREFIX)?; // High precedence
                 Ok(Expr::Spread(Box::new(expr)))
             }
-            TokenKind::VerticalBar => self.parse_function(),
+            TokenKind::VerticalBar => {
+                // Nested function literal — its body is a fresh context.
+                let prev = self.enter_bounded();
+                let res = self.parse_function();
+                self.restore_pipeline_suppression(prev);
+                res
+            }
             TokenKind::OrOr => {
                 // || is lexed as a single token, but it could be an empty function parameter list
                 // We need to check if this is a function (|| ...) or a logical OR
                 // For now, treat it as a function with empty params
-                self.parse_function_empty_params()
+                let prev = self.enter_bounded();
+                let res = self.parse_function_empty_params();
+                self.restore_pipeline_suppression(prev);
+                res
             }
-            TokenKind::If => self.parse_if(),
-            TokenKind::Match => self.parse_match(),
+            TokenKind::If => {
+                let prev = self.enter_bounded();
+                let res = self.parse_if();
+                self.restore_pipeline_suppression(prev);
+                res
+            }
+            TokenKind::Match => {
+                let prev = self.enter_bounded();
+                let res = self.parse_match();
+                self.restore_pipeline_suppression(prev);
+                res
+            }
             TokenKind::LeftParen => {
                 // Grouped expression: (expr)
                 self.advance(); // consume '('
-                let expr = self.parse_expression()?;
+                let prev = self.enter_bounded();
+                let expr_result = self.parse_expression();
+                self.restore_pipeline_suppression(prev);
+                let expr = expr_result?;
                 let close = self.current_token()?;
                 if !matches!(close.kind, TokenKind::RightParen) {
                     return Err(ParseError {
@@ -461,7 +511,10 @@ impl Parser {
                 //   {1, 2, 3} - set literal
                 //   {x} - set with one element
                 //   {let y = 1; y} - block with statements
-                self.parse_set_or_block_in_expr_position()
+                let prev = self.enter_bounded();
+                let res = self.parse_set_or_block_in_expr_position();
+                self.restore_pipeline_suppression(prev);
+                res
             }
 
             // Operator function references: +, *, /, %, ==, !=, <, >, <=, >=, &&
@@ -845,9 +898,20 @@ impl Parser {
                     }
                 }
 
-                // Parse body with precedence just above pipeline
-                // This stops the body before consuming |> operators
-                let body = self.parse_body_expr_with_min_prec(PREC_PIPELINE + 1)?;
+                // Parse the body. If it's a block (`{ ... }`) we parse it
+                // directly. Otherwise we parse a single expression with
+                // pipeline suppression active so that `|>` belongs to the
+                // enclosing pipeline expression. Nested pipelines inside
+                // bounded subexpressions (parens/brackets/braces) are
+                // unaffected because those re-enable pipelines.
+                let body = if matches!(self.current_token()?.kind, TokenKind::LeftBrace) {
+                    self.parse_block()?
+                } else {
+                    self.suppress_pipeline += 1;
+                    let body_result = self.parse_pratt_expr(0);
+                    self.suppress_pipeline -= 1;
+                    body_result?
+                };
 
                 Ok(Expr::Function {
                     params,
@@ -857,7 +921,14 @@ impl Parser {
             TokenKind::OrOr => {
                 // Empty parameter list: || body
                 self.advance();
-                let body = self.parse_body_expr_with_min_prec(PREC_PIPELINE + 1)?;
+                let body = if matches!(self.current_token()?.kind, TokenKind::LeftBrace) {
+                    self.parse_block()?
+                } else {
+                    self.suppress_pipeline += 1;
+                    let body_result = self.parse_pratt_expr(0);
+                    self.suppress_pipeline -= 1;
+                    body_result?
+                };
                 Ok(Expr::Function {
                     params: Vec::new(),
                     body: Box::new(body),
@@ -874,6 +945,16 @@ impl Parser {
     fn parse_call(&mut self, function: Expr) -> Result<Expr, ParseError> {
         self.advance(); // consume '('
 
+        // Argument lists are bounded by `)`, so pipelines inside them
+        // belong to the argument expressions, not the enclosing trailing
+        // lambda body.
+        let prev_suppress = self.enter_bounded();
+        let result = self.parse_call_inner(function);
+        self.restore_pipeline_suppression(prev_suppress);
+        result
+    }
+
+    fn parse_call_inner(&mut self, function: Expr) -> Result<Expr, ParseError> {
         let mut args = Vec::new();
 
         // Check for empty argument list
@@ -943,7 +1024,11 @@ impl Parser {
     fn parse_index(&mut self, collection: Expr) -> Result<Expr, ParseError> {
         self.advance(); // consume '['
 
-        let index = self.parse_pratt_expr(0)?;
+        // Index expressions are bounded by `]`.
+        let prev_suppress = self.enter_bounded();
+        let index_result = self.parse_pratt_expr(0);
+        self.restore_pipeline_suppression(prev_suppress);
+        let index = index_result?;
 
         let token = self.current_token()?;
         if !matches!(token.kind, TokenKind::RightBracket) {
