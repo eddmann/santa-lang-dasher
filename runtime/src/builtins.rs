@@ -484,26 +484,25 @@ fn lazy_nth(lazy: &LazySequenceObject, idx: usize) -> Option<Value> {
             }
         }
 
-        // Iterate - use mutable cached state for forward access
+        // Iterate - walk forward from the stored starting point.
+        // State is stored by value, so this does not mutate any shared
+        // iteration cursor; each caller operates on its own snapshot.
         LazySeqKind::Iterate {
             generator,
             current,
-            index: cached_index,
+            index: start_index,
         } => {
-            let mut cur_idx = *cached_index.borrow();
-            let mut cur_val = *current.borrow();
-
-            if idx < cur_idx {
+            if idx < *start_index {
                 return None;
             }
+
+            let mut cur_idx = *start_index;
+            let mut cur_val = *current;
 
             while cur_idx < idx {
                 cur_val = call_value(*generator, &[cur_val]);
                 cur_idx += 1;
             }
-
-            *current.borrow_mut() = cur_val;
-            *cached_index.borrow_mut() = cur_idx;
 
             Some(cur_val)
         }
@@ -623,16 +622,14 @@ fn lazy_next_with_closures(lazy: &LazySequenceObject) -> Option<(Value, Box<Lazy
             current,
             index,
         } => {
-            let cur = *current.borrow();
+            let cur = *current;
             let next_val = call_value(*generator, &[cur]);
-            *current.borrow_mut() = next_val;
-            *index.borrow_mut() += 1;
             Some((
                 cur,
                 LazySequenceObject::new(LazySeqKind::Iterate {
                     generator: *generator,
-                    current: current.clone(),
-                    index: index.clone(),
+                    current: next_val,
+                    index: index + 1,
                 }),
             ))
         }
@@ -4082,7 +4079,7 @@ fn take_from_lazy_recursive(result: &mut im::Vector<Value>, remaining: &mut usiz
             index: _,
         } => {
             // Generator can be a closure, partial application, or memoized closure
-            let mut cur = *current.borrow();
+            let mut cur = *current;
             while *remaining > 0 {
                 result.push_back(cur);
                 *remaining -= 1;

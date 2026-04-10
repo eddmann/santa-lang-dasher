@@ -1,7 +1,6 @@
 use crate::operations::runtime_error;
 use im;
-use std::cell::{OnceCell, RefCell};
-use std::rc::Rc;
+use std::cell::OnceCell;
 use std::sync::atomic::AtomicU32;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -360,12 +359,14 @@ pub enum LazySeqKind {
     },
 
     /// iterate(generator, initial) - generated sequence
-    /// Uses Rc<RefCell<>> for mutable state that persists across clones,
-    /// allowing efficient indexed access without recomputing from start.
+    /// Stores state by value (not Rc<RefCell>) so that each clone represents
+    /// an independent iteration cursor. Sharing mutable iteration state across
+    /// clones caused lazy sequences bound at module scope to leak state across
+    /// consumers (e.g. between test runs).
     Iterate {
-        generator: super::value::Value,            // Closure
-        current: Rc<RefCell<super::value::Value>>, // Mutable current value
-        index: Rc<RefCell<usize>>,                 // Current index (for caching)
+        generator: super::value::Value, // Closure
+        current: super::value::Value,   // Current value (independent per clone)
+        index: usize,                   // Current index (independent per clone)
     },
 
     /// Range-based lazy sequence (from .. syntax)
@@ -442,8 +443,8 @@ impl LazySequenceObject {
     pub fn iterate(generator: super::value::Value, initial: super::value::Value) -> Box<Self> {
         Self::new(LazySeqKind::Iterate {
             generator,
-            current: Rc::new(RefCell::new(initial)),
-            index: Rc::new(RefCell::new(0)),
+            current: initial,
+            index: 0,
         })
     }
 
