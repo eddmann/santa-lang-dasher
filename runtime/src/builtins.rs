@@ -4539,7 +4539,17 @@ pub extern "C-unwind" fn rt_join(separator: Value, collection: Value) -> Value {
         return Value::from_string(parts.join(&sep));
     }
 
-    runtime_error("join(separator, collection) expects List or Set collection")
+    // LazySequence (including Range) → Force evaluation
+    if let Some(lazy_seq) = collection.as_lazy_sequence() {
+        if is_infinite_lazy_sequence(lazy_seq) {
+            runtime_error("join(separator, collection) cannot join unbounded lazy sequence");
+        }
+        let items = collect_bounded_lazy(lazy_seq);
+        let parts: Vec<String> = items.iter().map(|v| value_to_string(*v)).collect();
+        return Value::from_string(parts.join(&sep));
+    }
+
+    runtime_error("join(separator, collection) expects List, Set, or LazySequence collection")
 }
 
 // ============================================================================
