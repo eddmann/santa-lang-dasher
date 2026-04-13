@@ -180,7 +180,7 @@ pub extern "C-unwind" fn rt_add(left: Value, right: Value) -> Value {
         // Merge with right entries overwriting left entries when keys clash
         let mut result = l.clone();
         for (k, v) in r.iter() {
-            result = result.update(k.clone(), v.clone());
+            result = result.update(*k, *v);
         }
         return Value::from_dict(result);
     }
