@@ -6810,10 +6810,7 @@ impl<'ctx> CodegenContext<'ctx> {
     ///
     /// This way both `acc_fn([1,2,3])` and `acc_fn(3, 5)` dispatch correctly
     /// to the underlying builtin overloads.
-    fn compile_variadic_minmax_value(
-        &mut self,
-        name: &str,
-    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
+    fn compile_variadic_minmax_value(&mut self, name: &str) -> Result<BasicValueEnum<'ctx>, CompileError> {
         use crate::parser::ast::{Param, Pattern};
 
         let args_name = "__minmax_args".to_string();

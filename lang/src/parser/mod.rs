@@ -844,7 +844,10 @@ impl Parser {
                                 }
                                 _ => {
                                     return Err(ParseError {
-                                        message: format!("Expected ',' or '|' after wildcard parameter, got {:?}", next.kind),
+                                        message: format!(
+                                            "Expected ',' or '|' after wildcard parameter, got {:?}",
+                                            next.kind
+                                        ),
                                         line: next.span.start.line as usize,
                                         column: next.span.start.column as usize,
                                     });
