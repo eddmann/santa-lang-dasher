@@ -4392,7 +4392,7 @@ fn builtin_join_non_string_separator() {
 }
 
 #[test]
-#[should_panic(expected = "join(separator, collection) expects List or Set collection")]
+#[should_panic(expected = "join(separator, collection) expects List, Set, or LazySequence collection")]
 fn builtin_join_non_collection() {
     let sep = Value::from_string(",");
     let value = Value::from_integer(1);
